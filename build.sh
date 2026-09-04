@@ -15,6 +15,14 @@ profile="debug"
 cargo_profile=()
 if [ "${1:-}" = "--release" ]; then profile="release"; cargo_profile=(--release); fi
 
+# --- TypeScript ---------------------------------------------------------------------------
+#
+# Before cargo, not after: `build/pf-glue.js` is an INPUT to the link — emscripten reads it with
+# `--js-library`. Everything else tsc emits is the page, copied into `dist/` at the end.
+echo "==> tsc"
+if [ ! -d "$here/node_modules" ]; then npm --prefix "$here" ci --silent || npm --prefix "$here" install --silent; fi
+npm --prefix "$here" run --silent build
+
 command -v emcc >/dev/null || {
   echo "emcc not on PATH: source your emsdk's emsdk_env.sh first (README.md pins the version)" >&2
   exit 1
@@ -71,7 +79,7 @@ link=(
   # `stringToNewUTF8` is how the page hands a host address across; `HEAPU8` is emscripten's
   # view of wasm memory, which pf-glue.js writes datagrams into.
   -C link-arg=-sEXPORTED_RUNTIME_METHODS=stringToNewUTF8,HEAPU8
-  -C link-arg=--js-library -C "link-arg=$here/web/pf-glue.js"
+  -C link-arg=--js-library -C "link-arg=$here/build/pf-glue.js"
 )
 
 # `cargo rustc`, not `cargo build`: these are link settings for the page's module alone. Passing
@@ -107,9 +115,13 @@ fi
 dist="$here/dist"
 mkdir -p "$dist"
 cp "$here/web/index.html" "$dist/"
-# An ES module the page imports at runtime, unlike pf-glue.js which is linked in.
-cp "$here/web/pf-connect.js" "$dist/"
-cp "$here/web/video-surface.js" "$here/web/video-surface-webgpu.js" "$dist/"
+# The page's own modules, imported at runtime — unlike pf-glue.js, which is linked in above.
+# `ui/` keeps its directory because the emitted imports name it.
+mkdir -p "$dist/ui"
+for m in app pf-connect video video-surface video-surface-webgpu; do
+  cp "$here/build/$m.js" "$dist/"
+done
+cp "$here"/build/ui/*.js "$dist/ui/"
 cp "$target/wasm32-unknown-emscripten/$profile/punktfunk-client-web.js" "$dist/"
 cp "$target/wasm32-unknown-emscripten/$profile/punktfunk_client_web.wasm" "$dist/"
 echo "==> $dist"

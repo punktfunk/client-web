@@ -235,12 +235,9 @@ pub fn on_pair_challenge(ch: &PairChallenge) -> Option<Vec<u8>> {
     CRED.with(|c| {
         let mut c = c.borrow_mut();
         let pake = c.pake.take()?;
-        let confirms = match pake.finish(&ch.spake_b) {
-            Ok(c) => c,
-            Err(_) => {
-                c.phase = Cred::Failed;
-                return None;
-            }
+        let Ok(confirms) = pake.finish(&ch.spake_b) else {
+            c.phase = Cred::Failed;
+            return None;
         };
         if !pake::verify(&confirms.host, &ch.confirm) {
             c.phase = Cred::Failed;

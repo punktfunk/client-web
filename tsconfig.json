@@ -1,0 +1,32 @@
+{
+  // ES2022 and no downlevelling, because `web/pf-glue.ts` is not loaded as a script: emscripten
+  // reads the emitted file with `--js-library` and **stringifies each function** into the module
+  // it generates. Anything tsc hoists out of a function body — a helper, a captured temporary —
+  // is left behind when that happens, and the failure is a `ReferenceError` at runtime rather
+  // than a build error. `importHelpers` off and a modern target keep the emit literal.
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ES2022",
+    "moduleResolution": "bundler",
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "types": ["@webgpu/types"],
+    "outDir": "build",
+    "rootDir": "web",
+
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "noImplicitOverride": true,
+    "noFallthroughCasesInSwitch": true,
+    "exactOptionalPropertyTypes": true,
+    "verbatimModuleSyntax": true,
+    "isolatedModules": true,
+
+    "sourceMap": true,
+    "removeComments": false,
+    "newLine": "lf"
+  },
+  // The tests run on node's own type stripping (`node --test web/*.test.ts`), so they are checked
+  // but never emitted — nothing should ship a test into `dist/`.
+  "include": ["web/**/*.ts"],
+  "exclude": ["web/**/*.test.ts"]
+}

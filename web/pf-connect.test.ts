@@ -2,17 +2,19 @@
 //
 // This is the one place the two languages have to agree byte for byte, and the failure mode if
 // they do not is silent: a paired browser that refuses every host, or worse, one that accepts a
-// signature it should not. `node --test clients/web/web/` runs it, no dependencies.
+// signature it should not. `npm test` runs it, no dependencies.
 //
+// Imported as `.ts`, not `.js`: node runs this file by stripping types, so the specifier has
+// to name a file that exists on disk. Nothing is built to run the tests.
 // The vector below came from `webtransport::attest` on a freshly minted host identity. It is a
 // public certificate and a signature over a fixed hash — nothing secret, and nothing that
 // authorises anything.
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { verify, hostFingerprint } from "./pf-connect.js";
+import { verify, hostFingerprint, type Plane } from "./pf-connect.ts";
 
-const VECTOR = {
+const VECTOR: Plane = {
   cert_hash_sha256: "3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f",
   cert_hash_sig:
     "30450220363b8bd78823a5b83ce942385c0d2a129aaea5d5d551252e09ee76355efa47d0022100f22d19aeef15ba9fe8b1b270cf8e217e298cfb7eb95e4c7f059070db7dfffa4e",

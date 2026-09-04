@@ -9,9 +9,24 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  # The half that does not need emscripten: the credential ceremony, the signature encodings and
-  # the browser's attestation verifier. These are the pieces where the client and the host can
-  # disagree silently, which is why they build off wasm at all.
+  # The TypeScript half. `node --test` runs the `.ts` files directly by stripping types, so the
+  # tests need no build — but `tsc --noEmit` still has to pass, because stripping types does not
+  # check them.
+  web:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npm run check
+      - run: npm test
+
+  # The Rust half that does not need emscripten: the credential ceremony and the signature
+  # encodings. These are the pieces where the client and the host can disagree silently, which is
+  # why they build off wasm at all.
   check:
     runs-on: ubuntu-latest
     steps:
@@ -23,11 +38,6 @@ jobs:
       - run: cargo fmt --check
       - run: cargo clippy --all-targets -- -D warnings
       - run: cargo test
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-      # No dependencies and no package.json: node's own test runner.
-      - run: node --test web/pf-connect.test.js
 
   # The real artefact. Skia is source-built for this target (see README), so the cache is the
   # difference between four minutes and forty.
@@ -38,6 +48,10 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: wasm32-unknown-emscripten
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
       - uses: mymindstorm/setup-emsdk@v14
         with:
           version: 4.0.9

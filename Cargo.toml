@@ -44,10 +44,11 @@ skia-safe = { version = "0.99", features = ["gl", "textlayout"] }
 [lints.rust]
 unsafe_op_in_unsafe_fn = "warn"
 
+# No `doc_markdown`: it wants every capitalised noun in backticks, and the names of browser APIs
+# in an ordinary sentence are prose, not code.
 [lints.clippy]
 cast_lossless = "warn"
 map_unwrap_or = "warn"
-doc_markdown = "warn"
 manual_let_else = "warn"
 redundant_closure_for_method_calls = "warn"
 items_after_statements = "warn"

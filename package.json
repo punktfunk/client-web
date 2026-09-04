@@ -1,0 +1,15 @@
+{
+  "name": "punktfunk-client-web",
+  "private": true,
+  "type": "module",
+  "description": "Browser client for punktfunk — the TypeScript half: the page, the video plane and the emscripten glue.",
+  "scripts": {
+    "build": "tsc",
+    "check": "tsc --noEmit",
+    "test": "node --test web/*.test.ts"
+  },
+  "devDependencies": {
+    "@webgpu/types": "^0.1.60",
+    "typescript": "^5.9.3"
+  }
+}
