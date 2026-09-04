@@ -1,0 +1,63 @@
+[package]
+name = "punktfunk-client-web"
+description = "Browser client for punktfunk — pf-console-ui on a WebGL2 canvas, WebCodecs video over WebTransport, wasm32-unknown-emscripten."
+version = "0.0.1"
+edition = "2021"
+rust-version = "1.85"
+license = "MIT OR Apache-2.0"
+authors = ["Enrico Bühler <enrico.buehler@unom.io>"]
+repository = "https://github.com/punktfunk/client-web"
+
+[[bin]]
+name = "punktfunk-client-web"
+path = "src/main.rs"
+
+# ⚠ Pinned to a REV, not a tag, and that is temporary. The browser client needs three things no
+# release carries yet: `punktfunk-core`'s `pake` feature split (SPAKE2 without the quinn runtime),
+# the `device_key` field and `AuthChallenge`/`AuthResponse` messages a browser pairs with, and
+# `wasm32-unknown-emscripten` support in `pf-console-ui`/`pf-client-core`. All of it is on
+# `feat/web-phase2` upstream. Move to `tag = "vX.Y.Z"` the moment that lands and ships.
+[dependencies]
+anyhow = "1"
+# The device fingerprint: SHA-256 of the WebCrypto key's SPKI, which is what the host stores.
+# Already in the tree via `pake`.
+sha2 = "0.11"
+# `transport::Transport`, the wire codecs and the SPAKE2 ceremony. `pake`, not `quic`: the
+# browser plane is WebTransport, so the ceremony is wanted and the quinn runtime under it is not.
+punktfunk-core = { git = "https://git.unom.io/unom/punktfunk", rev = "23404a682558a5a9840949afc8701b5a632ba62b", default-features = false, features = ["pake"] }
+
+# wasm only. Off it this is a bin that prints how to build it, so `cargo test` on a developer's
+# desktop stays green and does not resolve skia-safe for a target that wants a second Skia
+# archive. `credential` and `ecdsa` are NOT in this block — see `src/main.rs`.
+[target.'cfg(target_family = "wasm")'.dependencies]
+# The shell itself. `default-features = false`: `vulkan-overlay` is the desktop session binary's,
+# and it would put `vulkan` on skia-safe and change the prebuilt key away from
+# `gl-jpegd-jpege-pdf-textlayout` — the one rust-skia publishes for this target.
+pf-console-ui = { git = "https://git.unom.io/unom/punktfunk", rev = "23404a682558a5a9840949afc8701b5a632ba62b", default-features = false }
+# The portable half — `trust::Settings` for the snapshot store the shell loads from.
+pf-client-core = { git = "https://git.unom.io/unom/punktfunk", rev = "23404a682558a5a9840949afc8701b5a632ba62b", default-features = false }
+# The SAME line pf-console-ui's wasm block carries, features included: two feature sets in one
+# build resolve two prebuilt keys, and the second one puts a source build of Skia on the critical
+# path. Only `host.rs` names it, to build the context and wrap the canvas.
+skia-safe = { version = "0.99", features = ["gl", "textlayout"] }
+
+[lints.rust]
+unsafe_op_in_unsafe_fn = "warn"
+
+[lints.clippy]
+cast_lossless = "warn"
+map_unwrap_or = "warn"
+doc_markdown = "warn"
+manual_let_else = "warn"
+redundant_closure_for_method_calls = "warn"
+items_after_statements = "warn"
+match_same_arms = "warn"
+
+[profile.release]
+# The payload is the constraint here, not throughput: every byte is downloaded before the console
+# draws. `z` over `3` and one codegen unit; the hot loops are all in punktfunk-core anyway.
+opt-level = "z"
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+strip = true

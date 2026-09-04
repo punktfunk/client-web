@@ -1,0 +1,54 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # The half that does not need emscripten: the credential ceremony, the signature encodings and
+  # the browser's attestation verifier. These are the pieces where the client and the host can
+  # disagree silently, which is why they build off wasm at all.
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo fmt --check
+      - run: cargo clippy --all-targets -- -D warnings
+      - run: cargo test
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      # No dependencies and no package.json: node's own test runner.
+      - run: node --test web/pf-connect.test.js
+
+  # The real artefact. Skia is source-built for this target (see README), so the cache is the
+  # difference between four minutes and forty.
+  wasm:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-emscripten
+      - uses: mymindstorm/setup-emsdk@v14
+        with:
+          version: 4.0.9
+      - uses: Swatinem/rust-cache@v2
+      # Keyed on the skia-safe version, because that is what decides the archive's key.
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/punktfunk/skia-wasm
+          key: skia-wasm-${{ hashFiles('Cargo.toml') }}
+      - run: ./build.sh --release
+      - uses: actions/upload-artifact@v4
+        with:
+          name: client-web-dist
+          path: dist/

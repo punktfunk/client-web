@@ -1,0 +1,7 @@
+# Pin an EXACT version, not the floating "stable" channel: rustfmt's rules shift between
+# releases, and `cargo fmt --check` then fails on files nobody touched. Matches the upstream
+# punktfunk pin, which is what the pinned `punktfunk-core` rev is built and tested against.
+[toolchain]
+channel = "1.96.0"
+components = ["rustfmt", "clippy"]
+targets = ["wasm32-unknown-emscripten"]
