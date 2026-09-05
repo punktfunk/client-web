@@ -1,0 +1,6 @@
+cargo:rerun-if-changed=src/abi.rs
+cargo:rerun-if-changed=src/config.rs
+cargo:rerun-if-changed=src/input.rs
+cargo:rerun-if-changed=src/error.rs
+cargo:rerun-if-changed=cbindgen.toml
+cargo:warning=punktfunk-core: wrote /Users/enricobuehler/.cargo/git/checkouts/punktfunk-617afcf91d2cfd7f/23404a6/crates/punktfunk-core/../../include/punktfunk_core.h

@@ -1,0 +1,19 @@
+{
+  "name": "punktfunk-web",
+  "private": true,
+  "version": "0.0.1",
+  "type": "module",
+  "description": "The punktfunk web client \u2014 the flagship consumer of @punktfunk/stream.",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "check": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@punktfunk/stream": "*"
+  },
+  "devDependencies": {
+    "typescript": "^5.9.3",
+    "vite": "^8.2.2"
+  }
+}

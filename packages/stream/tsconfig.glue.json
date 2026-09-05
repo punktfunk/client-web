@@ -1,0 +1,11 @@
+{
+  // `build/pf-glue.js` is an INPUT to the wasm link — emscripten reads it with `--js-library` —
+  // so it is the one file tsc emits here. Everything else is bundled by tsdown from source.
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "outDir": "build",
+    "rootDir": "src",
+    "noEmit": false
+  },
+  "include": ["src/pf-glue.ts", "src/emscripten.d.ts"]
+}

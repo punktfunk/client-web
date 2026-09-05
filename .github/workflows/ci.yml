@@ -9,9 +9,9 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  # The TypeScript half. `node --test` runs the `.ts` files directly by stripping types, so the
-  # tests need no build — but `tsc --noEmit` still has to pass, because stripping types does not
-  # check them.
+  # The TypeScript half of both packages. `node --test` runs the `.ts` files directly by
+  # stripping types, so the tests need no build — but `tsc --noEmit` still has to pass, because
+  # stripping types does not check them.
   web:
     runs-on: ubuntu-latest
     steps:
@@ -27,23 +27,28 @@ jobs:
       - run: npm test
 
   # The Rust half that does not need emscripten: the credential ceremony and the signature
-  # encodings. These are the pieces where the client and the host can disagree silently, which is
-  # why they build off wasm at all.
+  # encodings. These are the pieces where the client and the host can disagree silently, which
+  # is why they build off wasm at all.
   check:
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: packages/stream
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: packages/stream
       - run: cargo fmt --check
       - run: cargo clippy --all-targets -- -D warnings
       - run: cargo test
 
-  # The real artefact. Skia is source-built for this target (see README), so the cache is the
-  # difference between four minutes and forty.
-  wasm:
+  # The real artefacts: the library and the app. Skia is source-built for this target (see the
+  # README), so the cache is the difference between four minutes and forty.
+  build:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -58,13 +63,20 @@ jobs:
         with:
           version: 4.0.9
       - uses: Swatinem/rust-cache@v2
-      # Keyed on the skia-safe version, because that is what decides the archive's key.
+        with:
+          workspaces: packages/stream
+      # Keyed on the crate manifest, because that is what decides the archive's key.
       - uses: actions/cache@v4
         with:
           path: ~/.cache/punktfunk/skia-wasm
-          key: skia-wasm-${{ hashFiles('Cargo.toml') }}
-      - run: ./build.sh --release
+          key: skia-wasm-${{ hashFiles('packages/stream/Cargo.toml') }}
+      - run: npm ci
+      - run: npm run build
       - uses: actions/upload-artifact@v4
         with:
-          name: client-web-dist
-          path: dist/
+          name: punktfunk-stream
+          path: packages/stream/dist/
+      - uses: actions/upload-artifact@v4
+        with:
+          name: punktfunk-web
+          path: apps/web/dist/

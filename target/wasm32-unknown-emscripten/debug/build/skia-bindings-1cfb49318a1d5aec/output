@@ -1,0 +1,18 @@
+cargo:rerun-if-env-changed=DOCS_RS
+cargo:rerun-if-env-changed=SKIA_DEBUG
+cargo:rerun-if-env-changed=SKIA_SOURCE_DIR
+cargo:rerun-if-env-changed=FORCE_SKIA_BUILD
+cargo:rerun-if-env-changed=FORCE_SKIA_BINARIES_DOWNLOAD
+TRYING TO DOWNLOAD AND INSTALL SKIA BINARIES: 0.99.0/a25a0fdb7d90429aa2d1-wasm32-unknown-emscripten-gl-jpegd-jpege-pdf-textlayout
+cargo:rerun-if-env-changed=SKIA_BINARIES_URL
+  FROM: file:///Users/enricobuehler/.cache/punktfunk/skia-wasm/skia-binaries-a25a0fdb7d90429aa2d1-wasm32-unknown-emscripten-gl-jpegd-jpege-pdf-textlayout.tar.gz
+UNPACKING ARCHIVE INTO: /Users/enricobuehler/.claude/jobs/9df256dd/tmp/client-web/target/wasm32-unknown-emscripten/debug/build/skia-bindings-1cfb49318a1d5aec/out/skia
+DOWNLOAD AND INSTALL SUCCEEDED
+cargo:rustc-link-search=/Users/enricobuehler/.claude/jobs/9df256dd/tmp/client-web/target/wasm32-unknown-emscripten/debug/build/skia-bindings-1cfb49318a1d5aec/out/skia
+cargo:rustc-link-lib=static=skparagraph
+cargo:rustc-link-lib=static=skshaper
+cargo:rustc-link-lib=static=skunicode_core
+cargo:rustc-link-lib=static=skunicode_icu
+cargo:rustc-link-lib=static=skia
+cargo:rustc-link-lib=static=skia-bindings
+cargo:rustc-link-lib=GL

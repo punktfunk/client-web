@@ -1,0 +1,31 @@
+{
+  // Shared by both packages. ES2022 and no downlevelling matters beyond taste: the stream
+  // package's `pf-glue.ts` is read by emscripten, which **stringifies each function** into the
+  // module it generates — anything tsc hoists out of a function body is left behind, and the
+  // failure is a `ReferenceError` at runtime rather than a build error.
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ES2022",
+    "moduleResolution": "bundler",
+    "lib": ["ES2022", "ESNext.Disposable", "DOM", "DOM.Iterable"],
+    "types": ["@webgpu/types", "node"],
+
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "noImplicitOverride": true,
+    "noFallthroughCasesInSwitch": true,
+    "exactOptionalPropertyTypes": true,
+    "verbatimModuleSyntax": true,
+    // Relative imports name the `.ts` file, and tsc rewrites them to `.js` on emit. That is what
+    // lets `node --test` run these files directly — node strips types but resolves specifiers
+    // literally, so a `./x.js` that does not exist on disk is a hard failure there.
+    "allowImportingTsExtensions": true,
+    "rewriteRelativeImportExtensions": true,
+    "isolatedModules": true,
+    "skipLibCheck": true,
+
+    "sourceMap": true,
+    "removeComments": false,
+    "newLine": "lf"
+  }
+}

@@ -1,0 +1,138 @@
+<!doctype html>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="dark">
+<title>Punktfunk</title>
+
+<!--
+  Two canvases, from day one. Video goes on the lower one, the Skia console on the upper one with
+  alpha, and CSS composites them. It is the layout HDR needs and, more importantly, the reason
+  swapping WebGL2 for WebGPU touches only the LOWER canvas and one TypeScript file.
+
+  The interface itself is not in here: `app.ts` builds it, so the same client can wear the
+  web-native shell or the gamepad console (`?ui=console`) without two copies of this markup.
+-->
+<style>
+  :root {
+    --bg: #0b0b0d;
+    --fg: #ececf1;
+    --dim: #9a9aa6;
+    --line: #2a2a31;
+    --accent: #a79ff8;
+    --err: #ff8a80;
+    --radius: 12px;
+  }
+  html, body { margin: 0; height: 100%; background: var(--bg); overflow: hidden; }
+  body { color: var(--fg); font: 15px/1.55 system-ui, -apple-system, "Segoe UI", sans-serif; }
+
+  #pf-stack { position: fixed; inset: 0; }
+  #pf-stack canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+  /* Video below, console above. The console canvas is transparent where it draws nothing. */
+  #pf-video { z-index: 0; }
+  #pf-ui    { z-index: 1; }
+  /* The UI is authored SDR and stays that way when the video plane goes HDR. */
+  #pf-ui    { dynamic-range-limit: standard; }
+
+  /* --- the web-native shell ------------------------------------------------------------- */
+  .pf-shell { position: fixed; inset: 0; z-index: 2; display: grid; place-items: center; padding: 1.5rem; }
+  /* Streaming is the one screen that must not cover the picture. */
+  .pf-shell[data-screen="streaming"] { place-items: start center; padding: 0; pointer-events: none; }
+
+  .card {
+    width: min(30rem, 100%); padding: 2rem; text-align: center;
+    background: #141419; border: 1px solid var(--line); border-radius: var(--radius);
+    box-shadow: 0 20px 60px rgb(0 0 0 / 0.5);
+  }
+  .card h1 { margin: 0 0 0.6rem; font-size: 1.25rem; font-weight: 600; }
+  .sub { margin: 0 0 1rem; color: var(--dim); }
+  .err { margin: 0.5rem 0 0; color: var(--err); }
+  .label { margin: 0 0 0.5rem; color: var(--dim); font-size: 0.85rem; text-align: left; }
+  .link { color: var(--accent); word-break: break-all; }
+
+  input {
+    display: block; width: 100%; box-sizing: border-box; margin: 0 0 0.5rem;
+    padding: 0.75em 0.9em; font: inherit; font-size: 1.05rem; text-align: center;
+    color: var(--fg); background: #0e0e12; border: 1px solid var(--line); border-radius: 10px;
+  }
+  input:focus-visible, button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  input.pin { font-size: 2rem; letter-spacing: 0.35em; padding-left: 0.35em; }
+  input:disabled { opacity: 0.5; }
+
+  button {
+    font: inherit; padding: 0.7em 1.4em; margin: 0.5rem 0.2rem 0;
+    border: 0; border-radius: 10px; cursor: pointer;
+  }
+  button:disabled { opacity: 0.55; cursor: default; }
+  .primary { width: 100%; color: #12121a; background: var(--fg); font-weight: 600; }
+  .ghost { color: var(--fg); background: #1e1e25; }
+  .small { padding: 0.4em 0.9em; font-size: 0.9rem; }
+  .icon { padding: 0.4em 0.7em; color: var(--dim); background: transparent; }
+  .icon:hover { color: var(--err); }
+
+  .known { margin-top: 1.5rem; padding-top: 1.25rem; border-top: 1px solid var(--line); }
+  .row { display: flex; gap: 0.4rem; align-items: center; margin-bottom: 0.4rem; }
+  .row .ghost { flex: 1; display: flex; justify-content: space-between; gap: 1rem; margin: 0; text-align: left; }
+  .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .meta { color: var(--dim); font-size: 0.85rem; }
+
+  .spinner {
+    width: 1.6rem; height: 1.6rem; margin: 1rem auto 0;
+    border: 2px solid var(--line); border-top-color: var(--accent); border-radius: 50%;
+    animation: spin 0.8s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  /* Respect the setting; a spinner is decoration, not information. */
+  @media (prefers-reduced-motion: reduce) { .spinner { animation: none; } }
+
+  /* --- the library ------------------------------------------------------------------- */
+  .pf-shell[data-screen="library"] {
+    place-items: start stretch; align-content: start; padding: 0; overflow-y: auto;
+  }
+  .bar {
+    position: sticky; top: 0; z-index: 1; display: flex; gap: 0.6rem; align-items: center;
+    padding: 0.9rem 1.2rem; background: rgb(11 11 13 / 0.9); backdrop-filter: blur(12px);
+    border-bottom: 1px solid var(--line);
+  }
+  .bar h1 { flex: 1; margin: 0; font-size: 1.05rem; text-align: left; }
+  .bar button { margin: 0; }
+  .grid {
+    display: grid; gap: 1rem; padding: 1.2rem;
+    grid-template-columns: repeat(auto-fill, minmax(9rem, 1fr));
+  }
+  .tile {
+    display: grid; gap: 0.5rem; padding: 0; margin: 0; text-align: left;
+    background: transparent; color: var(--fg);
+  }
+  .cover {
+    display: grid; place-items: center; aspect-ratio: 3 / 4; overflow: hidden;
+    background: #17171d; border: 1px solid var(--line); border-radius: 10px;
+  }
+  .cover img { width: 100%; height: 100%; object-fit: cover; }
+  .initial { font-size: 2.5rem; font-weight: 600; color: var(--dim); }
+  .tile .title { font-size: 0.9rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .tile:hover .cover { border-color: var(--accent); }
+  .empty { padding: 3rem 1.5rem; text-align: center; }
+
+  /* The streaming overlay: present when you want it, gone when you do not. */
+  .hud {
+    display: flex; gap: 0.75rem; align-items: center; pointer-events: auto;
+    margin: 0.75rem; padding: 0.45rem 0.5rem 0.45rem 0.9rem;
+    background: rgb(20 20 25 / 0.82); border: 1px solid var(--line); border-radius: 999px;
+    backdrop-filter: blur(12px);
+    transition: opacity 0.35s ease;
+  }
+  .hud.idle { opacity: 0; }
+  .hud:hover, .hud:focus-within { opacity: 1; }
+  .hud .dot { width: 8px; height: 8px; border-radius: 50%; background: #5ad18e; }
+  .hud .host { font-weight: 600; }
+  .hud .stat { color: var(--dim); font-variant-numeric: tabular-nums; }
+  @media (max-width: 30rem) { .hud .stat { display: none; } }
+</style>
+
+<div id="pf-stack">
+  <canvas id="pf-video"></canvas>
+  <canvas id="pf-ui"></canvas>
+</div>
+
+<!-- No wasm here: `@punktfunk/stream` loads its module on `Engine.create()`, not before. -->
+<script type="module" src="./src/app.ts"></script>
