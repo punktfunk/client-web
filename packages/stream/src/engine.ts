@@ -270,19 +270,18 @@ export class Engine {
   /**
    * Start streaming. Valid from `ready`.
    *
-   * `launch` is accepted and not yet carried: `Hello` has a launch field on the wire but the
-   * wasm side's `pf_session_hello` does not take one, so a title streams the desktop today. It
-   * is reported rather than dropped, so a consumer can say so.
+   * `launch` names a library title to open (its `id`); the host resolves it on the real-display
+   * source and streams the desktop otherwise. Left unset, the desktop streams.
    */
   startStream(opts: StreamOptions): void {
     if (!this.origin || this.state.kind !== "ready") return;
-    if (opts.launch) {
-      console.warn("punktfunk: launching a title is not wired yet; streaming the desktop", opts.launch.id);
-    }
     this.video ??= new VideoPipe(this.mod, this.opts.videoCanvas, this.opts.videoBackend ?? "auto");
     this.video.attach();
     this.set({ kind: "starting", origin: this.origin });
-    this.mod._pf_session_hello(opts.width, opts.height, opts.fps ?? 60, opts.bitrateKbps ?? 20000);
+    const id = opts.launch?.id ?? "";
+    withStr(this.mod, [id], (p, len) =>
+      this.mod._pf_session_hello(opts.width, opts.height, opts.fps ?? 60, opts.bitrateKbps ?? 20000, id ? p : 0, id ? len : 0),
+    );
   }
 
   /** Forget a host this browser knows. Its pairing on the host side is untouched. */
