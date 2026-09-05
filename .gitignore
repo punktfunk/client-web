@@ -1,4 +1,4 @@
-/node_modules
+node_modules/
 /packages/stream/target
 /packages/stream/build
 /packages/stream/dist
