@@ -70,8 +70,9 @@ export class ConsoleUi implements Ui {
   render(screen: Screen): void {
     this.live = screen.kind === "streaming";
     // Before a session, and on any error, the web shell is the only one that can say anything
-    // useful. It renders an empty screen while streaming, so the canvas is unobstructed.
-    this.fallback.render(this.live ? { kind: "streaming", stats: screen_stats(screen) } : screen);
+    // useful. Streaming screens go through untouched: the web shell draws only its HUD there,
+    // which leaves the console's canvas unobstructed.
+    this.fallback.render(screen);
   }
 
   private frame(): void {
@@ -101,11 +102,4 @@ export class ConsoleUi implements Ui {
     window.removeEventListener("keydown", this.onKey);
     this.fallback.destroy();
   }
-}
-
-// `render` narrows to the streaming arm above; this keeps that readable without a cast at the
-// call site.
-function screen_stats(screen: Screen): Extract<Screen, { kind: "streaming" }>["stats"] {
-  if (screen.kind !== "streaming") throw new Error("not a streaming screen");
-  return screen.stats;
 }

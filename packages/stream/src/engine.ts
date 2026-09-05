@@ -23,7 +23,7 @@ import { AudioPipe, type AudioSnapshot } from "./audio.ts";
 export type { AudioSnapshot, AudioState } from "./audio.ts";
 export type { HostInfo, HostStatus, LibraryEntry } from "./host.ts";
 export { VersionSkew } from "./host.ts";
-export { type KnownHost, type Plane, hosts, originOf } from "./pf-connect.ts";
+export { type KnownHost, type Plane, type Reach, hosts, originOf, reach } from "./pf-connect.ts";
 
 /** `pf_cred_phase` and `pf_session_phase`, named. Kept beside the exports they mirror. */
 const CRED = { EMPTY: 0, READY: 1, NEEDS_SIGNATURE: 2, PAIRING: 3, PAIRED: 4, FAILED: 5 } as const;
@@ -48,6 +48,8 @@ export interface SessionStats {
   uploadMs: number;
   backend: "webgpu" | "webgl2" | null;
   audio: AudioSnapshot;
+  /** Is the pointer locked to the video canvas? Only ever true in `capture` mode. */
+  pointerCaptured: boolean;
 }
 
 /**
@@ -87,6 +89,33 @@ export type EngineState =
   | { kind: "forgotten"; origin: string }
   | { kind: "error"; origin?: string; message: string; skew?: boolean };
 
+/**
+ * The options that can change between — or during — sessions, as opposed to the canvas and the
+ * transport host, which are fixed when the engine is made. `EngineOptions` sets their first
+ * values and [`Engine.configure`] changes them afterwards.
+ *
+ * Split out because a settings screen needs exactly this set and nothing else: everything here
+ * is either applied to the live input pipe at once, or picked up by the next session.
+ */
+export interface TunableOptions {
+  videoBackend: "auto" | "webgl2" | "webgpu";
+  audio: boolean;
+  captureInput: boolean;
+  /** `absolute` maps the local cursor onto the remote one; `capture` takes pointer lock and
+   *  sends relative motion, which is what a game with mouselook needs. */
+  pointer: "absolute" | "capture";
+  /** Stick travel below this is rest, 0–1. */
+  deadzone: number;
+}
+
+const TUNABLE_DEFAULTS: TunableOptions = {
+  videoBackend: "auto",
+  audio: true,
+  captureInput: true,
+  pointer: "absolute",
+  deadzone: 0.05,
+};
+
 export interface EngineOptions {
   /** The lower canvas: decoded video goes here and nowhere else. */
   readonly videoCanvas: HTMLCanvasElement;
@@ -104,6 +133,10 @@ export interface EngineOptions {
   readonly captureInput?: boolean;
   /** Play the host's audio. On by default; off for a page that only watches. */
   readonly audio?: boolean;
+  /** How the mouse is sent, and the gamepad deadzone. Both changeable later through
+   *  [`Engine.configure`]. */
+  readonly pointer?: "absolute" | "capture";
+  readonly deadzone?: number;
   /**
    * Where to dial the WebTransport plane, when it is not the management origin's hostname.
    * The one case: a dev server proxying `/api` to a host on the LAN — the API answers on
@@ -135,6 +168,9 @@ export class Engine {
   private offeredSince = 0;
   private lastFrames = 0;
   private lastSecond = 0;
+  /** What the input pipe was last told the stream measures; a reconfigure moves it. */
+  private inputSize = { width: 0, height: 0 };
+  private tunable: TunableOptions = TUNABLE_DEFAULTS;
   private fps = 0;
   private running = true;
   /** A PIN given while the connection was down, sent when the next control stream opens. */
@@ -144,6 +180,13 @@ export class Engine {
     private readonly mod: PunktfunkModule,
     private readonly opts: EngineOptions,
   ) {
+    this.tunable = {
+      videoBackend: opts.videoBackend ?? TUNABLE_DEFAULTS.videoBackend,
+      audio: opts.audio ?? TUNABLE_DEFAULTS.audio,
+      captureInput: opts.captureInput ?? TUNABLE_DEFAULTS.captureInput,
+      pointer: opts.pointer ?? TUNABLE_DEFAULTS.pointer,
+      deadzone: opts.deadzone ?? TUNABLE_DEFAULTS.deadzone,
+    };
     mod.__pfOnDeviceReady = () => this.dial();
     mod.__pfOnCtlReady = () => this.onControlStream();
     mod.__pfOnClosed = (code, reason) => this.onClosed(code, reason);
@@ -275,13 +318,48 @@ export class Engine {
    */
   startStream(opts: StreamOptions): void {
     if (!this.origin || this.state.kind !== "ready") return;
-    this.video ??= new VideoPipe(this.mod, this.opts.videoCanvas, this.opts.videoBackend ?? "auto");
+    this.video ??= new VideoPipe(this.mod, this.opts.videoCanvas, this.tunable.videoBackend);
     this.video.attach();
     this.set({ kind: "starting", origin: this.origin });
     const id = opts.launch?.id ?? "";
     withStr(this.mod, [id], (p, len) =>
       this.mod._pf_session_hello(opts.width, opts.height, opts.fps ?? 60, opts.bitrateKbps ?? 20000, id ? p : 0, id ? len : 0),
     );
+  }
+
+  /**
+   * Change what can change without a new engine. The pointer mode and the deadzone reach the
+   * live input pipe at once; the video backend and whether audio plays are read when the next
+   * session starts, because both own a pipeline that cannot be swapped under a running decoder.
+   */
+  configure(next: Partial<TunableOptions>): void {
+    this.tunable = { ...this.tunable, ...next };
+    this.input?.tune({ pointer: this.tunable.pointer, deadzone: this.tunable.deadzone });
+  }
+
+  /** What the engine is currently tuned to. */
+  get tuning(): TunableOptions {
+    return { ...this.tunable };
+  }
+
+  /** Take or release the pointer. Must be called from a user gesture to take it — that is a
+   *  browser rule, not this engine's. */
+  capturePointer(on: boolean): void {
+    this.input?.capture(on);
+  }
+
+  /**
+   * Ask the host for a different stream size. Valid only while streaming.
+   *
+   * Deliberately a verb rather than something the engine does when the canvas changes: the host
+   * rebuilds its capture pipeline to answer, and on the wlroots reference host that recreates
+   * the output. Whoever calls this decides that the disruption is worth it.
+   */
+  reconfigure(width: number, height: number, fps: number): void {
+    if (this.state.kind !== "streaming") return;
+    // Odd dimensions have no 4:2:0 chroma grid and the host refuses them outright.
+    const even = (px: number) => Math.max(2, Math.floor(px) & ~1);
+    this.mod._pf_session_reconfigure?.(even(width), even(height), Math.max(1, Math.round(fps)));
   }
 
   /** Forget a host this browser knows. Its pairing on the host side is untouched. */
@@ -427,6 +505,7 @@ export class Engine {
   private stopSession(): void {
     this.input?.detach();
     this.input = null;
+    this.inputSize = { width: 0, height: 0 };
     this.audio?.close();
     this.audio = null;
     this.video?.close();
@@ -486,16 +565,25 @@ export class Engine {
 
     // Input from the first live frame: the negotiated size is known by then (`Welcome` set it
     // before the phase turned), and absolute pointer positions are measured against it.
-    if (!this.input && this.opts.captureInput !== false && v?.width) {
+    if (!this.input && this.tunable.captureInput && v?.width) {
+      this.inputSize = { width: v.width, height: v.height };
       this.input = new InputPipe(this.mod, this.opts.videoCanvas, {
         streamWidth: v.width,
         streamHeight: v.height,
+        pointer: this.tunable.pointer,
+        deadzone: this.tunable.deadzone,
       });
       this.input.attach();
     }
+    // A reconfigure moves the surface absolute positions are measured against, and the pipe has
+    // no other way to hear about it.
+    if (this.input && v?.width && (v.width !== this.inputSize.width || v.height !== this.inputSize.height)) {
+      this.inputSize = { width: v.width, height: v.height };
+      this.input.tune({ streamWidth: v.width, streamHeight: v.height });
+    }
     this.input?.poll();
     // Audio from the first live frame too: the channel count is `Welcome`'s.
-    if (!this.audio && this.opts.audio !== false) {
+    if (!this.audio && this.tunable.audio) {
       const channels = this.mod._pf_session_audio_channels();
       if (channels > 0) {
         this.audio = new AudioPipe(this.mod, channels);
@@ -523,6 +611,7 @@ export class Engine {
         uploadMs: v?.uploadMs ?? 0,
         audio: this.audio?.snapshot() ?? { state: "off", frames: 0, lost: 0, errors: 0, underruns: 0 },
         backend: v?.backend ?? null,
+        pointerCaptured: this.input?.captured ?? false,
       },
     });
   }
