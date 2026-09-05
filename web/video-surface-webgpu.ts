@@ -15,7 +15,7 @@
 // `create()` is async because adapter and device are; everything after is synchronous, so the
 // per-frame path matches the WebGL2 one call for call.
 
-import type { UploadStats, VideoPlane } from "./video-surface.js";
+import type { UploadStats, VideoPlane } from "./video-surface.ts";
 
 const SHADER = `
 struct VertexOut { @builtin(position) pos: vec4f, @location(0) uv: vec2f };

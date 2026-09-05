@@ -10,8 +10,8 @@
 // Nothing here reaches into Skia or GL: `pf_start` and `pf_frame` are wasm exports, and the one
 // place a graphics object is named is `pf-glue.ts`.
 
-import type { PunktfunkModule } from "../emscripten.js";
-import type { Actions, Screen, Ui } from "./types.js";
+import type { PunktfunkModule } from "../emscripten.ts";
+import type { Actions, Screen, Ui } from "./types.ts";
 
 /** Index into the console's key table (`KEYS` in `src/host.rs`). Anything absent stays the
  *  browser's, so reload, devtools and find keep working while the console has focus. */

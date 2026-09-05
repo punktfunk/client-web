@@ -115,13 +115,14 @@ fi
 dist="$here/dist"
 mkdir -p "$dist"
 cp "$here/web/index.html" "$dist/"
-# The page's own modules, imported at runtime — unlike pf-glue.js, which is linked in above.
-# `ui/` keeps its directory because the emitted imports name it.
-mkdir -p "$dist/ui"
-for m in app pf-connect video video-surface video-surface-webgpu; do
-  cp "$here/build/$m.js" "$dist/"
-done
-cp "$here"/build/ui/*.js "$dist/ui/"
+# The page's own modules, imported at runtime — everything tsc emitted except the glue, which
+# was linked into the wasm module above rather than fetched. Copied wholesale rather than by a
+# hand-kept list: a module missing from `dist` is a bare import failure with no other symptom.
+# `install -D` is GNU-only and fails on macOS, so the directories are made by hand.
+( cd "$here/build" && find . -name '*.js' ! -name 'pf-glue.js' | while read -r f; do
+    mkdir -p "$dist/$(dirname "$f")"
+    cp "$f" "$dist/$f"
+  done )
 cp "$target/wasm32-unknown-emscripten/$profile/punktfunk-client-web.js" "$dist/"
 cp "$target/wasm32-unknown-emscripten/$profile/punktfunk_client_web.wasm" "$dist/"
 echo "==> $dist"

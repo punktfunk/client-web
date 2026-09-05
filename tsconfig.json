@@ -19,6 +19,11 @@
     "noFallthroughCasesInSwitch": true,
     "exactOptionalPropertyTypes": true,
     "verbatimModuleSyntax": true,
+    // Relative imports name the `.ts` file, and tsc rewrites them to `.js` on emit. That is what
+    // lets `node --test` run these files directly — node strips types but resolves specifiers
+    // literally, so a `./x.js` that does not exist on disk is a hard failure there.
+    "allowImportingTsExtensions": true,
+    "rewriteRelativeImportExtensions": true,
     "isolatedModules": true,
 
     "sourceMap": true,

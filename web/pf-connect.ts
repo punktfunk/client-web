@@ -18,6 +18,8 @@
 // over the short-lived WebTransport hash, and `verify` refuses to dial a host that cannot produce
 // it.
 
+import { derToRaw, fromBase64, hexBytes, type Bytes } from "./ecdsa.ts";
+
 const CTX = "punktfunk-wt-cert-v1:";
 
 /** Where a host's management API lives when the user does not say. */
@@ -38,15 +40,8 @@ export interface Plane {
  *  `unreachable`. */
 export type Reach = "ok" | "blocked" | "unreachable";
 
-/** A view WebCrypto will accept. It refuses a `SharedArrayBuffer` one, which is what the default
- *  `Uint8Array<ArrayBufferLike>` leaves open. */
-type Bytes = Uint8Array<ArrayBuffer>;
-
 const hex = (b: Uint8Array): string =>
   Array.from(b, (x) => x.toString(16).padStart(2, "0")).join("");
-
-const bytes = (h: string): Bytes =>
-  new Uint8Array((h.match(/../g) ?? []).map((b) => parseInt(b, 16)));
 
 // `192.168.1.25`, `192.168.1.25:47991`, `host.local`, or a full origin. Anything else throws
 // rather than being guessed at — a mistyped address should say so, not fail later as a network
@@ -110,7 +105,7 @@ export async function verify(plane: Plane, hostFingerprint: string): Promise<tru
   if (!plane.cert_hash_sig || !plane.host_cert_der) {
     throw new Error("this host published no attestation, so a paired browser cannot dial it");
   }
-  const der = derOf(plane.host_cert_der);
+  const der = fromBase64(plane.host_cert_der);
   const seen = hex(new Uint8Array(await crypto.subtle.digest("SHA-256", der)));
   if (seen !== hostFingerprint) {
     throw new Error("this is not the host that was paired with");
@@ -127,15 +122,12 @@ export async function verify(plane: Plane, hostFingerprint: string): Promise<tru
     key,
     // The host signs ASN.1 DER; WebCrypto verifies raw `r || s`, the same mismatch the client's
     // own signatures have in the other direction.
-    derToRaw(bytes(plane.cert_hash_sig)),
+    derToRaw(hexBytes(plane.cert_hash_sig)),
     new TextEncoder().encode(CTX + plane.cert_hash_sha256),
   );
   if (!ok) throw new Error("the host's signature over its certificate hash does not verify");
   return true;
 }
-
-const derOf = (b64: string): Bytes =>
-  Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
 
 // The SubjectPublicKeyInfo inside an X.509 certificate.
 //
@@ -151,30 +143,6 @@ function spkiOf(der: Bytes): Bytes {
     if (header.every((b, j) => der[i + j] === b)) return der.subarray(i, i + 91);
   }
   throw new Error("the host certificate carries no P-256 key");
-}
-
-// `SEQUENCE { INTEGER r, INTEGER s }` to the fixed 64 bytes WebCrypto wants. Refuses anything
-// that is not exactly that: this parses bytes from an unauthenticated route.
-function derToRaw(der: Bytes): Bytes {
-  let i = 0;
-  const bad = () => new Error("bad signature");
-  const int = (): Bytes => {
-    if (der[i++] !== 0x02) throw bad();
-    const n = der[i++];
-    if (n === undefined || n & 0x80) throw bad();
-    let v: Bytes = der.subarray(i, (i += n));
-    while (v.length && v[0] === 0) v = v.subarray(1);
-    if (v.length > 32) throw bad();
-    return v;
-  };
-  if (der[i++] !== 0x30 || der[i++] !== der.length - 2) throw bad();
-  const r = int();
-  const s = int();
-  if (i !== der.length) throw bad();
-  const raw: Bytes = new Uint8Array(64);
-  raw.set(r, 32 - r.length);
-  raw.set(s, 64 - s.length);
-  return raw;
 }
 
 /** What this browser remembers about one host. Nothing here is secret. */
@@ -225,5 +193,5 @@ export const hosts = {
  *  certificate, which is replaced every twelve days. */
 export async function hostFingerprint(plane: Plane): Promise<string | null> {
   if (!plane.host_cert_der) return null;
-  return hex(new Uint8Array(await crypto.subtle.digest("SHA-256", derOf(plane.host_cert_der))));
+  return hex(new Uint8Array(await crypto.subtle.digest("SHA-256", fromBase64(plane.host_cert_der))));
 }

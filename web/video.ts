@@ -8,9 +8,9 @@
 // heap; what leaves the decoder is a `VideoFrame` that goes straight to the plane and is closed.
 // No decoded pixel is ever in wasm memory, which is what keeps the WebGPU swap to one file.
 
-import type { PunktfunkModule } from "./emscripten.js";
-import { VideoSurface, type VideoPlane } from "./video-surface.js";
-import { VideoSurfaceWebGPU } from "./video-surface-webgpu.js";
+import type { PunktfunkModule } from "./emscripten.ts";
+import { VideoSurface, type VideoPlane } from "./video-surface.ts";
+import { VideoSurfaceWebGPU } from "./video-surface-webgpu.ts";
 
 /** Wire codec ids, as `Welcome` carries them. */
 const CODEC_H264 = 1;

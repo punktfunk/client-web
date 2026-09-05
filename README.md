@@ -13,9 +13,9 @@ Built on the punktfunk project by **Enrico Bühler ([unom](https://unom.io))**.
 
 ## Status
 
-Pairing and video both work, verified against a real host on Safari 27. Audio, gamepad input and
-the game library are not wired yet — the library needs a management-API credential a browser
-cannot present today (see **Two interfaces**).
+Pairing, video and the library all work, verified against a real host on Safari 27. Audio and
+gamepad input are not wired yet, and choosing a title still streams the desktop rather than
+launching it.
 
 ## Trust, and the one step it costs you
 
@@ -94,6 +94,8 @@ Rust owns the protocol; TypeScript owns the browser. Nothing crosses that line b
 | `web/ui/shell.ts` | The web-native interface: DOM, pointer, touch, a text field. The default. |
 | `web/ui/console.ts` | The gamepad interface: `pf-console-ui` on a canvas, as on every other client. `?ui=console`. |
 | `web/pf-connect.ts` | Reaching a host, and checking its attestation before dialling. |
+| `web/mgmt.ts` | The management API: the device-key token exchange, then the library. |
+| `web/ecdsa.ts` | WebCrypto's raw `r \|\| s` against the DER the host speaks, both directions. |
 | `web/video.ts` | `VideoDecoder` in, `VideoFrame` onto the plane. The only file that knows WebCodecs. |
 | `web/video-surface.ts` | The video plane, WebGL2. |
 | `web/video-surface-webgpu.ts` | The same seam on WebGPU — `importExternalTexture`, and the only HDR route either engine ships. |
@@ -134,10 +136,11 @@ renderer knows anything about pairing, trust or the session.
 stay DOM, and the canvas takes over once a session is live. That is honest about what a D-pad
 shell can and cannot do, and it is why adding the second interface cost one file.
 
-**The library grid is not here yet, and cannot be.** A DOM shell that lists games needs the
-management API, and a browser cannot present the mTLS certificate that API expects — the bearer
-lane is loopback-only. The device credential this client already has is the right thing to offer
-there, but the host does not accept it on HTTP yet.
+**The library grid is here.** It needed the management API, which a browser could not reach: that
+API takes a client certificate, and its bearer lane is loopback-only. The host now accepts the
+same device key this client pairs with — `POST /auth/device/challenge`, sign, exchange for a
+short-lived token — and that token reaches exactly the paired-certificate route set. `mgmt.ts` is
+that exchange; nothing else in the client holds a token.
 
 ## Tests
 
@@ -155,7 +158,10 @@ the two languages agreeing is the part that fails silently.
 
 ## Known gaps
 
-- **Audio and gamepad input are missing.** Video only, for now.
+- **Audio and gamepad input are missing.**
+- **Choosing a title streams the desktop.** `Hello` carries a launch on the wire and the browser's
+  `pf_session_hello` does not take one yet, so the grid says so in the console rather than quietly
+  ignoring the choice.
 - **The console interface (`?ui=console`) draws an empty shell.** It has no data to show until the
   management API accepts the browser's device credential.
 - **Set `-sSTACK_SIZE`** if you change the link flags. Emscripten's default is 64 KB, which a

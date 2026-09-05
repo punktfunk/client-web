@@ -65,6 +65,12 @@ export interface PunktfunkModule {
   //
   // `pf-glue.ts` calls these, so they are the page's half of the same boundary. All optional:
   // the glue checks before calling, and a page that does not decode video simply omits them.
+  /** Sign with the device key, for messages the page composes — the management API's nonce.
+   *  Installed by `pf_device_init` once the key is out of IndexedDB; absent before that. */
+  __pfDevice?: {
+    spki(): Promise<string>;
+    sign(message: Uint8Array<ArrayBuffer>): Promise<Uint8Array>;
+  };
   /** The device key is loaded and Rust holds its SPKI. Dial now, not before. */
   __pfOnDeviceReady?: () => void;
   /** The control stream is open. Send `Hello`, or ask for a PIN. */

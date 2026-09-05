@@ -284,6 +284,22 @@ mergeInto(LibraryManager.library, {
           HEAPU8.set(hash, p + s.length);
           Module._pf_device_set(p, s.length, p + s.length);
           _free(p);
+          // The management API needs signatures over messages the PAGE composes, not only the
+          // ones Rust is waiting on, so the page gets the two operations it needs and nothing
+          // more. `pfCred.key.privateKey` is non-extractable: this hands over the ability to
+          // sign, never the key.
+          Module.__pfDevice = {
+            spki: function () {
+              return Promise.resolve(btoa(String.fromCharCode.apply(null, Array.from(s))));
+            },
+            sign: function (message: Uint8Array<ArrayBuffer>) {
+              return crypto.subtle
+                .sign({ name: "ECDSA", hash: "SHA-256" }, pfCred.key!.privateKey, message)
+                .then(function (sig) {
+                  return new Uint8Array(sig);
+                });
+            },
+          };
           if (Module.__pfOnDeviceReady) Module.__pfOnDeviceReady();
         });
       })

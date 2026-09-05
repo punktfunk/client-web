@@ -8,7 +8,8 @@
 // Everything is built with `textContent`, never `innerHTML`: host names and error strings come
 // from the network and from the user.
 
-import type { Actions, Screen, SessionStats, Ui } from "./types.js";
+import type { LibraryEntry } from "../mgmt.ts";
+import type { Actions, Screen, SessionStats, Ui } from "./types.ts";
 
 const el = <K extends keyof HTMLElementTagNameMap>(
   tag: K,
@@ -44,6 +45,13 @@ export class WebShell implements Ui {
       this.updateStats(screen.stats);
       return;
     }
+    // The library redraws as art arrives, and rebuilding it would drop the scroll position.
+    if (screen.kind === "library" && this.last === "library") {
+      this.root.replaceChildren();
+      this.root.dataset["screen"] = screen.kind;
+      this.library(screen);
+      return;
+    }
     this.last = screen.kind;
     this.root.replaceChildren();
     this.root.dataset["screen"] = screen.kind;
@@ -61,6 +69,9 @@ export class WebShell implements Ui {
       case "pair":
         this.pair(screen);
         break;
+      case "library":
+        this.library(screen);
+        break;
       case "streaming":
         this.streaming(screen.stats);
         break;
@@ -68,6 +79,54 @@ export class WebShell implements Ui {
         this.error(screen);
         break;
     }
+  }
+
+  // The library. A grid of what the host offers, which is the screen a browser could not draw
+  // at all until it could authenticate to the management API.
+  private library(screen: Screen & { kind: "library" }): void {
+    const head = el("header", "bar");
+    head.append(el("h1", undefined, screen.host ?? screen.origin.replace(/^https:\/\//, "")));
+    const stream = el("button", "primary small", "Stream the desktop");
+    stream.addEventListener("click", () => this.actions.play());
+    const leave = el("button", "ghost small", "Disconnect");
+    leave.addEventListener("click", () => this.actions.disconnect());
+    head.append(stream, leave);
+    this.root.append(head);
+
+    if (screen.error) this.root.append(this.errorLine(screen.error));
+    if (screen.busy && !screen.entries.length) {
+      this.root.append(this.spinner());
+      return;
+    }
+    if (!screen.entries.length) {
+      this.root.append(
+        el("p", "sub empty", "This host's library is empty, or nothing has been added to it yet."),
+      );
+      return;
+    }
+
+    const grid = el("div", "grid");
+    for (const entry of screen.entries) grid.append(this.tile(entry, screen.art.get(entry.id)));
+    this.root.append(grid);
+  }
+
+  private tile(entry: LibraryEntry, art: string | undefined): HTMLElement {
+    const tile = el("button", "tile");
+    tile.setAttribute("aria-label", entry.title);
+    const cover = el("div", "cover");
+    if (art) {
+      const img = el("img");
+      img.src = art;
+      img.alt = "";
+      img.loading = "lazy";
+      cover.append(img);
+    } else {
+      // No art is the common case on a fresh host; an initial reads better than a broken image.
+      cover.append(el("span", "initial", entry.title.slice(0, 1).toUpperCase()));
+    }
+    tile.append(cover, el("span", "title", entry.title));
+    tile.addEventListener("click", () => this.actions.play(entry));
+    return tile;
   }
 
   private card(title: string, body: Node[]): HTMLElement {

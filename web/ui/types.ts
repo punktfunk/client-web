@@ -8,7 +8,8 @@
 // The split is what makes a second interface cheap rather than a fork: nothing about pairing,
 // trust or the session lives in a renderer.
 
-import type { KnownHost } from "../pf-connect.js";
+import type { KnownHost } from "../pf-connect.ts";
+import type { LibraryEntry } from "../mgmt.ts";
 
 /** Everything worth showing about a live session. */
 export interface SessionStats {
@@ -37,6 +38,17 @@ export type Screen =
   | { kind: "accept"; origin: string; url: string }
   | { kind: "connecting"; origin: string }
   | { kind: "pair"; origin: string; message: string; error?: string; busy?: boolean }
+  | {
+      kind: "library";
+      origin: string;
+      /** The host's own name, once it has been read. */
+      host?: string;
+      entries: LibraryEntry[];
+      /** Object URLs by entry id, filled in as art arrives. */
+      art: Map<string, string>;
+      error?: string;
+      busy?: boolean;
+    }
   | { kind: "streaming"; stats: SessionStats }
   | { kind: "error"; head: string; text: string };
 
@@ -48,6 +60,9 @@ export interface Actions {
   /** Re-check a host after its certificate has been accepted. */
   retry(): void;
   back(): void;
+  /** Start streaming. The library is what a browser could not see before it could authenticate
+   *  to the management API, so this is the first screen with anything to choose. */
+  play(entry?: LibraryEntry): void;
   forget(origin: string): void;
   disconnect(): void;
 }

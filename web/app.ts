@@ -9,12 +9,13 @@
 // attestation against what pairing stored, load the device key, *then* dial. Each step can only
 // fail in one direction, and a browser that has never paired simply has nothing to check.
 
-import type { PunktfunkModule } from "./emscripten.js";
-import * as pf from "./pf-connect.js";
-import { decodeSupported, VideoPipe } from "./video.js";
-import { ConsoleUi } from "./ui/console.js";
-import { WebShell } from "./ui/shell.js";
-import type { Screen, SessionStats, Ui } from "./ui/types.js";
+import type { PunktfunkModule } from "./emscripten.ts";
+import { Mgmt, type LibraryEntry } from "./mgmt.ts";
+import * as pf from "./pf-connect.ts";
+import { decodeSupported, VideoPipe } from "./video.ts";
+import { ConsoleUi } from "./ui/console.ts";
+import { WebShell } from "./ui/shell.ts";
+import type { Screen, SessionStats, Ui } from "./ui/types.ts";
 
 /** `pf_cred_phase` and `pf_session_phase`, named. Kept beside the exports they mirror. */
 const CRED = { EMPTY: 0, READY: 1, NEEDS_SIGNATURE: 2, PAIRING: 3, PAIRED: 4, FAILED: 5 } as const;
@@ -30,6 +31,11 @@ class App {
   private origin: string | null = null;
   private plane: pf.Plane | null = null;
   private video: VideoPipe | null = null;
+  /** The management-API session, once this browser has a pairing to prove. */
+  private mgmt: Mgmt | null = null;
+  private entries: LibraryEntry[] = [];
+  private art = new Map<string, string>();
+  private hostName: string | undefined;
   private pairing = false;
   private settled = false;
   private offeredSince = 0;
@@ -50,6 +56,7 @@ class App {
       pair: (pin) => this.pair(pin),
       retry: () => void this.connect(this.origin ?? ""),
       back: () => this.toPicker(),
+      play: (entry) => this.play(entry),
       forget: (origin) => {
         pf.hosts.forget(origin);
         this.toPicker();
@@ -164,7 +171,81 @@ class App {
         message: "Enter the PIN this host is showing.",
       });
     }
-    this.video = new VideoPipe(this.mod, this.video_canvas);
+    // Authenticated. The library is what the management API was blocked on, so it is the screen
+    // this lands on rather than a stream nobody chose.
+    void this.openLibrary();
+  }
+
+  /** Read the library over the management API, then draw it. Art is fetched afterwards, per
+   *  entry, because the grid should appear before its covers do. */
+  private async openLibrary(): Promise<void> {
+    const origin = this.origin;
+    const fingerprint = origin && pf.hosts.fingerprint(origin);
+    const device = this.mod.__pfDevice;
+    if (!origin || !fingerprint || !device) {
+      // No pairing, or no key: there is nothing to authenticate with, so stream directly rather
+      // than show an empty library.
+      return this.play();
+    }
+    this.mgmt ??= new Mgmt(origin, fingerprint, device);
+    this.show({ kind: "library", origin, entries: [], art: this.art, busy: true });
+
+    try {
+      this.entries = await this.mgmt.library();
+    } catch (e) {
+      // The stream still works without a library, so this is a line on the screen rather than a
+      // dead end.
+      return this.show({
+        kind: "library",
+        origin,
+        entries: [],
+        art: this.art,
+        error: `${message(e)} — you can still stream the desktop.`,
+      });
+    }
+    this.mgmt
+      .host()
+      .then((h) => {
+        this.hostName = h.hostname;
+        pf.hosts.remember(origin, { name: h.hostname });
+        this.redrawLibrary();
+      })
+      .catch(() => {});
+    this.redrawLibrary();
+
+    for (const entry of this.entries) {
+      if (!entry.art || this.art.has(entry.id)) continue;
+      this.mgmt
+        .art(entry.art)
+        .then((url) => {
+          if (!url) return;
+          this.art.set(entry.id, url);
+          this.redrawLibrary();
+        })
+        .catch(() => {});
+    }
+  }
+
+  private redrawLibrary(): void {
+    if (this.screen.kind !== "library" || !this.origin) return;
+    this.show({
+      kind: "library",
+      origin: this.origin,
+      entries: this.entries,
+      art: this.art,
+      ...(this.hostName ? { host: this.hostName } : {}),
+    });
+  }
+
+  /** Start streaming. An entry is what the host should launch; without one it is the desktop. */
+  private play(entry?: LibraryEntry): void {
+    if (entry) {
+      // The wire carries a launch in `Hello`, which the browser's `pf_session_hello` does not
+      // take yet — so this streams the desktop and says so rather than silently ignoring the
+      // choice. Wiring `launch` through is the next step, not a hidden failure.
+      console.warn("punktfunk: launching a title is not wired yet; streaming the desktop", entry.id);
+    }
+    this.video ??= new VideoPipe(this.mod, this.video_canvas);
     this.video.attach();
     const [w, h] = this.size();
     this.mod._pf_session_hello(w, h, 60, 20000);
@@ -185,6 +266,11 @@ class App {
   private disconnect(): void {
     this.video?.close();
     this.video = null;
+    this.mgmt = null;
+    this.entries = [];
+    for (const url of this.art.values()) URL.revokeObjectURL(url);
+    this.art.clear();
+    this.hostName = undefined;
     this.mod._pf_wt_close?.();
     this.toPicker();
   }
@@ -265,6 +351,9 @@ class App {
       return;
     }
     if (phase !== SESSION.LIVE || !this.origin) return;
+    // The library is a screen someone is reading; a stream that has not been asked for must not
+    // replace it.
+    if (this.screen.kind === "library") return;
     this.offeredSince = 0;
 
     const now = performance.now();
