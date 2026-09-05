@@ -25,6 +25,8 @@ export { type KnownHost, type Plane, hosts, originOf } from "./pf-connect.ts";
 /** `pf_cred_phase` and `pf_session_phase`, named. Kept beside the exports they mirror. */
 const CRED = { EMPTY: 0, READY: 1, NEEDS_SIGNATURE: 2, PAIRING: 3, PAIRED: 4, FAILED: 5 } as const;
 const SESSION = { IDLE: 0, OFFERED: 1, LIVE: 2, FAILED: 3 } as const;
+/** The host's application close codes this engine reads (`punktfunk_core::reject`). */
+const CLOSE = { PAIR_DENIED: 0x64, ACCESS_EXPIRED: 0x69, HOST_POWER: 0x6b } as const;
 
 /** How long `Offered` may last before the host is taken to have refused the credential. It
  *  closes the session without a message, so nothing else says so. */
@@ -69,7 +71,8 @@ export type EngineState =
   /** The ceremony succeeded. The host closes after it, as it does for native clients; the
    *  consumer reconnects to stream. */
   | { kind: "paired"; origin: string }
-  | { kind: "pair-refused"; origin: string }
+  /** `reason` is the host's own sentence when it gave one (not armed, rate-limited, wrong PIN). */
+  | { kind: "pair-refused"; origin: string; reason?: string }
   /** Authenticated. `host` reaches the management API; nothing is streaming yet. Emitted once
    *  per connection — the host's name and the library are read through `host`, not carried. */
   | { kind: "ready"; origin: string; host: Host }
@@ -129,6 +132,8 @@ export class Engine {
   ) {
     mod.__pfOnDeviceReady = () => this.dial();
     mod.__pfOnCtlReady = () => this.onControlStream();
+    mod.__pfOnClosed = (code, reason) => this.onClosed(code, reason);
+    mod.__pfOnRefused = (code, reason) => this.onClosed(code, reason);
     requestAnimationFrame(() => this.frame());
   }
 
@@ -358,6 +363,50 @@ export class Engine {
           this.set({ kind: "error", origin, message: e.message, skew: true });
         }
       });
+  }
+
+  /**
+   * The host is closing, or has. Reaches here twice for one close — `Refused` on the control
+   * plane first, then the transport's own close — and the first one settles the state: the
+   * second finds it already in a terminal kind and leaves it. The host closes after every pairing
+   * ceremony (nothing to say), refuses with a reason (say it), or drops a live session (say
+   * that). A close in `idle` is this engine's own `disconnect`.
+   */
+  private onClosed(code: number, reason: string): void {
+    const origin = this.origin;
+    if (!origin || this.state.kind === "idle") return;
+    const said = reason.trim();
+    switch (this.state.kind) {
+      case "pairing":
+        // The ceremony's own verdict (`PairResult`) is authoritative; a close with a reason and
+        // no verdict is the host refusing before the ceremony began.
+        if (!this.settled && said) {
+          this.settled = true;
+          this.pairing = false;
+          this.set({ kind: "pair-refused", origin, reason: said });
+        }
+        return;
+      case "paired":
+      case "pair-refused":
+      case "forgotten":
+      case "error":
+        return;
+      default:
+        break;
+    }
+    if (code === CLOSE.PAIR_DENIED) {
+      this.set({ kind: "forgotten", origin });
+      return;
+    }
+    const message =
+      code === CLOSE.HOST_POWER
+        ? "the host is powering down"
+        : code === CLOSE.ACCESS_EXPIRED
+          ? "this device's access to the host has expired"
+          : said || (code < 0 ? "the connection was lost" : `the host closed the session (code ${code})`);
+    this.video?.close();
+    this.video = null;
+    this.set({ kind: "error", origin, message });
   }
 
   // --- the frame loop ------------------------------------------------------------------

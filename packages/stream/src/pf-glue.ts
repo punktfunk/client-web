@@ -77,10 +77,14 @@ mergeInto(LibraryManager.library, {
     reading: false,
   },
 
-  pf_wt_connect__deps: ["$pfNet", "$UTF8ToString"],
+  pf_wt_connect__deps: ["$pfNet", "$UTF8ToString", "pf_wt_close"],
   pf_wt_connect: function (urlPtr: number, hashPtr: number): number {
     const url = UTF8ToString(urlPtr);
     const hex = UTF8ToString(hashPtr);
+    // One connection at a time. A dial while the last one is still up — the reconnect after a
+    // pairing ceremony, before the host's own close lands — must not inherit its control
+    // stream, or the new session never opens one.
+    _pf_wt_close();
     try {
       const opts: WebTransportOptions = { allowPooling: false };
       if (hex && hex.length === 64) {
@@ -94,9 +98,21 @@ mergeInto(LibraryManager.library, {
       console.error("punktfunk: WebTransport constructor refused", e);
       return 0;
     }
-    // The host closes after a pairing ceremony, as it does for native clients, and `closed`
-    // rejects on any close that is not clean. That is information, not an unhandled rejection.
-    pfNet.wt.closed.catch(function () {});
+    // The host's close code and reason are how it says why — a setup failure, a refused
+    // credential — so they go to the engine. Only for the connection that is still current: a
+    // dial replaces this one, and its close is old news.
+    const wt = pfNet.wt;
+    wt.closed.then(
+      function (info) {
+        if (pfNet.wt === wt && Module.__pfOnClosed) Module.__pfOnClosed(info.closeCode ?? 0, info.reason ?? "");
+      },
+      function (e) {
+        // WebKit rejects here on any close by the host, with nothing attached — not even the
+        // close code. `Refused` on a stream is what carries the reason in that engine.
+        const err = e as { message?: string };
+        if (pfNet.wt === wt && Module.__pfOnClosed) Module.__pfOnClosed(-1, err.message ?? "");
+      },
+    );
     pfNet.wt.ready.then(
       function () {
         // WebKit follows the current spec with `createWritable()`; Chromium still exposes the
@@ -109,6 +125,32 @@ mergeInto(LibraryManager.library, {
         const w = datagrams.createWritable ? datagrams.createWritable() : datagrams.writable;
         pfNet.writer = w.getWriter();
         if (Module._pf_wt_ctl_open) Module._pf_wt_ctl_open();
+        // A stream the host opens carries one thing: why it is about to close (`Refused`).
+        // Same framing as the control stream, so the bytes go to the same decoder.
+        const feed = function (reader: ReadableStreamDefaultReader<Uint8Array>): void {
+          reader.read().then(
+            function (r) {
+              if (r.done) return;
+              const p = _malloc(r.value.length);
+              HEAPU8.set(r.value, p);
+              Module._pf_ctl_recv(p, r.value.length);
+              _free(p);
+              feed(reader);
+            },
+            function () {},
+          );
+        };
+        const unis = function (reader: ReadableStreamDefaultReader<ReadableStream<Uint8Array>>): void {
+          reader.read().then(
+            function (r) {
+              if (r.done) return;
+              feed(r.value.getReader());
+              unis(reader);
+            },
+            function () {},
+          );
+        };
+        unis(pfNet.wt!.incomingUnidirectionalStreams.getReader());
         if (!pfNet.reading) {
           pfNet.reading = true;
           const pump = function (reader: ReadableStreamDefaultReader<Uint8Array>): void {
@@ -339,6 +381,11 @@ mergeInto(LibraryManager.library, {
   //
   // R3: what crosses is the encoded access unit. The decoded frame goes from `VideoDecoder`
   // straight into the video plane's texture and never enters the wasm heap.
+  pf_refused__deps: ["$UTF8ToString"],
+  pf_refused: function (code: number, ptr: number, len: number): void {
+    if (Module.__pfOnRefused) Module.__pfOnRefused(code, UTF8ToString(ptr, len));
+  },
+
   pf_video_config: function (codec: number, width: number, height: number): void {
     if (Module.__pfOnVideoConfig) Module.__pfOnVideoConfig(codec, width, height);
   },

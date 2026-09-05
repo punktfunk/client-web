@@ -17,7 +17,7 @@ use crate::credential;
 use crate::transport::WebTransportDatagrams;
 use punktfunk_core::config::{CompositorPref, GamepadPref, Mode, Role};
 use punktfunk_core::quic::{
-    AuthChallenge, Hello, PairChallenge, PairResult, Start, Welcome, MAGIC,
+    AuthChallenge, Hello, PairChallenge, PairResult, Refused, Start, Welcome, MAGIC,
 };
 use punktfunk_core::session::Session;
 use std::cell::RefCell;
@@ -77,6 +77,8 @@ unsafe extern "C" {
     fn pf_video_au(ptr: *const u8, len: u32, pts_us: f64, key: i32);
     /// The negotiated format, once `Welcome` has been read.
     fn pf_video_config(codec: u32, width: u32, height: u32);
+    /// The host said why it is closing. `reason` is UTF-8, borrowed for the call.
+    fn pf_refused(code: u32, reason: *const u8, len: u32);
 }
 
 /// Frame the way the control plane does everywhere else: `u16` length, then the payload.
@@ -238,6 +240,9 @@ pub unsafe extern "C" fn pf_ctl_recv(ptr: *const u8, len: u32) {
                 }
             } else if let Ok(r) = PairResult::decode(&body) {
                 credential::on_pair_result(&r);
+            } else if let Ok(r) = Refused::decode(&body) {
+                // SAFETY: the string is borrowed for a call into JavaScript that copies it.
+                unsafe { pf_refused(r.code, r.reason.as_ptr(), r.reason.len() as u32) };
             }
         }
     });
