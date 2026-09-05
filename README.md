@@ -3,11 +3,16 @@
 **Browser client for [punktfunk](https://git.unom.io/unom/punktfunk) — the console and low-latency
 video, in a tab.**
 
-`pf-console-ui` compiled to `wasm32-unknown-emscripten` draws the shell on a WebGL2 canvas;
-WebTransport carries the session and WebCodecs decodes it. The protocol is not reimplemented here:
-handshake, FEC, decrypt, reassembly and the SPAKE2 pairing ceremony are `punktfunk-core`'s, a
-pinned git dependency. This repo is the browser-specific half — the canvases, the decoder, the
-device credential and the page.
+Two packages in one workspace:
+
+| | |
+|---|---|
+| [`packages/stream`](packages/stream) — **`@punktfunk/stream`** | The engine, as a library: WebTransport session, device-key pairing, WebCodecs video, the management API through `@punktfunk/host`. No DOM, no framework. Rust (`rust/`) compiled to wasm underneath, TypeScript (`src/`) on top. |
+| [`apps/web`](apps/web) | The web client on it — the flagship consumer. The page, two interfaces, the wording. |
+
+The protocol is not reimplemented anywhere here: handshake, FEC, decrypt, reassembly and the
+SPAKE2 pairing ceremony are `punktfunk-core`'s, a pinned git dependency. The management API is
+consumed through the SDK generated from the host's own OpenAPI spec.
 
 Built on the punktfunk project by **Enrico Bühler ([unom](https://unom.io))**.
 
@@ -55,16 +60,22 @@ the `wasm32-unknown-emscripten` Rust target.
 ```sh
 rustup target add wasm32-unknown-emscripten
 npm install           # @punktfunk/host comes from the Gitea registry; .npmrc names the scope
-./build.sh            # or --release
+npm run build         # the library, then the app
 ```
 
-The result is a servable directory in `dist/`. Serve it from anywhere; it is static.
+The app lands in `apps/web/dist/`, a static directory to serve from anywhere. The library lands
+in `packages/stream/dist/`, which is what `npm pack` ships.
 
-Three tools, each for what it is for. `tsc` runs first, because `build/pf-glue.js` is an
-**input** to the wasm link — emscripten reads it with `--js-library`. `cargo` builds the wasm.
-**Vite** bundles the page, the SDK and Effect from source; the two emscripten files are copied
-into `public/` and served untouched, because the glue is a self-contained classic script that
-loads its own `.wasm` by a relative URL and re-processing it would break exactly that.
+Four tools, each for what it is for, in this order:
+
+1. **`tsc`** emits one file, `packages/stream/build/pf-glue.js` — an *input* to the wasm link,
+   which emscripten reads with `--js-library`.
+2. **`cargo`** builds the wasm module into `packages/stream/wasm/`, as an ES module with a
+   default-exported factory.
+3. **tsdown** packages the library. The glue becomes a lazy chunk with its
+   `new URL("….wasm", import.meta.url)` intact, and the `.wasm` is copied beside it.
+4. **Vite** builds the app from source — the library through a workspace alias, the SDK, Effect —
+   and turns the library's wasm reference into an emitted asset.
 
 For development against a real host without accepting its certificate first:
 
@@ -73,7 +84,8 @@ PF_HOST=https://192.168.1.25:47990 npm run dev
 ```
 
 The dev server answers `/api` on the page's own origin. Only the dev server does this — a built
-page talks to the host it was pointed at, cross-origin, as designed.
+page talks to the host it was pointed at, cross-origin, as designed. Through a proxy the
+WebTransport plane is not at the page's hostname; `Engine.create({ transportHost })` says where.
 
 ### Why Skia is built, not downloaded
 
@@ -91,37 +103,46 @@ archive, delete this whole arrangement.
 
 ## Shape
 
-Rust owns the protocol; TypeScript owns the browser. Nothing crosses that line by accident.
+Rust owns the protocol; TypeScript owns the browser. The library owns everything but the words.
+
+**`packages/stream`**
 
 | File | What it is |
 |---|---|
-| `src/main.rs` | Entry point. Off wasm it prints how to build; on wasm it hands the page the loop. |
-| `src/host.rs` | Skia `DirectContext` over the canvas, the `Console`, the exported `pf_*` calls. |
-| `src/transport.rs` | The datagram ring and `punktfunk_core`'s `Transport` over it. |
-| `src/session.rs` | The handshake state machine and the pump that turns datagrams into access units. |
-| `src/credential.rs` | The device key's protocol half: SPAKE2 role A, and the per-session signature. |
-| `src/ecdsa.rs` | WebCrypto's raw `r \|\| s` against the DER the host speaks. |
-| `web/app.ts` | **The client, minus the drawing.** Every decision — which host, whether it is trusted, when to pair — lives here. |
-| `web/ui/types.ts` | The `Screen` a UI renders and the `Actions` it may emit. The seam between the two interfaces. |
-| `web/ui/shell.ts` | The web-native interface: DOM, pointer, touch, a text field. The default. |
-| `web/ui/console.ts` | The gamepad interface: `pf-console-ui` on a canvas, as on every other client. `?ui=console`. |
-| `web/pf-connect.ts` | Reaching a host, and checking its attestation before dialling. |
-| `web/host.ts` | The management API **through `@punktfunk/host/core`**: the generated client on an `HttpClient` carrying the device credential. Effect stops at this file's edge. |
-| `web/video.ts` | `VideoDecoder` in, `VideoFrame` onto the plane. The only file that knows WebCodecs. |
-| `web/video-surface.ts` | The video plane, WebGL2. |
-| `web/video-surface-webgpu.ts` | The same seam on WebGPU — `importExternalTexture`, and the only HDR route either engine ships. |
-| `web/pf-glue.ts` | Emscripten `--js-library`. **The only file that names a browser or GL object.** |
-| `web/emscripten.d.ts` | The wasm exports and the `--js-library` scope, typed once. |
+| `rust/main.rs` | Entry point. Off wasm it prints how to build; on wasm it hands the page the loop. |
+| `rust/host.rs` | Skia `DirectContext` over the canvas, the `Console`, the exported `pf_*` calls. |
+| `rust/transport.rs` | The datagram ring and `punktfunk_core`'s `Transport` over it. |
+| `rust/session.rs` | The handshake state machine and the pump that turns datagrams into access units. |
+| `rust/credential.rs` | The device key's protocol half: SPAKE2 role A, and the per-session signature. |
+| `rust/ecdsa.rs` | WebCrypto's raw `r \|\| s` against the DER the host speaks. |
+| `src/engine.ts` | **The library's surface.** `Engine.create()`, the state machine, the verbs. Facts, never wording. |
+| `src/index.ts` | What the package exports. |
+| `src/pf-connect.ts` | Reaching a host, and checking its attestation before dialling. |
+| `src/host.ts` | The management API **through `@punktfunk/host/core`**. Effect stops at this file's edge. |
+| `src/video.ts` | `VideoDecoder` in, `VideoFrame` onto the plane. The only file that knows WebCodecs. |
+| `src/video-surface.ts` | The video plane, WebGL2. |
+| `src/video-surface-webgpu.ts` | The same seam on WebGPU — `importExternalTexture`, and the only HDR route either engine ships. |
+| `src/pf-glue.ts` | Emscripten `--js-library`. **The only file that names a browser or GL object.** |
+| `src/emscripten.d.ts` | The wasm exports and the `--js-library` scope, typed once. |
 
-`web/pf-glue.ts` is load-bearing, not a detail, and it has a constraint the others do not:
+**`apps/web`**
+
+| File | What it is |
+|---|---|
+| `src/app.ts` | `EngineState` in, `Screen` out: the wording, the choice of interface, the library's art. |
+| `src/ui/types.ts` | The `Screen` a UI renders and the `Actions` it may emit. The seam between the two interfaces. |
+| `src/ui/shell.ts` | The web-native interface: DOM, pointer, touch, a text field. The default. |
+| `src/ui/console.ts` | The gamepad interface: `pf-console-ui` on a canvas, through `engine.console`. `?ui=console`. |
+
+`src/pf-glue.ts` is load-bearing, not a detail, and it has a constraint the others do not:
 emscripten **stringifies each function** and splices it into the module it generates, so anything
 outside a function body is left behind — a module-scope `const`, a tsc helper, a captured
 temporary — and the failure is a `ReferenceError` at runtime rather than a build error. It never
 imports; shared state goes through a `$`-prefixed library member, which is emscripten's own
-mechanism for exactly that. `tsconfig.json` keeps the emit literal.
+mechanism for exactly that. `tsconfig.base.json` keeps the emit literal.
 
 Exactly one seam may know the graphics API, which is what makes the eventual WebGPU swap a change
-to one file instead of a rewrite. **Nothing in `src/` may name a GL or GPU type**; that is a
+to one file instead of a rewrite. **Nothing in `rust/` may name a GL or GPU type**; that is a
 review rule.
 
 Video pixels never enter the wasm heap either. A decoded `VideoFrame` goes from `VideoDecoder`
@@ -134,7 +155,7 @@ a D-pad. It is the right thing across a room with a controller and the wrong thi
 tab, where the input is a mouse and the first thing anyone must do is **type an address** — which
 a gamepad shell cannot offer at all.
 
-So there are two, and `web/ui/types.ts` is what keeps that from being a fork. `app.ts` holds the
+So there are two, and `src/ui/types.ts` is what keeps that from being a fork. `app.ts` holds the
 entire state machine and hands a UI a `Screen` to render; a UI hands back an `Action`. Neither
 renderer knows anything about pairing, trust or the session.
 
@@ -151,7 +172,7 @@ shell can and cannot do, and it is why adding the second interface cost one file
 
 This client consumes the host's API through **[`@punktfunk/host`](https://git.unom.io/unom/punktfunk/src/branch/main/sdk)**,
 the SDK generated from the host's OpenAPI spec into Effect Schemas and a typed client. Nothing
-in `web/` names an API path or hand-writes a JSON shape: every operation is a method, every
+in `src/` names an API path or hand-writes a JSON shape: every operation is a method, every
 response is decoded through its Schema, and if the host's API changes this client finds out by
 failing to compile against the regenerated SDK. That is the whole reason to consume it rather
 than `fetch`.
@@ -172,10 +193,15 @@ The credential and signature halves are **not** wasm-gated, so they build and ru
 and the SPAKE2 half runs against the host's own role B, which is the divergence worth catching:
 
 ```sh
-cargo test        # the credential ceremony against the host's own SPAKE2 role B
-npm run check     # tsc --noEmit; stripping types does not check them
-npm test          # node runs the .ts tests directly, no build step
+npm run check                      # tsc --noEmit in both packages; stripping types does not check them
+npm test                           # node runs the .ts tests directly, no build step
+cd packages/stream && cargo test   # the credential ceremony against the host's own SPAKE2 role B
 ```
+
+The gate that matters most is not a unit test: a consumer that has never seen this workspace
+installs `@punktfunk/stream` from `npm pack`'s tarball, and streams. That is what proves the
+packaging — the lazy wasm, the asset reference, the peers — and it was run against a live host
+on Safari before the split was called done.
 
 `pf-connect.test.js` checks the attestation verifier against bytes a real host produced, because
 the two languages agreeing is the part that fails silently.

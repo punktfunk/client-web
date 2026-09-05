@@ -2,21 +2,18 @@
   "name": "punktfunk-client-web",
   "private": true,
   "type": "module",
-  "description": "Browser client for punktfunk \u2014 the TypeScript half: the page, the video plane and the emscripten glue.",
+  "description": "The punktfunk browser client: @punktfunk/stream (the engine, as a library) and the web app on it.",
+  "workspaces": [
+    "packages/*",
+    "apps/*"
+  ],
   "scripts": {
-    "build:glue": "tsc",
-    "build:web": "vite build",
-    "dev": "vite",
-    "check": "tsc --noEmit",
-    "test": "node --test web/*.test.ts"
-  },
-  "dependencies": {
-    "@punktfunk/host": "^0.2.0",
-    "effect": "4.0.0-beta.98"
+    "build": "npm run build -w @punktfunk/stream && npm run build -w punktfunk-web",
+    "check": "npm run check --workspaces",
+    "test": "npm run test --workspaces --if-present",
+    "dev": "npm run dev -w punktfunk-web"
   },
   "devDependencies": {
-    "@webgpu/types": "^0.1.60",
-    "typescript": "^5.9.3",
-    "vite": "^8.2.2"
+    "typescript": "^5.9.3"
   }
 }

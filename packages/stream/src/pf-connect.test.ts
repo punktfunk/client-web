@@ -14,7 +14,12 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { verify, hostFingerprint, type Plane } from "./pf-connect.ts";
 
-const VECTOR: Plane = {
+// A full `Plane`, as the route publishes one; the two attestation fields are the ones under
+// test. Narrowed to `Required` so the test can read them without a null check on every line.
+const VECTOR: Required<Plane> = {
+  port: 9778,
+  expires_at: 4102444800,
+  allow_pooling: false,
   cert_hash_sha256: "3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f",
   cert_hash_sig:
     "30450220363b8bd78823a5b83ce942385c0d2a129aaea5d5d551252e09ee76355efa47d0022100f22d19aeef15ba9fe8b1b270cf8e217e298cfb7eb95e4c7f059070db7dfffa4e",
@@ -24,6 +29,7 @@ const VECTOR: Plane = {
 
 test("a real host's attestation verifies", async () => {
   const fp = await hostFingerprint(VECTOR);
+  assert.ok(fp, "the vector carries a certificate");
   assert.equal(fp.length, 64, "a SHA-256 in hex");
   assert.equal(await verify(VECTOR, fp), true);
 });
@@ -36,7 +42,7 @@ test("a host that is not the one paired with is refused", async () => {
 });
 
 test("the signature must be over this hash, by this key", async () => {
-  const fp = await hostFingerprint(VECTOR);
+  const fp = (await hostFingerprint(VECTOR))!;
 
   // A different hash: the certificate is still ours, the signature no longer names it.
   await assert.rejects(
@@ -50,9 +56,18 @@ test("the signature must be over this hash, by this key", async () => {
 });
 
 test("an unattested host cannot be dialled by a paired browser", async () => {
-  const fp = await hostFingerprint(VECTOR);
+  const fp = (await hostFingerprint(VECTOR))!;
+  const { cert_hash_sig: _sig, host_cert_der: _der, ...unattested } = VECTOR;
   await assert.rejects(
-    () => verify({ cert_hash_sha256: VECTOR.cert_hash_sha256 }, fp),
+    () => verify(unattested, fp),
     /published no attestation/,
   );
+});
+
+test("originOf takes https anywhere and http only on loopback", async () => {
+  const { originOf } = await import("./pf-connect.ts");
+  assert.equal(originOf("192.168.1.25"), "https://192.168.1.25:47990");
+  assert.equal(originOf("http://localhost:5173"), "http://localhost:5173");
+  assert.equal(originOf("http://127.0.0.1:5173"), "http://127.0.0.1:5173");
+  assert.throws(() => originOf("http://192.168.1.25:47990"), /https/);
 });

@@ -10,7 +10,7 @@
 // Nothing here reaches into Skia or GL: `pf_start` and `pf_frame` are wasm exports, and the one
 // place a graphics object is named is `pf-glue.ts`.
 
-import type { PunktfunkModule } from "../emscripten.ts";
+import type { Engine } from "@punktfunk/stream";
 import type { Actions, Screen, Ui } from "./types.ts";
 
 /** Index into the console's key table (`KEYS` in `src/host.rs`). Anything absent stays the
@@ -35,10 +35,12 @@ const KEYS: Record<string, number> = {
 export class ConsoleUi implements Ui {
   private started = false;
   private live = false;
+  private mounted = false;
   private readonly onKey: (e: KeyboardEvent) => void;
 
   constructor(
-    private readonly mod: PunktfunkModule,
+    private readonly engine: Engine,
+    private readonly canvas: HTMLCanvasElement,
     /** The screens a canvas shell cannot draw. Everything before a session belongs to it. */
     private readonly fallback: Ui,
   ) {
@@ -47,13 +49,22 @@ export class ConsoleUi implements Ui {
       const key = KEYS[e.code];
       if (key === undefined || e.ctrlKey || e.metaKey || e.altKey) return;
       e.preventDefault();
-      this.mod._pf_key(key, e.shiftKey ? 1 : 0, e.repeat ? 1 : 0);
+      this.engine.console.key(key, e.shiftKey, e.repeat);
     };
   }
 
   mount(actions: Actions): void {
     this.fallback.mount(actions);
     window.addEventListener("keydown", this.onKey);
+    // Its own loop: the engine's frame loop is for the session, and the console must draw at
+    // the display's rate whether or not anything is streaming.
+    const loop = () => {
+      if (!this.mounted) return;
+      this.frame();
+      requestAnimationFrame(loop);
+    };
+    this.mounted = true;
+    requestAnimationFrame(loop);
   }
 
   render(screen: Screen): void {
@@ -63,22 +74,30 @@ export class ConsoleUi implements Ui {
     this.fallback.render(this.live ? { kind: "streaming", stats: screen_stats(screen) } : screen);
   }
 
-  frame(width: number, height: number): void {
+  private frame(): void {
     if (!this.live) return;
+    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    const width = Math.max(1, Math.round(this.canvas.clientWidth * dpr));
+    const height = Math.max(1, Math.round(this.canvas.clientHeight * dpr));
+    if (this.canvas.width !== width || this.canvas.height !== height) {
+      this.canvas.width = width;
+      this.canvas.height = height;
+    }
     if (!this.started) {
       // Deferred to the first live frame: the canvas is sized by then, and a console started
       // against a zero-sized canvas comes up with a broken surface.
-      this.started = this.mod._pf_start(width, height) === 1;
+      this.started = this.engine.console.start(width, height);
       if (!this.started) {
         console.error("punktfunk: the console could not start; the web shell stays up");
         this.live = false;
         return;
       }
     }
-    this.mod._pf_frame(width, height);
+    this.engine.console.frame(width, height);
   }
 
   destroy(): void {
+    this.mounted = false;
     window.removeEventListener("keydown", this.onKey);
     this.fallback.destroy();
   }

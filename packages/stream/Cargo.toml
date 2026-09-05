@@ -8,9 +8,11 @@ license = "MIT OR Apache-2.0"
 authors = ["Enrico Bühler <enrico.buehler@unom.io>"]
 repository = "https://github.com/punktfunk/client-web"
 
+# `rust/`, not `src/`: `src/` is the TypeScript half of this package, which is the half a
+# consumer sees. The crate is the engine underneath it.
 [[bin]]
 name = "punktfunk-client-web"
-path = "src/main.rs"
+path = "rust/main.rs"
 
 # ⚠ Pinned to a REV, not a tag, and that is temporary. The browser client needs three things no
 # release carries yet: `punktfunk-core`'s `pake` feature split (SPAKE2 without the quinn runtime),

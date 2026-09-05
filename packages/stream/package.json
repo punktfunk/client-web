@@ -1,0 +1,44 @@
+{
+  "name": "@punktfunk/stream",
+  "version": "0.1.0",
+  "description": "The punktfunk browser engine: WebTransport session, device-key pairing, WebCodecs video, the management API \u2014 as a library, with no DOM.",
+  "type": "module",
+  "license": "MIT OR Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/punktfunk/client-web",
+    "directory": "packages/stream"
+  },
+  "publishConfig": {
+    "registry": "https://git.unom.io/api/packages/unom/npm/"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "sideEffects": false,
+  "scripts": {
+    "build:glue": "tsc -p tsconfig.glue.json",
+    "build:wasm": "./build.sh",
+    "build:lib": "tsdown && cp wasm/punktfunk_client_web.wasm dist/",
+    "build": "npm run build:wasm && npm run build:lib",
+    "check": "tsc --noEmit",
+    "test": "node --test src/*.test.ts"
+  },
+  "dependencies": {
+    "@punktfunk/host": "^0.2.0",
+    "effect": "4.0.0-beta.98"
+  },
+  "devDependencies": {
+    "@webgpu/types": "^0.1.60",
+    "tsdown": "^0.23.0",
+    "typescript": "^5.9.3",
+    "@types/node": "^24.0.0"
+  }
+}

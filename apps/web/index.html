@@ -134,7 +134,5 @@
   <canvas id="pf-ui"></canvas>
 </div>
 
-<!-- `pf-glue.js` is not loaded here: it is emscripten's `--js-library`, linked INTO the module at
-     build time so its functions run in the module's own scope (where `GL` lives). -->
-<script src="/punktfunk-client-web.js"></script>
-<script type="module" src="./app.ts"></script>
+<!-- No wasm here: `@punktfunk/stream` loads its module on `Engine.create()`, not before. -->
+<script type="module" src="./src/app.ts"></script>

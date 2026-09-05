@@ -94,6 +94,9 @@ mergeInto(LibraryManager.library, {
       console.error("punktfunk: WebTransport constructor refused", e);
       return 0;
     }
+    // The host closes after a pairing ceremony, as it does for native clients, and `closed`
+    // rejects on any close that is not clean. That is information, not an unhandled rejection.
+    pfNet.wt.closed.catch(function () {});
     pfNet.wt.ready.then(
       function () {
         // WebKit follows the current spec with `createWritable()`; Chromium still exposes the

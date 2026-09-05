@@ -8,8 +8,7 @@
 // The split is what makes a second interface cheap rather than a fork: nothing about pairing,
 // trust or the session lives in a renderer.
 
-import type { KnownHost } from "../pf-connect.ts";
-import type { LibraryEntry } from "../host.ts";
+import type { KnownHost, LibraryEntry } from "@punktfunk/stream";
 
 /** Everything worth showing about a live session. */
 export interface SessionStats {
@@ -71,8 +70,5 @@ export interface Ui {
   /** Called once, before the first `render`. */
   mount(actions: Actions): void;
   render(screen: Screen): void;
-  /** Once per `requestAnimationFrame`, after the video plane has presented. The console draws
-   *  here; the web shell does not need it and leaves it out. */
-  frame?(width: number, height: number): void;
   destroy(): void;
 }

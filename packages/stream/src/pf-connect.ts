@@ -57,7 +57,13 @@ export function originOf(input: string | null | undefined): string {
     // user typed it. Say what they can act on instead.
     throw new Error(`"${raw}" is not an address — try something like 192.168.1.25`);
   }
-  if (url.protocol !== "https:") throw new Error("a punktfunk host is https");
+  // A host is https. Loopback is the one exception: it is a secure context in every browser,
+  // and a dev server there is how this client is developed against a real host without
+  // accepting its certificate — `npm run dev` proxies `/api` to one.
+  const loopback = /^(localhost|127\.0\.0\.1|\[::1\])$/.test(url.hostname);
+  if (url.protocol !== "https:" && !(url.protocol === "http:" && loopback)) {
+    throw new Error("a punktfunk host is https");
+  }
   if (!url.port) url.port = String(DEFAULT_MGMT_PORT);
   return url.origin;
 }

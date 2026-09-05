@@ -1,10 +1,12 @@
 #!/usr/bin/env bash
-# Build the browser client and lay the servable page out in `dist/`.
+# Build the wasm module for `@punktfunk/stream`.
 #
 #   ./build.sh [--release]
 #
-# Needs an activated emsdk on PATH (`emcc`) and the `wasm32-unknown-emscripten` Rust target.
-# README.md has the emsdk pin and why Skia is built rather than downloaded here.
+# Emits `wasm/punktfunk-client-web.js` (an ES module) and `wasm/punktfunk_client_web.wasm`, which
+# the engine imports lazily and tsdown packages. Needs an activated emsdk on PATH (`emcc`) and
+# the `wasm32-unknown-emscripten` Rust target. README.md has the emsdk pin and why Skia is built
+# rather than downloaded here.
 set -euo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -19,8 +21,7 @@ if [ "${1:-}" = "--release" ]; then profile="release"; cargo_profile=(--release)
 #
 # Before cargo, not after: `build/pf-glue.js` is an INPUT to the link — emscripten reads it with
 # `--js-library`. Everything else tsc emits is the page, copied into `dist/` at the end.
-echo "==> tsc"
-if [ ! -d "$here/node_modules" ]; then npm --prefix "$here" ci --silent || npm --prefix "$here" install --silent; fi
+echo "==> tsc (the glue)"
 rm -rf "$here/build"
 npm --prefix "$here" run --silent build:glue
 
@@ -63,6 +64,14 @@ link=(
   # `MODULARIZE` so the page starts the module once it has sized the canvas, not on script parse.
   -C link-arg=-sMODULARIZE=1
   -C link-arg=-sEXPORT_NAME=PunktfunkWeb
+  # An ES module with a default-exported factory, not a classic script defining a global. That
+  # is what lets a bundler import the glue like any other module and treat the `.wasm` it
+  # locates through `import.meta.url` as an asset — the difference between a library and a
+  # file someone has to copy next to their page.
+  -C link-arg=-sEXPORT_ES6=1
+  # Browser only. Drops the Node branches (`createRequire`, `fs` reads), which a bundler would
+  # otherwise flag as unresolved and which this module has no use for.
+  -C link-arg=-sENVIRONMENT=web
   # What makes `GL.createContext({majorVersion: 2})` in pf-glue.js legal, and what supplies the
   # GLES3 entry points Skia's WebGL interface assembles itself from (`emscripten_glGetStringi` …).
   -C link-arg=-sMAX_WEBGL_VERSION=2
@@ -109,20 +118,16 @@ if [ ! -f "$archive" ] && [ -n "$built" ]; then
   rm -rf "$work"
 fi
 
-# --- Page -------------------------------------------------------------------------------------
-#
-# The wasm module is a static asset, not an input to the bundler: emscripten's glue is a
-# self-contained classic script that loads its own `.wasm` by a relative URL, and re-processing
-# it would break exactly that. So the two files go into `public/`, which Vite serves untouched,
-# and everything else — the app, the SDK, Effect — is bundled from source into `dist/`.
+# --- The module ---------------------------------------------------------------------------
 #
 # The emitted JS asks for the underscored wasm name rustc gave the linker; cargo only renames
-# the `.js`. Both are copied under the names the module actually looks for.
-public="$here/public"
-mkdir -p "$public"
-cp "$target/wasm32-unknown-emscripten/$profile/punktfunk-client-web.js" "$public/"
-cp "$target/wasm32-unknown-emscripten/$profile/punktfunk_client_web.wasm" "$public/"
-echo "==> vite build"
-npm --prefix "$here" run --silent build:web
-echo "==> $here/dist"
-ls -la "$here/dist"
+# the `.js`. Both land in `wasm/` under the names the module actually looks for, where the
+# engine's dynamic import finds the glue and the glue's `new URL(…, import.meta.url)` finds the
+# binary. tsdown keeps that chunk separate; the `.wasm` is copied beside it into `dist/` by the
+# `build:lib` step's postbuild below, so a consumer's bundler sees the same relative layout.
+wasm="$here/wasm"
+mkdir -p "$wasm"
+cp "$target/wasm32-unknown-emscripten/$profile/punktfunk-client-web.js" "$wasm/"
+cp "$target/wasm32-unknown-emscripten/$profile/punktfunk_client_web.wasm" "$wasm/"
+echo "==> $wasm"
+ls -la "$wasm"

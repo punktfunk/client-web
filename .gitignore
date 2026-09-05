@@ -1,5 +1,8 @@
-/target
-/dist
-/build
 /node_modules
-/public
+/packages/stream/target
+/packages/stream/build
+/packages/stream/dist
+/packages/stream/wasm/*.js
+/packages/stream/wasm/*.wasm
+/apps/web/dist
+/apps/web/public
