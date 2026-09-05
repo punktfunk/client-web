@@ -1,0 +1,200 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+@import "@fontsource-variable/geist";
+
+@custom-variant dark (&:is(.dark *));
+
+/* Pull @unom/ui's compiled component classes (bg-neutral, rounded-card, p-padding-card,
+   ring-accent, h-input-height, material…) into the Tailwind scan so their utilities are not
+   purged. npm hoists the package to the workspace root. */
+@source "../../../node_modules/@unom/ui/dist/**/*.{js,mjs}";
+
+/* ── Punktfunk brand · the console's dark chrome, on a video-black ground ──────────
+   The same token set the management console uses (its `styles.css`), so a button here and a
+   button there are one component on one palette. Two things differ, on purpose:
+
+   - There is no light theme. Every screen here sits in front of a video plane or is about to,
+     and a pale field around a game is glare. `<html class="dark">` is pinned, and the dark values
+     live on `:root` rather than under `.dark`.
+   - The ground is the client's near-black (#0b0b0d), not the console's #141019: it is what shows
+     through before the first frame, and behind letterboxing after it.
+
+   The set feeds BOTH @unom/ui's semantic contract (--main/--brand/--neutral/--error…) and the
+   shadcn-style tokens (--background/--card/--muted…), mapped onto one palette. */
+:root {
+  color-scheme: dark;
+  --radius: 0.625rem;
+
+  /* Brand — the violet lens mark. */
+  --pf-brand: #6c5bf3;
+  --pf-brand-light: #a79ff8;
+  --pf-highlight: #d2c9fb;
+  --pf-glow: rgb(108 91 243 / 0.45);
+
+  /* Surfaces — the violet-tinted app-icon chrome. */
+  --background: #0b0b0d;
+  --foreground: oklch(0.985 0 0);
+  --card: #1c1530;
+  --card-foreground: oklch(0.985 0 0);
+  --popover: #1c1530;
+  --popover-foreground: oklch(0.985 0 0);
+  --muted: #1f1830;
+  --muted-foreground: oklch(0.728 0.03 286);
+  --secondary: #241c3d;
+  --secondary-foreground: oklch(0.985 0 0);
+  /* shadcn `accent` = subtle hover surface; also @unom/ui's card ring colour. */
+  --accent: var(--pf-brand);
+  --accent-foreground: #ffffff;
+  --border: #2a2148;
+  --input: #2a2148;
+  --ring: var(--pf-brand-light);
+
+  /* Primary = the brand. The lighter violet reads better against the dark surface. */
+  --primary: var(--pf-brand-light);
+  --primary-foreground: #141019;
+
+  /* Status colours encode meaning and stay fixed: a warning must not change with the theme. */
+  --success: oklch(0.7 0.15 160);
+  --warning: oklch(0.78 0.16 75);
+  --destructive: oklch(0.62 0.21 18);
+  --destructive-foreground: oklch(0.985 0 0);
+
+  /* ── @unom/ui semantic token contract (its components read these names). ── */
+  --main: var(--foreground);
+  --brand: var(--pf-brand);
+  --brand-light: var(--pf-brand-light);
+  --highlight: var(--pf-highlight);
+  --neutral: var(--card);
+  --neutral-accent: var(--secondary);
+  --neutral-highlight: var(--border);
+  --error: var(--destructive);
+  --warn: var(--warning);
+
+  --font-display: "Geist Variable", ui-sans-serif, system-ui, sans-serif;
+  --font-sans: "Geist Variable", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, "Liberation Mono", monospace;
+
+  /* @unom/ui radius/spacing contract (pill buttons, rounded cards, tall inputs). */
+  --radius-card-min: var(--radius);
+
+  /* `EDGE_INSET` from pf-console-ui's theme.rs: the distance anything keeps from the screen
+     edge. The one metric the console shell and this one share. */
+  --pf-inset: 24px;
+}
+
+/* Map the palette to Tailwind colour/util tokens — both the shadcn vocabulary and @unom/ui's,
+   resolved to one set of values. */
+@theme inline {
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+  --radius-button: 9999px;
+  --radius-card: calc(var(--radius) * 2);
+  --radius-main: calc(var(--radius) * 2);
+
+  --spacing-input-height: 3rem;
+  --spacing-padding-card: 1.25rem;
+  --spacing-card: 1.5rem;
+  --spacing-main: 15px;
+  --spacing-inset: var(--pf-inset);
+
+  --font-sans: var(--font-sans);
+  --font-display: var(--font-display);
+  --font-mono: var(--font-mono);
+
+  /* shadcn-style colour tokens. */
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-success: var(--success);
+  --color-warning: var(--warning);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+
+  /* @unom/ui colour tokens. */
+  --color-main: var(--main);
+  --color-brand: var(--brand);
+  --color-brand-light: var(--brand-light);
+  --color-neutral: var(--neutral);
+  --color-neutral-accent: var(--neutral-accent);
+  --color-neutral-highlight: var(--neutral-highlight);
+  --color-highlight: var(--highlight);
+  --color-error: var(--error);
+  --color-warn: var(--warn);
+}
+
+@layer base {
+  * {
+    border-color: var(--border);
+  }
+  html,
+  body {
+    height: 100%;
+    overflow: hidden;
+  }
+  body {
+    background-color: var(--background);
+    color: var(--foreground);
+    font-family: var(--font-sans);
+    font-feature-settings:
+      "rlig" 1,
+      "calt" 1;
+    -webkit-font-smoothing: antialiased;
+  }
+}
+
+/* ── The two-canvas stack. Structure, not decoration — see the note in `index.html`. ── */
+#pf-stack {
+  position: fixed;
+  inset: 0;
+}
+
+#pf-stack canvas {
+  position: absolute;
+  inset: 0;
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+#pf-video {
+  z-index: 0;
+}
+
+/* Above the video, and transparent where it draws nothing. `pointer-events` stays off so the
+   input pipe on the video canvas underneath still sees every pointer event. */
+#pf-ui {
+  z-index: 1;
+  pointer-events: none;
+  /* The interface is authored SDR and stays that way when the video plane goes HDR. */
+  dynamic-range-limit: standard;
+}
+
+/* ── The aurora: two soft violet pools on the ground, behind everything the shell draws. ──
+   One element and no animation: a drifting gradient would repaint a full-viewport blur on
+   exactly the frames a decoding video plane needs. */
+.pf-aurora {
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  background:
+    radial-gradient(60rem 40rem at 15% -10%, rgb(134 120 245 / 0.18), transparent 60%),
+    radial-gradient(50rem 36rem at 90% 110%, rgb(108 91 243 / 0.14), transparent 62%),
+    var(--background);
+}
