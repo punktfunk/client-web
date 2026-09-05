@@ -36,6 +36,8 @@ mod ecdsa;
 #[cfg(target_family = "wasm")]
 mod host;
 #[cfg(target_family = "wasm")]
+mod input;
+#[cfg(target_family = "wasm")]
 mod session;
 #[cfg(target_family = "wasm")]
 mod transport;

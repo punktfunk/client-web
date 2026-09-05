@@ -47,6 +47,14 @@ export interface PunktfunkModule {
   _pf_cred_signed(sigPtr: number, len: number): number;
   _pf_pair_begin(pinPtr: number, pinLen: number, namePtr: number, nameLen: number): number;
 
+  // --- input ---------------------------------------------------------------------------------
+  /** One `InputEvent`, fields as core's `InputKind` documents them. Dropped unless a session is live. */
+  _pf_input(kind: number, code: number, x: number, y: number, flags: number): void;
+  /** The whole pad; Rust sends what changed. Sticks −32768..32767 with +y = up, triggers 0..255. */
+  _pf_gamepad(pad: number, buttons: number, lsX: number, lsY: number, rsX: number, rsY: number, lt: number, rt: number): void;
+  _pf_gamepad_arrival(pad: number): void;
+  _pf_gamepad_remove(pad: number): void;
+
   // --- the datagram ring -------------------------------------------------------------------
   _pf_rx_base(): number;
   _pf_rx_stride(): number;
