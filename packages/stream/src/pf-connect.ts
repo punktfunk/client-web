@@ -161,6 +161,9 @@ export interface KnownHost {
   fingerprint?: string;
   /** The host's own name, once we have streamed from it. */
   name?: string;
+  /** What someone here decided to call it. Outranks `name`: two machines on a network can
+   *  report the same hostname, and only the person looking at them can tell them apart. */
+  label?: string;
   seen?: number;
 }
 
@@ -188,6 +191,15 @@ export const hosts = {
   forget(origin: string): void {
     const all = hosts.all();
     delete all[origin];
+    localStorage.setItem(KEY, JSON.stringify(all));
+  },
+  /** Rename a host, or drop the name again when `label` is empty. */
+  rename(origin: string, label: string): void {
+    const all = hosts.all();
+    if (!all[origin]) return;
+    const trimmed = label.trim();
+    if (trimmed) all[origin].label = trimmed;
+    else delete all[origin].label;
     localStorage.setItem(KEY, JSON.stringify(all));
   },
   /** Drop the pairing but keep the host: it is still one this browser knows, just not one it is
