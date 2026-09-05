@@ -17,6 +17,7 @@ import type { PunktfunkModule } from "./emscripten.ts";
 import { Host, type LibraryEntry, VersionSkew } from "./host.ts";
 import * as pf from "./pf-connect.ts";
 import { decodeSupported, VideoPipe } from "./video.ts";
+import { InputPipe } from "./input.ts";
 
 export type { HostInfo, HostStatus, LibraryEntry } from "./host.ts";
 export { VersionSkew } from "./host.ts";
@@ -93,6 +94,12 @@ export interface EngineOptions {
   /** The name this device pairs under. Defaults to the browser's engine name. */
   readonly deviceName?: string;
   /**
+   * Send the keyboard, pointer, wheel and gamepads to the host while streaming. On by default;
+   * off for a page that only watches. Keys go from the whole window, so a consumer with fields
+   * of its own keeps them by giving them focus — a field never loses a key to the stream.
+   */
+  readonly captureInput?: boolean;
+  /**
    * Where to dial the WebTransport plane, when it is not the management origin's hostname.
    * The one case: a dev server proxying `/api` to a host on the LAN — the API answers on
    * `localhost`, the plane does not. Left unset, the hostname the address was typed with is used.
@@ -115,6 +122,7 @@ export class Engine {
   private origin: string | null = null;
   private plane: pf.Plane | null = null;
   private video: VideoPipe | null = null;
+  private input: InputPipe | null = null;
   private host: Host | null = null;
   private pairing = false;
   private settled = false;
@@ -278,8 +286,7 @@ export class Engine {
   }
 
   disconnect(): void {
-    this.video?.close();
-    this.video = null;
+    this.stopSession();
     this.mod._pf_wt_close?.();
     this.reset();
     this.set({ kind: "idle" });
@@ -404,9 +411,16 @@ export class Engine {
         : code === CLOSE.ACCESS_EXPIRED
           ? "this device's access to the host has expired"
           : said || (code < 0 ? "the connection was lost" : `the host closed the session (code ${code})`);
+    this.stopSession();
+    this.set({ kind: "error", origin, message });
+  }
+
+  /** The session's two pipes, torn down together. Idempotent. */
+  private stopSession(): void {
+    this.input?.detach();
+    this.input = null;
     this.video?.close();
     this.video = null;
-    this.set({ kind: "error", origin, message });
   }
 
   // --- the frame loop ------------------------------------------------------------------
@@ -458,6 +472,18 @@ export class Engine {
     }
     if (phase !== SESSION.LIVE) return;
     this.offeredSince = 0;
+    const v = this.video?.snapshot();
+
+    // Input from the first live frame: the negotiated size is known by then (`Welcome` set it
+    // before the phase turned), and absolute pointer positions are measured against it.
+    if (!this.input && this.opts.captureInput !== false && v?.width) {
+      this.input = new InputPipe(this.mod, this.opts.videoCanvas, {
+        streamWidth: v.width,
+        streamHeight: v.height,
+      });
+      this.input.attach();
+    }
+    this.input?.poll();
 
     const now = performance.now();
     const frames = this.mod._pf_session_frames();
@@ -466,7 +492,6 @@ export class Engine {
       this.lastFrames = frames;
       this.lastSecond = now;
     }
-    const v = this.video?.snapshot();
     this.set({
       kind: "streaming",
       origin,

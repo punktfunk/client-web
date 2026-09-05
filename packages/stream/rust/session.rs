@@ -47,6 +47,9 @@ struct Client {
     codec: u8,
     width: u32,
     height: u32,
+    /// `Welcome::host_caps`: what this host understands beyond the base wire (gamepad snapshots,
+    /// text input). Input chooses its vocabulary by it.
+    host_caps: u8,
     /// Access units delivered, so the page can tell "connected" from "streaming".
     frames: u64,
 }
@@ -60,9 +63,19 @@ impl Client {
             codec: 0,
             width: 0,
             height: 0,
+            host_caps: 0,
             frames: 0,
         }
     }
+}
+
+/// Is a session up? Input is sent only then: the host reads it on the connection it admitted.
+pub fn is_live() -> bool {
+    CLIENT.with(|c| c.borrow().phase == Phase::Live)
+}
+
+pub fn host_caps() -> u8 {
+    CLIENT.with(|c| c.borrow().host_caps)
 }
 
 thread_local! {
@@ -254,6 +267,7 @@ fn on_welcome(c: &mut Client, welcome: Welcome) {
     c.codec = welcome.codec;
     c.width = welcome.mode.width;
     c.height = welcome.mode.height;
+    c.host_caps = welcome.host_caps;
     match Session::new(cfg, Box::new(WebTransportDatagrams)) {
         Ok(session) => {
             c.session = Some(Box::new(session));

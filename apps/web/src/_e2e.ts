@@ -85,9 +85,28 @@ try {
     log("ok   ready; host " + info.hostname);
     engine.startStream({ width: 1280, height: 720, fps: 60, bitrateKbps: 8000 });
     const t0 = performance.now();
+    let poked = false;
     while (performance.now() - t0 < SECONDS * 1000) {
       await sleep(250);
       if (last().kind === "error" || last().kind === "idle" || last().kind === "forgotten") break;
+      // Two seconds in: synthetic input, which the host counts at the end of the session.
+      if (!poked && last().kind === "streaming" && performance.now() - t0 > 2000) {
+        poked = true;
+        const c = document.getElementById("v") as HTMLCanvasElement;
+        for (const code of ["KeyW", "KeyA", "KeyS", "KeyD", "Space"]) {
+          window.dispatchEvent(new KeyboardEvent("keydown", { code, bubbles: true }));
+          window.dispatchEvent(new KeyboardEvent("keyup", { code, bubbles: true }));
+        }
+        const r = c.getBoundingClientRect();
+        for (let i = 1; i <= 10; i++) {
+          c.dispatchEvent(new PointerEvent("pointermove", { clientX: r.left + i * 20, clientY: r.top + i * 10, pointerType: "mouse", bubbles: true }));
+        }
+        c.dispatchEvent(new PointerEvent("pointerdown", { clientX: r.left + 100, clientY: r.top + 50, button: 0, pointerType: "mouse", bubbles: true }));
+        c.dispatchEvent(new PointerEvent("pointerup", { clientX: r.left + 100, clientY: r.top + 50, button: 0, pointerType: "mouse", bubbles: true }));
+        c.dispatchEvent(new WheelEvent("wheel", { deltaY: 100, deltaMode: 0, bubbles: true, cancelable: true }));
+        c.dispatchEvent(new WheelEvent("wheel", { deltaY: -300, deltaMode: 0, bubbles: true, cancelable: true }));
+        log("ok   sent 10 key, 10 move, 1 click, 2 wheel events (expect host input>=26)");
+      }
     }
     if (final) {
       log(`ok   streamed: ${final.width}x${final.height} au=${final.accessUnits} decoded=${final.decoded} dropped=${final.dropped} fps=${final.fps} backend=${final.backend}`);

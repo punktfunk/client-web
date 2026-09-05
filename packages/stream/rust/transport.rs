@@ -138,6 +138,14 @@ pub extern "C" fn pf_rx_dropped() -> u32 {
 #[derive(Clone, Copy, Default)]
 pub struct WebTransportDatagrams;
 
+/// One datagram to the host, on the session's connection. `false` when nothing is connected or
+/// the write was refused — the lossy contract every datagram plane has.
+pub fn send_datagram(packet: &[u8]) -> bool {
+    // SAFETY: `pf_wt_send` reads `len` bytes at `ptr` and returns before this call does; the
+    // slice outlives it. It writes nothing through the pointer.
+    unsafe { pf_wt_send(packet.as_ptr(), packet.len() as u32) == 1 }
+}
+
 impl Transport for WebTransportDatagrams {
     fn send(&self, packet: &[u8]) -> io::Result<bool> {
         if packet.len() > SLOT_BYTES {
@@ -146,10 +154,7 @@ impl Transport for WebTransportDatagrams {
                 "datagram over the protocol's maximum",
             ));
         }
-        // SAFETY: `pf_wt_send` reads `len` bytes at `ptr` and returns before this call does; the
-        // slice outlives it. It writes nothing through the pointer.
-        let queued = unsafe { pf_wt_send(packet.as_ptr(), packet.len() as u32) };
-        Ok(queued == 1)
+        Ok(send_datagram(packet))
     }
 
     /// `Ok(None)` when the ring is empty — the contract the pump relies on to never block.
