@@ -32,6 +32,9 @@
   #pf-ui    { z-index: 1; }
   /* The UI is authored SDR and stays that way when the video plane goes HDR. */
   #pf-ui    { dynamic-range-limit: standard; }
+  /* The console canvas draws with a gamepad, never a pointer. Let clicks and moves fall
+     through to the video canvas, where the input pipe listens; otherwise the mouse is dead. */
+  #pf-ui    { pointer-events: none; }
 
   /* --- the web-native shell ------------------------------------------------------------- */
   .pf-shell { position: fixed; inset: 0; z-index: 2; display: grid; place-items: center; padding: 1.5rem; }
