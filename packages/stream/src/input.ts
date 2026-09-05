@@ -85,13 +85,14 @@ const WHEEL_NOTCH = 120;
 /** Sticks: the browser gives −1..1, the wire wants i16. */
 const STICK = 32767;
 
-/** Stick travel below this is rest. Standard-mapping pads report a little noise at centre. */
-const DEADZONE = 0.05;
-
 export interface InputOptions {
   /** The surface the pointer is measured against: the stream's own size in pixels. */
   streamWidth: number;
   streamHeight: number;
+  /** `absolute` maps the local cursor onto the remote one; `capture` takes pointer lock and
+   *  sends relative motion. Stick travel below `deadzone` is rest. */
+  pointer: "absolute" | "capture";
+  deadzone: number;
 }
 
 /**
@@ -108,8 +109,43 @@ export class InputPipe {
   constructor(
     private readonly mod: PunktfunkModule,
     private readonly canvas: HTMLCanvasElement,
-    private readonly opts: InputOptions,
+    private opts: InputOptions,
   ) {}
+
+  /** Is the pointer locked to the canvas right now? Asking the document rather than tracking a
+   *  flag: the browser releases the lock on its own (Escape, losing the tab) and never asks. */
+  get captured(): boolean {
+    return document.pointerLockElement === this.canvas;
+  }
+
+  /**
+   * Change what can change mid-session: the pointer mode, the deadzone, and the stream size a
+   * reconfigure just negotiated. Leaving `capture` releases the lock immediately — a mode the
+   * shell has turned off must not still be holding the mouse.
+   */
+  tune(next: Partial<InputOptions>): void {
+    const was = this.opts.pointer;
+    this.opts = { ...this.opts, ...next };
+    // Only a real move away from capture releases. Tuning the deadzone, or the size a
+    // reconfigure just negotiated, must not drop a lock someone took by hand.
+    if (was === "capture" && this.opts.pointer !== "capture" && this.captured) {
+      document.exitPointerLock();
+    }
+  }
+
+  /**
+   * Take or release the pointer now, whatever the mode says.
+   *
+   * The mode decides whether a click on the picture grabs the mouse; this is the shell's own
+   * button, and it has to work either way. Taking the lock needs a user gesture, so this only
+   * succeeds when called from one — the browser rejects it otherwise, and the promise is caught
+   * because a refusal is not an error worth propagating.
+   */
+  capture(on: boolean): void {
+    if (on === this.captured) return;
+    if (on) void Promise.resolve(this.canvas.requestPointerLock()).catch(() => {});
+    else document.exitPointerLock();
+  }
 
   attach(): void {
     const c = this.canvas;
@@ -147,7 +183,7 @@ export class InputPipe {
       });
       const stick = (v: number | undefined) => {
         const x = v ?? 0;
-        return Math.abs(x) < DEADZONE ? 0 : Math.round(x * STICK);
+        return Math.abs(x) < this.opts.deadzone ? 0 : Math.round(x * STICK);
       };
       const trigger = (i: number) => Math.round((g.buttons[i]?.value ?? 0) * 255);
       // Browser sticks are +y down; the wire is +y up.
@@ -177,20 +213,36 @@ export class InputPipe {
   private pointer(e: PointerEvent, phase: "down" | "move" | "up"): void {
     if (e.pointerType === "touch") return this.touch(e, phase);
     e.preventDefault();
-    if (phase === "down") this.canvas.focus();
-    // Absolute: the local cursor maps onto the remote one, which is what a desktop wants — the
-    // pointer tracks on hover, no click needed. Relative capture (pointer lock) for games with
-    // mouselook is a deliberate mode to add on top, not the default.
+    if (phase === "down") {
+      this.canvas.focus();
+      // Pointer lock can only be taken from a gesture, so the first click in capture mode is
+      // what arms it. `catch` because the browser refuses one that follows an exit too closely.
+      if (this.opts.pointer === "capture" && !this.captured) {
+        void Promise.resolve(this.canvas.requestPointerLock()).catch(() => {});
+      }
+    }
+    // Locked, the cursor does not move and only the delta means anything; unlocked, the local
+    // cursor maps onto the remote one, which is what a desktop wants — the pointer tracks on
+    // hover, with no click needed.
     if (phase === "move") {
+      if (this.captured) {
+        if (e.movementX || e.movementY) {
+          this.mod._pf_input(KIND.MOUSE_MOVE, 0, e.movementX, e.movementY, 0);
+        }
+        return;
+      }
       const [x, y] = this.stream(e);
       this.mod._pf_input(KIND.MOUSE_MOVE_ABS, 0, x, y, this.extent());
       return;
     }
     const button = MOUSE_BUTTON[e.button];
     if (button === undefined) return;
-    // Put the pointer where the click is before the click lands.
-    const [x, y] = this.stream(e);
-    this.mod._pf_input(KIND.MOUSE_MOVE_ABS, 0, x, y, this.extent());
+    // Put the pointer where the click is before the click lands — but not while locked, where
+    // there is no local position to speak of and sending one would teleport the remote cursor.
+    if (!this.captured) {
+      const [x, y] = this.stream(e);
+      this.mod._pf_input(KIND.MOUSE_MOVE_ABS, 0, x, y, this.extent());
+    }
     this.mod._pf_input(phase === "down" ? KIND.MOUSE_BUTTON_DOWN : KIND.MOUSE_BUTTON_UP, button, 0, 0, 0);
   }
 
