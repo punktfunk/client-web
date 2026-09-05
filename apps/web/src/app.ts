@@ -77,18 +77,20 @@ class App {
         return this.show({ kind: "pair", origin: s.origin, message: "Enter the PIN this host is showing." });
       case "pairing":
         return this.show({ kind: "pair", origin: s.origin, message: "Pairing…", busy: true });
-      case "paired":
+      case "paired": {
         this.show({ kind: "pair", origin: s.origin, message: "Paired. Reconnecting…", busy: true });
         // The host closes after the ceremony, as it does for native clients; streaming is a
         // fresh connection.
-        setTimeout(() => location.reload(), 1200);
+        const origin = s.origin;
+        setTimeout(() => void this.engine.connect(origin), 300);
         return;
+      }
       case "pair-refused":
         return this.show({
           kind: "pair",
           origin: s.origin,
           message: "Enter the PIN this host is showing.",
-          error: "That PIN was refused.",
+          error: s.reason ?? "That PIN was refused.",
         });
       case "forgotten":
         return this.show({

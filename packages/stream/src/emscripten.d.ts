@@ -75,6 +75,11 @@ export interface PunktfunkModule {
   __pfOnDeviceReady?: () => void;
   /** The control stream is open. Send `Hello`, or ask for a PIN. */
   __pfOnCtlReady?: () => void;
+  /** The connection closed. `code` is the host's application close code (`-1` for a transport
+   *  failure) and `reason` its text, if the host gave one. */
+  __pfOnClosed?: (code: number, reason: string) => void;
+  /** The host said why it is closing, on the control plane (`Refused`). Comes before the close. */
+  __pfOnRefused?: (code: number, reason: string) => void;
   /** The negotiated video format, once `Welcome` has been read. */
   __pfOnVideoConfig?: (codec: number, width: number, height: number) => void;
   /** One access unit. The bytes are copied out of wasm memory before this is called. */
@@ -92,7 +97,9 @@ declare global {
   const HEAPU8: Uint8Array;
   function _malloc(bytes: number): number;
   function _free(ptr: number): void;
-  function UTF8ToString(ptr: number): string;
+  function UTF8ToString(ptr: number, maxBytes?: number): string;
+  /** A library member calling another: emscripten exposes each under its C name. */
+  function _pf_wt_close(): void;
   /** Emscripten's WebGL bookkeeping. The only place a GL object may be named. */
   const GL: {
     createContext(canvas: HTMLCanvasElement, attrs: Record<string, unknown>): number;
