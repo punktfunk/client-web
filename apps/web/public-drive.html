@@ -1,0 +1,75 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>drive the solid shell</title>
+<style>iframe { width: 1000px; height: 600px; border: 1px solid #333; }</style>
+<pre id="o" style="font:12px monospace"></pre>
+<iframe id="f" src="/"></iframe>
+<script type="module">
+const lines = [];
+const log = (m) => { lines.push(m); document.getElementById("o").textContent += m + "\n"; };
+const done = () => fetch("/report", { method: "POST", body: JSON.stringify({ lines }) });
+const eq = (n, got, want) => log(`${got === want ? "ok  " : "FAIL"} ${n}: ${JSON.stringify(got)}${got === want ? "" : " want " + JSON.stringify(want)}`);
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const q = new URLSearchParams(location.search);
+const PIN = q.get("pin") || "";
+
+try {
+  const f = document.getElementById("f");
+  await new Promise((r) => (f.contentWindow.document.readyState === "complete" ? r() : (f.onload = r)));
+  const d = f.contentDocument;
+  const shell = () => d.querySelector(".pf-shell");
+  const screen = () => shell()?.dataset.screen ?? "(none)";
+  const until = async (pred, ms = 15000) => { const t = Date.now(); while (!pred() && Date.now() - t < ms) await sleep(100); return pred(); };
+
+  await until(() => screen() !== "(none)");
+  await sleep(500);
+  eq("opens on the picker", screen(), "picker");
+  eq("the address field has focus", d.activeElement?.className, "addr");
+  eq("a live region exists", !!d.querySelector('[role="status"][aria-live]'), true);
+
+  // A bad address stays on the picker with the error line announced.
+  d.querySelector("input.addr").value = "not a host!!";
+  d.querySelector("button.primary").click();
+  await sleep(300);
+  eq("bad address stays put", screen(), "picker");
+  eq("…and says so with role=alert", !!d.querySelector('[role="alert"]'), true);
+
+  // The dev proxy answers /api on this origin, so the host is this origin.
+  d.querySelector("input.addr").value = location.origin;
+  d.querySelector("button.primary").click();
+  await until(() => ["pair", "library", "error", "accept"].includes(screen()), 20000);
+  log("after connect: " + screen());
+
+  if (screen() === "pair") {
+    eq("the PIN field has focus", d.activeElement?.className, "pin");
+    if (!PIN) { log("no pin given; stopping here"); await done(); return; }
+    d.querySelector("input.pin").value = PIN;
+    d.querySelectorAll("button.primary")[0].click();
+    await until(() => (shell()?.textContent ?? "").includes("Paired"), 20000);
+    eq("paired", (shell()?.textContent ?? "").includes("Paired"), true);
+    log("the page reloads itself now; run again without a pin");
+    await done(); return;
+  }
+
+  if (screen() === "library") {
+    eq("library header names the host", (d.querySelector(".bar h1")?.textContent ?? "").length > 0, true);
+    eq("stream button has focus", d.activeElement?.textContent, "Stream the desktop");
+    eq("grid or empty state present", !!(d.querySelector('[role="grid"]') || d.querySelector(".empty")), true);
+    d.activeElement.click();
+    await until(() => screen() === "streaming", 20000);
+    eq("streaming", screen(), "streaming");
+    await sleep(2500);
+    const stat = d.querySelector(".hud .stat")?.textContent ?? "";
+    log("hud: " + stat);
+    eq("hud reports frames", /fps/.test(stat), true);
+    eq("hud is a toolbar", d.querySelector(".hud")?.getAttribute("role"), "toolbar");
+    d.querySelector(".hud button:last-child").click();
+    await until(() => screen() === "picker", 5000);
+    eq("disconnect returns to the picker", screen(), "picker");
+    eq("the host is now a known host", d.querySelectorAll(".rows .row").length >= 1, true);
+  }
+} catch (e) {
+  log("THREW " + e.name + ": " + e.message + "\n" + e.stack);
+}
+await done();
+</script>

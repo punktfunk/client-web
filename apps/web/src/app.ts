@@ -9,7 +9,7 @@
 
 import { Engine, type EngineState, type LibraryEntry, VersionSkew } from "@punktfunk/stream";
 import { ConsoleUi } from "./ui/console.ts";
-import { WebShell } from "./ui/shell.ts";
+import { SolidShell } from "./ui/solid.tsx";
 import type { Screen, Ui } from "./ui/types.ts";
 
 class App {
@@ -19,6 +19,8 @@ class App {
   private readonly art = new Map<string, string>();
   private libraryFor: string | null = null;
   private hostName: string | undefined;
+  private running: string | undefined;
+  private statusTimer = 0;
 
   constructor(
     private readonly engine: Engine,
@@ -51,6 +53,8 @@ class App {
       case "idle":
         this.clearLibrary();
         return this.show({ kind: "picker", hosts: this.engine.knownHosts() });
+      case "bad-address":
+        return this.show({ kind: "picker", hosts: this.engine.knownHosts(), error: s.message });
       case "reaching":
         return this.show({ kind: "picker", hosts: this.engine.knownHosts(), busy: true });
       case "blocked":
@@ -127,6 +131,22 @@ class App {
       return this.redrawLibrary(s, e instanceof Error ? e.message : String(e));
     }
     this.redrawLibrary(s);
+    // The one thing worth refreshing while someone looks at the grid: what the host is running.
+    // Polled, because the event stream is not on this browser's lane; five seconds is plenty.
+    const poll = async () => {
+      const now = this.engine.current;
+      if (now.kind !== "ready" || now.origin !== s.origin) return;
+      try {
+        const st = await s.host.status();
+        const live = st.games.find((g) => g.state === "running" || g.state === "launching");
+        this.running = live?.title;
+        this.redrawLibrary(now);
+      } catch {
+        // A failed poll is not news; the next one will say.
+      }
+      this.statusTimer = window.setTimeout(() => void poll(), 5000);
+    };
+    void poll();
     void s.host.info().then((h) => {
       this.hostName = h.hostname;
       const now = this.engine.current;
@@ -153,13 +173,16 @@ class App {
       art: this.art,
       busy: this.libraryFor === s.origin && this.entries.length === 0 && !error,
       ...(this.hostName ? { host: this.hostName } : {}),
+      ...(this.running ? { running: this.running } : {}),
       ...(error ? { error: `${error} — you can still stream the desktop.` } : {}),
     });
   }
 
   private clearLibrary(): void {
+    clearTimeout(this.statusTimer);
     this.libraryFor = null;
     this.hostName = undefined;
+    this.running = undefined;
     this.entries = [];
     for (const url of this.art.values()) {
       if (url.startsWith("blob:")) URL.revokeObjectURL(url);
@@ -189,25 +212,33 @@ function size(canvas: HTMLCanvasElement): [number, number] {
  * Which interface to wear.
  *
  * `?ui=console` asks for the gamepad shell — the same `pf-console-ui` every other client draws,
- * which is what a TV or a controller wants. Anything else gets the web-native one, because a
- * browser is usually held by a mouse and a keyboard and the console cannot offer a text field.
+ * which is what a TV or a controller wants. Anything else gets the web-native one on Solid,
+ * because a browser is usually held by a mouse and a keyboard and the console cannot offer a
+ * text field.
  */
 function pickUi(engine: Engine, uiCanvas: HTMLCanvasElement): Ui {
-  const shell = new WebShell(document.body);
+  const shell = new SolidShell(document.body);
   const wanted = new URLSearchParams(location.search).get("ui");
   return wanted === "console" ? new ConsoleUi(engine, uiCanvas, shell) : shell;
 }
+
+/** Set by `vite.config.ts` when the dev server proxies a host; absent in a build. */
+declare const __PF_TRANSPORT_HOST__: string | undefined;
 
 const uiCanvas = document.getElementById("pf-ui") as HTMLCanvasElement;
 const videoCanvas = document.getElementById("pf-video") as HTMLCanvasElement;
 
 try {
-  const engine = await Engine.create({ videoCanvas, uiCanvas });
+  const engine = await Engine.create({
+    videoCanvas,
+    uiCanvas,
+    ...(__PF_TRANSPORT_HOST__ ? { transportHost: __PF_TRANSPORT_HOST__ } : {}),
+  });
   new App(engine, pickUi(engine, uiCanvas), uiCanvas);
 } catch (e) {
   // Before there is an engine there is no interface to say this on; the one sheet the page
   // carries for exactly this case does.
-  const shell = new WebShell(document.body);
+  const shell = new SolidShell(document.body);
   shell.mount({ connect() {}, pair() {}, retry() {}, back() {}, play() {}, forget() {}, disconnect() {} });
   shell.render({
     kind: "error",

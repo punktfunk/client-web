@@ -45,6 +45,8 @@ export type Screen =
       entries: LibraryEntry[];
       /** Object URLs by entry id, filled in as art arrives. */
       art: Map<string, string>;
+      /** What the host is running right now, when something is. */
+      running?: string;
       error?: string;
       busy?: boolean;
     }
