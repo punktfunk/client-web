@@ -326,6 +326,9 @@ export class Engine {
 
   // --- internals -----------------------------------------------------------------------
   private reset(): void {
+    // Drop the wasm session too, or a second connect keeps the old phase and streams a
+    // torn-down decoder (black until reload).
+    this.mod._pf_session_reset?.();
     this.origin = null;
     this.plane = null;
     this.host = null;

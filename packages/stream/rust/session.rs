@@ -17,7 +17,8 @@ use crate::credential;
 use crate::transport::WebTransportDatagrams;
 use punktfunk_core::config::{CompositorPref, GamepadPref, Mode, Role};
 use punktfunk_core::quic::{
-    AuthChallenge, Hello, PairChallenge, PairResult, Refused, Start, Welcome, MAGIC,
+    AuthChallenge, Hello, PairChallenge, PairResult, Reconfigure, Reconfigured, Refused, Start,
+    Welcome, MAGIC,
 };
 use punktfunk_core::session::Session;
 use std::cell::RefCell;
@@ -82,6 +83,52 @@ pub extern "C" fn pf_session_audio_channels() -> u32 {
 /// Is a session up? Input is sent only then: the host reads it on the connection it admitted.
 pub fn is_live() -> bool {
     CLIENT.with(|c| c.borrow().phase == Phase::Live)
+}
+
+/// Drop all session state so the next connection starts clean.
+///
+/// The page calls this on disconnect. Without it a second connect in the same page keeps the old
+/// phase (`Live`) and session, so the client reports "streaming" against a torn-down decoder — a
+/// black picture until a reload. Idempotent.
+#[unsafe(no_mangle)]
+pub extern "C" fn pf_session_reset() {
+    CLIENT.with(|c| {
+        let mut c = c.borrow_mut();
+        c.phase = Phase::Idle;
+        c.session = None;
+        c.inbox.clear();
+        c.frames = 0;
+        c.codec = 0;
+        c.width = 0;
+        c.height = 0;
+        c.host_caps = 0;
+        c.audio_channels = 0;
+    });
+    crate::audio::reset();
+}
+
+/// Ask the host to switch to `width` x `height` at `fps` without reconnecting (a window resize).
+///
+/// No-op unless a session is live and the size actually changed. Dimensions must be even (4:2:0);
+/// the caller rounds. The host answers with `Reconfigured`, handled in [`pf_ctl_recv`].
+#[unsafe(no_mangle)]
+pub extern "C" fn pf_session_reconfigure(width: u32, height: u32, fps: u32) {
+    CLIENT.with(|c| {
+        let mut c = c.borrow_mut();
+        if c.phase != Phase::Live || (c.width == width && c.height == height) {
+            return;
+        }
+        write_msg(
+            &Reconfigure {
+                mode: punktfunk_core::config::Mode {
+                    width,
+                    height,
+                    refresh_hz: fps,
+                },
+            }
+            .encode(),
+        );
+    });
 }
 
 pub fn host_caps() -> u8 {
@@ -283,6 +330,16 @@ pub unsafe extern "C" fn pf_ctl_recv(ptr: *const u8, len: u32) {
                 }
             } else if let Ok(r) = PairResult::decode(&body) {
                 credential::on_pair_result(&r);
+            } else if let Ok(r) = Reconfigured::decode(&body) {
+                // The host switched (or refused) the mode. On accept, re-point the page's decoder
+                // at the new size; the next IDR carries matching parameter sets. On refusal the
+                // active mode is unchanged, so there is nothing to do.
+                if r.accepted {
+                    c.width = r.mode.width;
+                    c.height = r.mode.height;
+                    // SAFETY: plain integers to a JavaScript function that returns before this does.
+                    unsafe { pf_video_config(u32::from(c.codec), c.width, c.height) };
+                }
             } else if let Ok(r) = Refused::decode(&body) {
                 // SAFETY: the string is borrowed for a call into JavaScript that copies it.
                 unsafe { pf_refused(r.code, r.reason.as_ptr(), r.reason.len() as u32) };
