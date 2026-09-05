@@ -8,7 +8,7 @@
 // The split is what makes a second interface cheap rather than a fork: nothing about pairing,
 // trust or the session lives in a renderer.
 
-import type { KnownHost, LibraryEntry, Reach } from "@punktfunk/stream";
+import type { AudioSnapshot, KnownHost, LibraryEntry, Reach, Settings } from "@punktfunk/stream";
 
 /** Everything worth showing about a live session. */
 export interface SessionStats {
@@ -24,6 +24,11 @@ export interface SessionStats {
   /** Average milliseconds uploading a frame to the video plane. */
   uploadMs: number;
   backend: "webgpu" | "webgl2" | null;
+  /** Is the pointer locked to the video canvas? Only ever true in `capture` mode. */
+  pointerCaptured: boolean;
+  /** What the audio pipe last reported — underruns and losses are the half of "is this
+   *  connection healthy" the video counters cannot see. */
+  audio: AudioSnapshot;
 }
 
 /**
@@ -77,7 +82,12 @@ export type Screen =
       error?: string;
       busy?: boolean;
     }
-  | { kind: "streaming"; stats: SessionStats }
+  | { kind: "streaming"; stats: SessionStats; diagnostics: boolean }
+  /**
+   * The settings sheet. It renders over whatever screen was showing — including a live one —
+   * so it carries no route of its own; `openSettings(false)` puts the previous screen back.
+   */
+  | { kind: "settings"; values: Settings; streaming: boolean }
   /** `retry` marks an error worth trying again from, which most network ones are. */
   | { kind: "error"; head: string; text: string; retry?: boolean };
 
@@ -93,7 +103,16 @@ export interface Actions {
    *  to the management API, so this is the first screen with anything to choose. */
   play(entry?: LibraryEntry): void;
   forget(origin: string): void;
+  /** Name a host something this browser will remember. An empty label drops the name. */
+  rename(origin: string, label: string): void;
   disconnect(): void;
+  openSettings(on: boolean): void;
+  setSettings(patch: Partial<Settings>): void;
+  /** Take or release the pointer. Taking it needs a gesture, so this is only ever called from
+   *  a click — the engine cannot arm pointer lock on its own. */
+  toggleCapture(): void;
+  /** Show the numbers behind the connection-quality dot. */
+  showDiagnostics(on: boolean): void;
   /** Show or hide the address field on the home screen. Pure presentation, but the home screen
    *  is rebuilt from `app.ts` on every state change, so the flag cannot live in the renderer. */
   setAdding(on: boolean): void;

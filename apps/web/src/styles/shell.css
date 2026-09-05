@@ -15,6 +15,15 @@
 
 /* --- base ------------------------------------------------------------------------------- */
 
+/* Border-box everywhere. Without it `max-height` caps the CONTENT box and a panel's own padding
+ * is added on top of it, which is how the settings sheet grew 64px past the viewport it was
+ * explicitly told to fit inside. */
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
 html,
 body {
   margin: 0;
@@ -125,7 +134,6 @@ body {
 .centre-fill {
   display: grid;
   place-items: center;
-  box-sizing: border-box;
   width: 100%;
   min-height: 100dvh;
   padding: var(--pf-inset);
@@ -329,7 +337,6 @@ button:disabled {
 .field {
   display: block;
   width: 100%;
-  box-sizing: border-box;
   padding: 0.8em 1em;
   color: var(--pf-fg);
   font: inherit;
@@ -809,4 +816,131 @@ button:disabled {
   font-size: 0.85em;
   background: rgb(255 255 255 / 0.12);
   border-radius: 4px;
+}
+
+/* --- host management ---------------------------------------------------------------------- */
+
+/* The pinned identity, short and quiet. It is here to be compared against the host's own
+ * screen, not read — the full value is on the element's `title`. */
+.host-card .fp {
+  margin-top: 0.15rem;
+  overflow: hidden;
+  color: var(--pf-fg-ghost);
+  font-family: var(--pf-font-mono);
+  font-size: 0.72rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* --- settings ------------------------------------------------------------------------------
+ * Native controls throughout. `accent-color` is the whole of the brand treatment for the range
+ * and the checkbox, and it costs one line where a custom track costs forty and loses the
+ * keyboard behaviour. */
+.settings {
+  width: min(34rem, 100%);
+  max-height: calc(100dvh - 2 * var(--pf-inset));
+  overflow-y: auto;
+}
+
+.settings input[type="range"],
+.settings input[type="checkbox"] {
+  accent-color: var(--pf-accent);
+}
+
+.setting {
+  display: grid;
+  gap: 0.4rem;
+  padding: 0.85rem 0;
+  border-top: 1px solid var(--pf-edge-flat);
+}
+
+.setting label {
+  display: flex;
+  gap: 0.5rem;
+  align-items: baseline;
+  color: var(--pf-fg-strong);
+  font-size: 0.95rem;
+}
+
+.setting .value {
+  margin-left: auto;
+  color: var(--pf-fg-dim);
+  font-variant-numeric: tabular-nums;
+}
+
+.setting .hint {
+  display: block;
+  color: var(--pf-fg-faint);
+  font-size: 0.82rem;
+}
+
+/* A checkbox belongs beside its label, not under it. */
+.setting.toggle {
+  grid-template-columns: 1fr auto;
+  align-items: center;
+}
+
+.setting.toggle label {
+  display: block;
+}
+
+.setting.toggle input {
+  width: 1.15rem;
+  height: 1.15rem;
+}
+
+.settings select.field {
+  padding: 0.55em 0.8em;
+}
+
+.settings input[type="range"] {
+  width: 100%;
+}
+
+/* --- diagnostics ---------------------------------------------------------------------------
+ * The numbers behind the quality dot, in a fixed two-column list so nothing jumps as the
+ * counters tick. */
+.diagnostics {
+  position: fixed;
+  top: calc(3.5rem + var(--pf-inset));
+  right: var(--pf-inset);
+  width: min(22rem, calc(100vw - 2 * var(--pf-inset)));
+  max-height: 60dvh;
+  padding: 1rem 1.2rem;
+  overflow-y: auto;
+  pointer-events: auto;
+  animation: sheet-in var(--pf-mid) var(--pf-ease) both;
+}
+
+.diagnostics dl {
+  display: grid;
+  gap: 0.35rem 1rem;
+  margin: 0;
+}
+
+.diagnostics dl > div {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 1rem;
+  align-items: baseline;
+}
+
+.diagnostics dt {
+  color: var(--pf-fg-dim);
+  font-size: 0.85rem;
+}
+
+.diagnostics dd {
+  margin: 0;
+  font-family: var(--pf-font-mono);
+  font-size: 0.85rem;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+/* The quality dot doubles as the diagnostics toggle, so it needs a hit area. */
+.hud .btn.quiet.small:has(.dot) {
+  display: grid;
+  place-items: center;
+  padding: 0.35em;
 }

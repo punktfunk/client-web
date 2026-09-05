@@ -9,7 +9,7 @@
 // the engine contributed. Dev-only: the build takes `index.html` as its one entry, so neither
 // this nor `_e2e.html` reaches `dist/`.
 
-import type { LibraryEntry } from "@punktfunk/stream";
+import { DEFAULTS, type LibraryEntry } from "@punktfunk/stream";
 import { SolidShell } from "./ui/solid.tsx";
 import type { Actions, Screen } from "./ui/types.ts";
 
@@ -42,6 +42,8 @@ const stats = {
   origin: "https://192.168.1.25:47990",
   width: 2560, height: 1440, fps: 60, accessUnits: 18_432,
   decoded: 18_400, dropped: 12, uploadMs: 0.8, backend: "webgpu" as const,
+  pointerCaptured: false,
+  audio: { state: "playing" as const, frames: 91_204, lost: 3, errors: 0, underruns: 1 },
 };
 
 const SCREENS: Record<string, Screen> = {
@@ -71,7 +73,14 @@ const SCREENS: Record<string, Screen> = {
   "library": { kind: "library", origin: "https://192.168.1.25:47990", host: "living-room-pc", entries, art, running: "Hades" },
   "library-empty": { kind: "library", origin: "https://192.168.1.25:47990", host: "living-room-pc", entries: [], art: new Map() },
   "library-loading": { kind: "library", origin: "https://192.168.1.25:47990", host: "living-room-pc", entries: [], art: new Map(), busy: true },
-  "streaming": { kind: "streaming", stats },
+  "streaming": { kind: "streaming", stats, diagnostics: false },
+  "streaming-diagnostics": { kind: "streaming", stats, diagnostics: true },
+  "streaming-captured": {
+    kind: "streaming",
+    stats: { ...stats, pointerCaptured: true },
+    diagnostics: false,
+  },
+  "settings": { kind: "settings", values: DEFAULTS, streaming: false },
   "error": {
     kind: "error",
     head: "No answer",
@@ -82,14 +91,32 @@ const SCREENS: Record<string, Screen> = {
 
 const noop: Actions = {
   connect() {}, pair() {}, retry() {}, back() {}, play() {}, forget() {}, disconnect() {},
-  setAdding() {},
+  setAdding() {}, rename() {}, openSettings() {}, setSettings() {}, toggleCapture() {},
+  showDiagnostics() {},
 };
 
 const shell = new SolidShell(document.body);
-shell.mount(noop);
+let live: Screen = SCREENS["home"]!;
+// Settings are the one screen with controls that must visibly respond, so the harness keeps a
+// copy and re-renders. Everything else is static by design.
+shell.mount({
+  ...noop,
+  setSettings(patch) {
+    if (live.kind !== "settings") return;
+    live = { ...live, values: { ...live.values, ...patch } };
+    shell.render(live);
+  },
+});
 const wanted = new URLSearchParams(location.search).get("s") ?? "home";
-shell.render(SCREENS[wanted] ?? SCREENS["home"]!);
+live = SCREENS[wanted] ?? SCREENS["home"]!;
+shell.render(live);
 
 // What the screenshot driver enumerates, and what a person opening the page with no query gets
 // told is available.
-Object.assign(window, { pfScreens: Object.keys(SCREENS), pfShow: (n: string) => shell.render(SCREENS[n]!) });
+Object.assign(window, {
+  pfScreens: Object.keys(SCREENS),
+  pfShow: (n: string) => {
+    live = SCREENS[n]!;
+    shell.render(live);
+  },
+});

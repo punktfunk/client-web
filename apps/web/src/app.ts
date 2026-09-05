@@ -9,7 +9,17 @@
 // lives in the library, which is what lets the same engine sit under a TV app without a line of
 // this file.
 
-import { Engine, type EngineState, type LibraryEntry, type Reach, reach, VersionSkew } from "@punktfunk/stream";
+import {
+  Engine,
+  type EngineState,
+  hosts,
+  type LibraryEntry,
+  type Reach,
+  reach,
+  type Settings,
+  settings,
+  VersionSkew,
+} from "@punktfunk/stream";
 import { ConsoleUi } from "./ui/console.ts";
 import { SolidShell } from "./ui/solid.tsx";
 import type { HostCard, Screen, Ui } from "./ui/types.ts";
@@ -17,6 +27,15 @@ import type { HostCard, Screen, Ui } from "./ui/types.ts";
 /** How long a reachability probe is believed. Long enough that returning to the home screen
  *  does not re-probe every host, short enough that a machine woken in the meantime shows up. */
 const REACH_TTL_MS = 30_000;
+
+/**
+ * How long the window must sit still before the stream is resized to match it.
+ *
+ * Long, and deliberately so: the host rebuilds its capture pipeline to answer a `Reconfigure`,
+ * and on the wlroots reference host that recreates the output. A drag across the screen must
+ * cost one renegotiation at the end, not one per frame.
+ */
+const RESIZE_DEBOUNCE_MS = 700;
 
 class App {
   private screen: Screen = { kind: "home", hosts: [], adding: true };
@@ -32,6 +51,11 @@ class App {
   /** What a probe last said about each known host, and when. */
   private readonly reachCache = new Map<string, { reach: Reach; at: number }>();
   private probing = false;
+  /** The settings sheet renders over whatever is showing, so it is a flag rather than a state. */
+  private settingsOpen = false;
+  private diagnostics = false;
+  private prefs: Settings = settings.get();
+  private resizeTimer = 0;
 
   constructor(
     private readonly engine: Engine,
@@ -56,7 +80,30 @@ class App {
         this.adding = on;
         if (engine.current.kind === "idle") this.render(engine.current);
       },
+      rename: (origin, label) => {
+        hosts.rename(origin, label);
+        this.render(engine.current);
+      },
+      openSettings: (on) => {
+        this.settingsOpen = on;
+        this.render(engine.current);
+      },
+      setSettings: (patch) => {
+        this.prefs = settings.set(patch);
+        this.applyPrefs();
+        this.render(engine.current);
+      },
+      toggleCapture: () => {
+        const s = engine.current;
+        engine.capturePointer(s.kind === "streaming" ? !s.stats.pointerCaptured : true);
+      },
+      showDiagnostics: (on) => {
+        this.diagnostics = on;
+        this.render(engine.current);
+      },
     });
+    this.applyPrefs();
+    this.watchSize();
     engine.onState((s) => this.render(s));
   }
 
@@ -67,6 +114,9 @@ class App {
 
   /** Facts in, words out. */
   private render(s: EngineState): void {
+    if (this.settingsOpen) {
+      return this.show({ kind: "settings", values: this.prefs, streaming: s.kind === "streaming" });
+    }
     switch (s.kind) {
       case "idle":
         this.clearLibrary();
@@ -117,7 +167,11 @@ class App {
       case "starting":
         return this.show({ kind: "connecting", origin: s.origin, phase: "starting" });
       case "streaming":
-        return this.show({ kind: "streaming", stats: { origin: s.origin, ...s.stats } });
+        return this.show({
+          kind: "streaming",
+          stats: { origin: s.origin, ...s.stats },
+          diagnostics: this.diagnostics,
+        });
       case "error":
         return this.show({
           kind: "error",
@@ -257,9 +311,56 @@ class App {
     this.art.clear();
   }
 
+  // --- settings and the window ------------------------------------------------------------
+  /** Push the tunable half of the settings at the engine. The rest — size, rate, bitrate — is
+   *  read when a stream starts, because it is `StreamOptions` and not an engine property. */
+  private applyPrefs(): void {
+    this.engine.configure({
+      videoBackend: this.prefs.videoBackend,
+      audio: this.prefs.audio,
+      captureInput: this.prefs.captureInput,
+      pointer: this.prefs.pointer,
+      deadzone: this.prefs.deadzone,
+    });
+  }
+
+  /**
+   * Follow the window, when asked to. Debounced hard, and no-op sizes are dropped before the
+   * timer is even armed: a `Reconfigure` costs the host a pipeline rebuild, so the only ones
+   * worth sending are the ones that change something.
+   */
+  private watchSize(): void {
+    const observer = new ResizeObserver(() => {
+      if (!this.prefs.resizeStream) return;
+      const now = this.engine.current;
+      if (now.kind !== "streaming") return;
+      const [width, height] = size(this.uiCanvas);
+      if (width === now.stats.width && height === now.stats.height) return;
+      clearTimeout(this.resizeTimer);
+      this.resizeTimer = window.setTimeout(() => {
+        // Re-checked after the wait: the window may have gone back to where it started, and
+        // the session may have ended while the timer ran.
+        const then = this.engine.current;
+        if (then.kind !== "streaming") return;
+        const [w, h] = size(this.uiCanvas);
+        if (w === then.stats.width && h === then.stats.height) return;
+        this.engine.reconfigure(w, h, this.prefs.fps);
+      }, RESIZE_DEBOUNCE_MS);
+    });
+    observer.observe(this.uiCanvas);
+  }
+
   private play(entry?: LibraryEntry): void {
-    const [width, height] = size(this.uiCanvas);
-    this.engine.startStream({ width, height, fps: 60, bitrateKbps: 20000, ...(entry ? { launch: entry } : {}) });
+    const [fit, fitHeight] = size(this.uiCanvas);
+    const width = this.prefs.width || fit;
+    const height = this.prefs.height || fitHeight;
+    this.engine.startStream({
+      width,
+      height,
+      fps: this.prefs.fps,
+      bitrateKbps: this.prefs.bitrateKbps,
+      ...(entry ? { launch: entry } : {}),
+    });
   }
 }
 
@@ -317,7 +418,8 @@ try {
   const shell = new SolidShell(document.body);
   shell.mount({
     connect() {}, pair() {}, retry() {}, back() {}, play() {}, forget() {}, disconnect() {},
-    setAdding() {},
+    setAdding() {}, rename() {}, openSettings() {}, setSettings() {}, toggleCapture() {},
+    showDiagnostics() {},
   });
   shell.render({
     kind: "error",
