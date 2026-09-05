@@ -18,7 +18,7 @@ import { Host, type LibraryEntry, VersionSkew } from "./host.ts";
 import * as pf from "./pf-connect.ts";
 import { decodeSupported, VideoPipe } from "./video.ts";
 
-export type { HostInfo, LibraryEntry } from "./host.ts";
+export type { HostInfo, HostStatus, LibraryEntry } from "./host.ts";
 export { VersionSkew } from "./host.ts";
 export { type KnownHost, type Plane, hosts, originOf } from "./pf-connect.ts";
 
@@ -52,6 +52,8 @@ export interface SessionStats {
  */
 export type EngineState =
   | { kind: "idle" }
+  /** What was typed is not an address. Nothing was tried; the picker should keep it. */
+  | { kind: "bad-address"; input: string; message: string }
   | { kind: "reaching"; origin: string }
   /** Reachable, but its certificate has not been accepted in this browser. `acceptUrl` is the
    *  page a person opens once to do that. */
@@ -118,6 +120,8 @@ export class Engine {
   private lastSecond = 0;
   private fps = 0;
   private running = true;
+  /** A PIN given while the connection was down, sent when the next control stream opens. */
+  private pendingPin: string | null = null;
 
   private constructor(
     private readonly mod: PunktfunkModule,
@@ -168,7 +172,7 @@ export class Engine {
     try {
       origin = pf.originOf(address);
     } catch (e) {
-      return this.set({ kind: "error", message: message(e) });
+      return this.set({ kind: "bad-address", input: address, message: message(e) });
     }
     this.reset();
     this.origin = origin;
@@ -205,9 +209,38 @@ export class Engine {
     withStr(this.mod, [this.plane.cert_hash_sha256], (p) => this.mod._pf_device_init(p));
   }
 
-  /** Pair with the PIN the host is showing. Ends in `paired` or `pair-refused`. */
+  /**
+   * Pair with the PIN the host is showing. Ends in `paired` or `pair-refused`.
+   *
+   * From `needs-pairing` the control stream is open and the request goes now. From `forgotten`
+   * or `pair-refused` the host has already closed the connection — it does after any ceremony,
+   * and after refusing a credential — so the PIN is held, the stale pairing forgotten, and the
+   * request goes the moment a fresh control stream opens.
+   */
   pair(pin: string): void {
-    if (!this.origin || this.state.kind !== "needs-pairing") return;
+    const origin = this.origin;
+    if (!origin) return;
+    switch (this.state.kind) {
+      case "needs-pairing":
+        this.sendPairRequest(pin);
+        return;
+      case "forgotten":
+      case "pair-refused": {
+        this.pendingPin = pin;
+        // What is stored names a pairing the host no longer honours; keeping it would route the
+        // reconnect back through the credential the host just refused.
+        pf.hosts.unpair(origin);
+        this.mod._pf_wt_close?.();
+        void this.connect(origin);
+        return;
+      }
+      default:
+        return;
+    }
+  }
+
+  private sendPairRequest(pin: string): void {
+    if (!this.origin) return;
     const name = this.opts.deviceName ?? engineName();
     this.pairing = true;
     this.settled = false;
@@ -282,6 +315,7 @@ export class Engine {
     this.pairing = false;
     this.settled = false;
     this.offeredSince = 0;
+    // `pendingPin` survives: it is set right before the reconnect that calls this.
   }
 
   /** The device key is loaded and the wasm side holds its SPKI. Dial now, not before. */
@@ -305,7 +339,11 @@ export class Engine {
     if (!fingerprint || !device) {
       // Never paired with this host. The stream would be refused unless the host was started
       // with `serve --open`, so say so rather than let it fail silently.
-      return this.set({ kind: "needs-pairing", origin });
+      this.set({ kind: "needs-pairing", origin });
+      const pin = this.pendingPin;
+      this.pendingPin = null;
+      if (pin) this.sendPairRequest(pin);
+      return;
     }
     // Authenticated. The management API is reachable from here; nothing streams until asked.
     this.host = new Host(origin, fingerprint, device);

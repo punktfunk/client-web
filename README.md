@@ -131,7 +131,7 @@ Rust owns the protocol; TypeScript owns the browser. The library owns everything
 |---|---|
 | `src/app.ts` | `EngineState` in, `Screen` out: the wording, the choice of interface, the library's art. |
 | `src/ui/types.ts` | The `Screen` a UI renders and the `Actions` it may emit. The seam between the two interfaces. |
-| `src/ui/shell.ts` | The web-native interface: DOM, pointer, touch, a text field. The default. |
+| `src/ui/solid.tsx` | The web-native interface, on Solid: one signal of `Screen`, a component per kind, one live region. The default. |
 | `src/ui/console.ts` | The gamepad interface: `pf-console-ui` on a canvas, through `engine.console`. `?ui=console`. |
 
 `src/pf-glue.ts` is load-bearing, not a detail, and it has a constraint the others do not:
@@ -167,6 +167,12 @@ renderer knows anything about pairing, trust or the session.
 `ConsoleUi` composes the web shell rather than replacing it: the screens where someone has to type
 stay DOM, and the canvas takes over once a session is live. That is honest about what a D-pad
 shell can and cannot do, and it is why adding the second interface cost one file.
+
+The web shell is on **Solid**: the whole interface is one reactive `Screen` value, so a renderer
+is a signal and a component per kind, with no reconciliation sitting in the way of the frame loop
+underneath. It carries one `aria-live` region every screen speaks through, focus lands on the
+field each screen is about, errors are `role="alert"`, and the library grid takes arrow keys —
+a grid someone can only tab through one tile at a time is not really a grid.
 
 ## The management API, done the way it is meant to be
 

@@ -23,6 +23,7 @@ import { SchemaError } from "effect/Schema";
 
 export type LibraryEntry = api.OperatorGameEntry;
 export type HostInfo = api.HostInfo;
+export type HostStatus = api.RuntimeStatus;
 
 /** The host speaks a wire shape this page does not: one side is newer than the other. */
 export class VersionSkew extends Error {
@@ -56,6 +57,15 @@ export class Host {
 
   info(): Promise<HostInfo> {
     return this.run("host", (c) => c.getHostInfo(undefined));
+  }
+
+  /**
+   * What the host is doing now: sessions, the running title, whether pairing is waiting on a
+   * PIN. Polled rather than pushed — `/events` names every other client and is not on the
+   * paired-device lane; `/status` is, and it is what a shell needs to show a running game.
+   */
+  status(): Promise<HostStatus> {
+    return this.run("status", (c) => c.getStatus(undefined));
   }
 
   /**

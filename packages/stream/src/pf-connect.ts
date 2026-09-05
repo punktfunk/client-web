@@ -190,6 +190,15 @@ export const hosts = {
     delete all[origin];
     localStorage.setItem(KEY, JSON.stringify(all));
   },
+  /** Drop the pairing but keep the host: it is still one this browser knows, just not one it is
+   *  paired with any more. */
+  unpair(origin: string): void {
+    const all = hosts.all();
+    const h = all[origin];
+    if (!h) return;
+    delete h.fingerprint;
+    localStorage.setItem(KEY, JSON.stringify(all));
+  },
   /** Most recently used first: the list the picker shows. */
   list(): Array<KnownHost & { origin: string }> {
     const all = hosts.all();

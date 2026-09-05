@@ -2,10 +2,12 @@
   "extends": "../../tsconfig.base.json",
   "compilerOptions": {
     "noEmit": true,
+    "jsx": "preserve",
+    "jsxImportSource": "solid-js",
     // The library from source, not from its `dist/`: this is the workspace's own consumer, and
     // resolving the sources is what makes a change in the engine show up here without a build
     // in between. External consumers get the packed `dist/`, and the tarball gate proves that.
     "paths": { "@punktfunk/stream": ["../../packages/stream/src/index.ts"] }
   },
-  "include": ["src/**/*.ts", "vite.config.ts"]
+  "include": ["src/**/*.ts", "src/**/*.tsx", "vite.config.ts"]
 }
