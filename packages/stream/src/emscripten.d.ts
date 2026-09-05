@@ -35,6 +35,10 @@ export interface PunktfunkModule {
   _pf_session_frames(): number;
   /** Channels in the negotiated audio plane; `0` before `Welcome`. */
   _pf_session_audio_channels(): number;
+  /** Drop all session state so the next connection starts clean. */
+  _pf_session_reset(): void;
+  /** Ask the host to switch to width x height at fps mid-session (a window resize). */
+  _pf_session_reconfigure(width: number, height: number, fps: number): void;
   _pf_audio_frames(): number;
   _pf_audio_lost(): number;
 
