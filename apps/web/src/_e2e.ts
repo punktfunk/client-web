@@ -84,6 +84,12 @@ try {
     if (l.kind !== "ready") throw new Error("unreachable");
     const info = await l.host.info();
     log("ok   ready; host " + info.hostname);
+    try {
+      const lib = await l.host.library();
+      log(`ok   library: ${lib.length} entries`);
+    } catch (e: any) {
+      log("FAIL library: " + (e?.message ?? e));
+    }
     engine.startStream({ width: 1280, height: 720, fps: 60, bitrateKbps: 8000, ...(LAUNCH ? { launch: { id: LAUNCH, title: LAUNCH, store: "e2e", art: {} } as any } : {}) });
     if (LAUNCH) log("requested launch id: " + LAUNCH);
     const t0 = performance.now();
@@ -110,6 +116,19 @@ try {
         log("ok   sent 10 key, 10 move, 1 click, 2 wheel events (expect host input>=26)");
       }
     }
+    // Is the picture actually the desktop, or a black output? Sample the video canvas.
+    try {
+      const vc = document.getElementById("v") as HTMLCanvasElement;
+      const c2 = document.createElement("canvas");
+      c2.width = 160; c2.height = 90;
+      const g = c2.getContext("2d")!;
+      g.drawImage(vc, 0, 0, c2.width, c2.height);
+      const px = g.getImageData(0, 0, c2.width, c2.height).data;
+      let lit = 0, sum = 0;
+      for (let i = 0; i < px.length; i += 4) { const b = px[i]! + px[i+1]! + px[i+2]!; sum += b; if (b > 24) lit++; }
+      const pct = Math.round((lit / (px.length / 4)) * 100);
+      log(`picture: ${pct}% of pixels lit, avg brightness ${Math.round(sum / (px.length/4))}/765 (` + (pct > 2 ? "looks like a desktop" : "BLACK") + ")");
+    } catch (e: any) { log("picture sample failed: " + e?.message); }
     if (final) {
       log(`ok   streamed: ${final.width}x${final.height} au=${final.accessUnits} decoded=${final.decoded} dropped=${final.dropped} fps=${final.fps} backend=${final.backend}`);
       const a = final.audio;
