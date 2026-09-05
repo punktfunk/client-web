@@ -198,11 +198,16 @@ class App {
   }
 }
 
-/** Device pixels, capped at 2× — beyond that a 4K panel costs more than it shows. */
+/** The stream mode from the canvas: device pixels capped at 2×, and always even.
+ *
+ * H.264/HEVC are 4:2:0 — one chroma sample per 2×2 luma block — so a codec has no valid chroma
+ * grid for an odd width or height, and the host refuses one. The window is whatever size it is,
+ * so round each dimension down to even here rather than send the host something it must reject. */
 function size(canvas: HTMLCanvasElement): [number, number] {
   const dpr = Math.min(window.devicePixelRatio || 1, 2);
-  const w = Math.max(1, Math.round(canvas.clientWidth * dpr));
-  const h = Math.max(1, Math.round(canvas.clientHeight * dpr));
+  const even = (px: number) => Math.max(2, Math.floor(px) & ~1);
+  const w = even(canvas.clientWidth * dpr);
+  const h = even(canvas.clientHeight * dpr);
   if (canvas.width !== w || canvas.height !== h) {
     canvas.width = w;
     canvas.height = h;
