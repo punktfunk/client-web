@@ -7,5 +7,5 @@
 
 export { Engine, type EngineOptions, type EngineState, type SessionStats, type StreamOptions } from "./engine.ts";
 export { Host, type HostInfo, type HostStatus, type LibraryEntry, VersionSkew } from "./host.ts";
-export { hosts, originOf, type KnownHost, type Plane } from "./pf-connect.ts";
+export { hosts, originOf, reach, type KnownHost, type Plane, type Reach } from "./pf-connect.ts";
 export type { VideoPlane, UploadStats } from "./video-surface.ts";

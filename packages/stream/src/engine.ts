@@ -23,7 +23,7 @@ import { AudioPipe, type AudioSnapshot } from "./audio.ts";
 export type { AudioSnapshot, AudioState } from "./audio.ts";
 export type { HostInfo, HostStatus, LibraryEntry } from "./host.ts";
 export { VersionSkew } from "./host.ts";
-export { type KnownHost, type Plane, hosts, originOf } from "./pf-connect.ts";
+export { type KnownHost, type Plane, type Reach, hosts, originOf, reach } from "./pf-connect.ts";
 
 /** `pf_cred_phase` and `pf_session_phase`, named. Kept beside the exports they mirror. */
 const CRED = { EMPTY: 0, READY: 1, NEEDS_SIGNATURE: 2, PAIRING: 3, PAIRED: 4, FAILED: 5 } as const;

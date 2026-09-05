@@ -3,17 +3,23 @@
 //
 // The engine's state carries facts — `blocked`, `needs-pairing`, `forgotten` — and this file
 // turns each into a `Screen` with words on it. That is the whole of what the app owns: the
-// wording, the choice of interface, and the library grid's art. Everything about hosts, trust,
-// pairing and the session lives in the library, which is what lets the same engine sit under
-// the website or a TV app without a line of this file.
+// wording, the choice of interface, the library grid's art, and the two pieces of presentation
+// state no engine fact covers (whether the address field is showing, and what a reachability
+// probe last said about each known host). Everything about hosts, trust, pairing and the session
+// lives in the library, which is what lets the same engine sit under a TV app without a line of
+// this file.
 
-import { Engine, type EngineState, type LibraryEntry, VersionSkew } from "@punktfunk/stream";
+import { Engine, type EngineState, type LibraryEntry, type Reach, reach, VersionSkew } from "@punktfunk/stream";
 import { ConsoleUi } from "./ui/console.ts";
 import { SolidShell } from "./ui/solid.tsx";
-import type { Screen, Ui } from "./ui/types.ts";
+import type { HostCard, Screen, Ui } from "./ui/types.ts";
+
+/** How long a reachability probe is believed. Long enough that returning to the home screen
+ *  does not re-probe every host, short enough that a machine woken in the meantime shows up. */
+const REACH_TTL_MS = 30_000;
 
 class App {
-  private screen: Screen = { kind: "picker", hosts: [] };
+  private screen: Screen = { kind: "home", hosts: [], adding: true };
   /** The library, once `ready` has read it, with object URLs for art as it arrives. */
   private entries: LibraryEntry[] = [];
   private readonly art = new Map<string, string>();
@@ -21,6 +27,11 @@ class App {
   private hostName: string | undefined;
   private running: string | undefined;
   private statusTimer = 0;
+  /** Is the address field in front? Forced on when there is no card to click instead. */
+  private adding = false;
+  /** What a probe last said about each known host, and when. */
+  private readonly reachCache = new Map<string, { reach: Reach; at: number }>();
+  private probing = false;
 
   constructor(
     private readonly engine: Engine,
@@ -28,7 +39,10 @@ class App {
     private readonly uiCanvas: HTMLCanvasElement,
   ) {
     ui.mount({
-      connect: (address) => void engine.connect(address),
+      connect: (address) => {
+        this.adding = false;
+        void engine.connect(address);
+      },
       pair: (pin) => engine.pair(pin),
       retry: () => {
         const s = engine.current;
@@ -36,8 +50,12 @@ class App {
       },
       back: () => engine.disconnect(),
       play: (entry) => this.play(entry),
-      forget: (origin) => engine.forget(origin),
+      forget: (origin) => this.forget(origin),
       disconnect: () => engine.disconnect(),
+      setAdding: (on) => {
+        this.adding = on;
+        if (engine.current.kind === "idle") this.render(engine.current);
+      },
     });
     engine.onState((s) => this.render(s));
   }
@@ -52,33 +70,32 @@ class App {
     switch (s.kind) {
       case "idle":
         this.clearLibrary();
-        return this.show({ kind: "picker", hosts: this.engine.knownHosts() });
+        return this.home();
       case "bad-address":
-        return this.show({ kind: "picker", hosts: this.engine.knownHosts(), error: s.message });
+        // The field stays in front: what was typed is wrong and this is where it is fixed.
+        this.adding = true;
+        return this.home(s.message);
       case "reaching":
-        return this.show({ kind: "picker", hosts: this.engine.knownHosts(), busy: true });
+        return this.show({ kind: "connecting", origin: s.origin, phase: "reaching" });
       case "blocked":
         return this.show({ kind: "accept", origin: s.origin, url: s.acceptUrl });
       case "unreachable":
         return this.show({
           kind: "error",
           head: "No answer",
-          text: `Nothing responded at ${s.origin}. Check the address, and that the host is running.`,
+          text: `Nothing responded at ${bare(s.origin)}. Check the address, and that the host is running.`,
+          retry: true,
         });
       case "untrusted":
-        return this.show({
-          kind: "error",
-          head: "This is not the same host",
-          text: `${s.reason}. Forget it on the previous screen to connect anyway.`,
-        });
+        return this.show({ kind: "trust", origin: s.origin, reason: s.reason });
       case "connecting":
-        return this.show({ kind: "connecting", origin: s.origin });
+        return this.show({ kind: "connecting", origin: s.origin, phase: "connecting" });
       case "needs-pairing":
-        return this.show({ kind: "pair", origin: s.origin, message: "Enter the PIN this host is showing." });
+        return this.show({ kind: "pair", origin: s.origin, mode: "first" });
       case "pairing":
-        return this.show({ kind: "pair", origin: s.origin, message: "Pairing…", busy: true });
+        return this.show({ kind: "pair", origin: s.origin, mode: "first", busy: true });
       case "paired": {
-        this.show({ kind: "pair", origin: s.origin, message: "Paired. Reconnecting…", busy: true });
+        this.show({ kind: "pair", origin: s.origin, mode: "first", busy: true });
         // The host closes after the ceremony, as it does for native clients; streaming is a
         // fresh connection.
         const origin = s.origin;
@@ -89,20 +106,16 @@ class App {
         return this.show({
           kind: "pair",
           origin: s.origin,
-          message: "Enter the PIN this host is showing.",
+          mode: "first",
           error: s.reason ?? "That PIN was refused.",
         });
       case "forgotten":
-        return this.show({
-          kind: "pair",
-          origin: s.origin,
-          message: "This host no longer knows this browser. Enter its PIN to pair again.",
-        });
+        return this.show({ kind: "pair", origin: s.origin, mode: "again" });
       case "ready":
         if (this.libraryFor !== s.origin) void this.openLibrary(s);
         return this.redrawLibrary(s);
       case "starting":
-        return this.show({ kind: "connecting", origin: s.origin });
+        return this.show({ kind: "connecting", origin: s.origin, phase: "starting" });
       case "streaming":
         return this.show({ kind: "streaming", stats: { origin: s.origin, ...s.stats } });
       case "error":
@@ -110,8 +123,60 @@ class App {
           kind: "error",
           head: s.skew ? "This host speaks a different version" : "Something went wrong",
           text: s.skew ? `${s.message}. Update the host, or this page, so the two agree.` : s.message,
+          retry: !s.skew,
         });
     }
+  }
+
+  // --- the home screen -------------------------------------------------------------------
+  private home(error?: string): void {
+    const known = this.engine.knownHosts();
+    const hosts: HostCard[] = known.map((h) => {
+      const seen = this.reachCache.get(h.origin);
+      return seen ? { ...h, reach: seen.reach } : h;
+    });
+    this.show({
+      kind: "home",
+      hosts,
+      // Nothing to click means the field is the only way forward.
+      adding: this.adding || hosts.length === 0,
+      ...(error ? { error } : {}),
+    });
+    void this.probe(known.map((h) => h.origin));
+  }
+
+  /**
+   * Ask each known host whether it is there, then redraw. Cheap and stale-tolerant: a probe is
+   * one `/health` fetch, its answer is believed for `REACH_TTL_MS`, and the grid is already on
+   * screen and clickable before any of them answer.
+   */
+  private async probe(origins: string[]): Promise<void> {
+    if (this.probing) return;
+    const now = Date.now();
+    const stale = origins.filter((o) => now - (this.reachCache.get(o)?.at ?? 0) > REACH_TTL_MS);
+    if (stale.length === 0) return;
+    this.probing = true;
+    try {
+      await Promise.all(
+        stale.map(async (origin) => {
+          this.reachCache.set(origin, { reach: await reach(origin), at: Date.now() });
+          // Redraw per answer rather than once at the end: the first host to reply should not
+          // wait on the slowest, which is the one that will take the full timeout.
+          if (this.engine.current.kind === "idle") this.home();
+        }),
+      );
+    } finally {
+      this.probing = false;
+    }
+  }
+
+  /** Forget a host. From the trust screen this is "forget and pair again", so the reconnect
+   *  follows — with the stored fingerprint gone, the next connection is a first one. */
+  private forget(origin: string): void {
+    const reconnect = this.screen.kind === "trust" && this.screen.origin === origin;
+    this.reachCache.delete(origin);
+    this.engine.forget(origin);
+    if (reconnect) void this.engine.connect(origin);
   }
 
   // --- the library ---------------------------------------------------------------------
@@ -198,6 +263,10 @@ class App {
   }
 }
 
+/** An origin without its scheme. Every screen shows a host this way; nothing gains from the
+ *  `https://` that `originOf` put there. */
+const bare = (origin: string): string => origin.replace(/^https:\/\//, "");
+
 /** The stream mode from the canvas: device pixels capped at 2×, and always even.
  *
  * H.264/HEVC are 4:2:0 — one chroma sample per 2×2 luma block — so a codec has no valid chroma
@@ -246,7 +315,10 @@ try {
   // Before there is an engine there is no interface to say this on; the one sheet the page
   // carries for exactly this case does.
   const shell = new SolidShell(document.body);
-  shell.mount({ connect() {}, pair() {}, retry() {}, back() {}, play() {}, forget() {}, disconnect() {} });
+  shell.mount({
+    connect() {}, pair() {}, retry() {}, back() {}, play() {}, forget() {}, disconnect() {},
+    setAdding() {},
+  });
   shell.render({
     kind: "error",
     head: "This browser cannot run the client",
