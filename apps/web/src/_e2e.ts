@@ -110,6 +110,8 @@ try {
     }
     if (final) {
       log(`ok   streamed: ${final.width}x${final.height} au=${final.accessUnits} decoded=${final.decoded} dropped=${final.dropped} fps=${final.fps} backend=${final.backend}`);
+      const a = final.audio;
+      log(`audio: ${a.state} frames=${a.frames} lost=${a.lost} errors=${a.errors} underruns=${a.underruns}`);
       log(final.decoded > 30 ? "ok   frames flowed through the real pipeline" : "FAIL too few frames decoded");
     } else {
       log("FAIL never reached streaming; last " + last().kind);

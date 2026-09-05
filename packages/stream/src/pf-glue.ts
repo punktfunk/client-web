@@ -390,6 +390,13 @@ mergeInto(LibraryManager.library, {
     if (Module.__pfOnVideoConfig) Module.__pfOnVideoConfig(codec, width, height);
   },
 
+  // --- audio ----------------------------------------------------------------------------------
+  pf_audio_frame: function (ptr: number, len: number, seq: number, ptsNs: number): void {
+    if (!Module.__pfOnAudioFrame) return;
+    // `slice`: the decoder keeps the bytes past this call, and Rust frees them on return.
+    Module.__pfOnAudioFrame(HEAPU8.slice(ptr, ptr + len), seq, ptsNs);
+  },
+
   pf_video_au: function (ptr: number, len: number, ptsUs: number, key: number): void {
     if (!Module.__pfOnAccessUnit) return;
     // `slice`, not `subarray`: EncodedVideoChunk keeps the bytes past this call, and the Rust

@@ -18,7 +18,9 @@ import { Host, type LibraryEntry, VersionSkew } from "./host.ts";
 import * as pf from "./pf-connect.ts";
 import { decodeSupported, VideoPipe } from "./video.ts";
 import { InputPipe } from "./input.ts";
+import { AudioPipe, type AudioSnapshot } from "./audio.ts";
 
+export type { AudioSnapshot, AudioState } from "./audio.ts";
 export type { HostInfo, HostStatus, LibraryEntry } from "./host.ts";
 export { VersionSkew } from "./host.ts";
 export { type KnownHost, type Plane, hosts, originOf } from "./pf-connect.ts";
@@ -45,6 +47,7 @@ export interface SessionStats {
   /** Average milliseconds uploading a frame to the video plane. */
   uploadMs: number;
   backend: "webgpu" | "webgl2" | null;
+  audio: AudioSnapshot;
 }
 
 /**
@@ -99,6 +102,8 @@ export interface EngineOptions {
    * of its own keeps them by giving them focus — a field never loses a key to the stream.
    */
   readonly captureInput?: boolean;
+  /** Play the host's audio. On by default; off for a page that only watches. */
+  readonly audio?: boolean;
   /**
    * Where to dial the WebTransport plane, when it is not the management origin's hostname.
    * The one case: a dev server proxying `/api` to a host on the LAN — the API answers on
@@ -123,6 +128,7 @@ export class Engine {
   private plane: pf.Plane | null = null;
   private video: VideoPipe | null = null;
   private input: InputPipe | null = null;
+  private audio: AudioPipe | null = null;
   private host: Host | null = null;
   private pairing = false;
   private settled = false;
@@ -419,6 +425,8 @@ export class Engine {
   private stopSession(): void {
     this.input?.detach();
     this.input = null;
+    this.audio?.close();
+    this.audio = null;
     this.video?.close();
     this.video = null;
   }
@@ -484,6 +492,14 @@ export class Engine {
       this.input.attach();
     }
     this.input?.poll();
+    // Audio from the first live frame too: the channel count is `Welcome`'s.
+    if (!this.audio && this.opts.audio !== false) {
+      const channels = this.mod._pf_session_audio_channels();
+      if (channels > 0) {
+        this.audio = new AudioPipe(this.mod, channels);
+        this.audio.attach();
+      }
+    }
 
     const now = performance.now();
     const frames = this.mod._pf_session_frames();
@@ -503,6 +519,7 @@ export class Engine {
         decoded: v?.decoded ?? 0,
         dropped: v?.dropped ?? 0,
         uploadMs: v?.uploadMs ?? 0,
+        audio: this.audio?.snapshot() ?? { state: "off", frames: 0, lost: 0, errors: 0, underruns: 0 },
         backend: v?.backend ?? null,
       },
     });
