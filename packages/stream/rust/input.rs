@@ -13,8 +13,8 @@
 use crate::session;
 use crate::transport::send_datagram;
 use punktfunk_core::input::{
-    encode_gamepad_arrival, encode_gamepad_remove, gamepad, GamepadSnapshot, InputEvent,
-    InputKind, MAX_PADS,
+    encode_gamepad_arrival, encode_gamepad_remove, gamepad, GamepadSnapshot, InputEvent, InputKind,
+    MAX_PADS,
 };
 use punktfunk_core::quic::HOST_CAP_GAMEPAD_STATE;
 use std::cell::RefCell;
@@ -159,12 +159,36 @@ fn transitions(last: GamepadSnapshot, now: &GamepadSnapshot) {
         });
     }
     let axes = [
-        (gamepad::AXIS_LS_X, i32::from(last.ls_x), i32::from(now.ls_x)),
-        (gamepad::AXIS_LS_Y, i32::from(last.ls_y), i32::from(now.ls_y)),
-        (gamepad::AXIS_RS_X, i32::from(last.rs_x), i32::from(now.rs_x)),
-        (gamepad::AXIS_RS_Y, i32::from(last.rs_y), i32::from(now.rs_y)),
-        (gamepad::AXIS_LT, i32::from(last.left_trigger), i32::from(now.left_trigger)),
-        (gamepad::AXIS_RT, i32::from(last.right_trigger), i32::from(now.right_trigger)),
+        (
+            gamepad::AXIS_LS_X,
+            i32::from(last.ls_x),
+            i32::from(now.ls_x),
+        ),
+        (
+            gamepad::AXIS_LS_Y,
+            i32::from(last.ls_y),
+            i32::from(now.ls_y),
+        ),
+        (
+            gamepad::AXIS_RS_X,
+            i32::from(last.rs_x),
+            i32::from(now.rs_x),
+        ),
+        (
+            gamepad::AXIS_RS_Y,
+            i32::from(last.rs_y),
+            i32::from(now.rs_y),
+        ),
+        (
+            gamepad::AXIS_LT,
+            i32::from(last.left_trigger),
+            i32::from(now.left_trigger),
+        ),
+        (
+            gamepad::AXIS_RT,
+            i32::from(last.right_trigger),
+            i32::from(now.right_trigger),
+        ),
     ];
     for (code, _, is) in axes.into_iter().filter(|(_, was, is)| was != is) {
         send(InputEvent {
