@@ -3,14 +3,13 @@
 // which Vite turns into an emitted asset. Nothing here names either file.
 
 import { fileURLToPath } from "node:url";
-import tailwindcss from "@tailwindcss/vite";
-import react from "@vitejs/plugin-react";
 import { defineConfig } from "vite";
+import solid from "vite-plugin-solid";
 
 const devHost = process.env["PF_HOST"];
 
 export default defineConfig({
-  plugins: [react(), tailwindcss()],
+  plugins: [solid()],
   // Through the dev proxy the API answers on the page's origin but the WebTransport plane does
   // not; this tells the engine where it is. Undefined in a real build, so the address the user
   // typed is used — exactly as designed.
@@ -18,11 +17,10 @@ export default defineConfig({
     __PF_TRANSPORT_HOST__: JSON.stringify(devHost ? new URL(devHost).hostname : undefined),
   },
   resolve: {
+    // The library from source, as `tsconfig.json` does for the types: the workspace's own
+    // consumer follows the engine without a build in between.
     alias: {
-      // The library from source, as `tsconfig.json` does for the types: the workspace's own
-      // consumer follows the engine without a build in between.
       "@punktfunk/stream": fileURLToPath(new URL("../../packages/stream/src/index.ts", import.meta.url)),
-      "@": fileURLToPath(new URL("./src", import.meta.url)),
     },
   },
   build: {

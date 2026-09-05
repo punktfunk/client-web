@@ -1,6 +1,6 @@
 // What a user interface for this client has to be able to draw, and what it may ask for back.
 //
-// There are two of them and that is the point. `shell.tsx` is the web-native one — DOM, pointer,
+// There are two of them and that is the point. `solid.tsx` is the web-native one — DOM, pointer,
 // touch, a text field for the address — and `console.ts` is `pf-console-ui`, the same gamepad
 // shell every other punktfunk client draws, on a canvas. They render the same `Screen` values and
 // emit the same `Actions`, so `app.ts` holds the entire state machine and neither UI holds any.

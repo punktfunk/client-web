@@ -1,5 +1,4 @@
 <!doctype html>
-<html lang="en" class="dark">
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="color-scheme" content="dark">
@@ -13,17 +12,14 @@
 
   The interface itself is not in here: `app.ts` builds it, so the same client can wear the
   web-native shell or the gamepad console (`?ui=console`) without two copies of this markup.
-  Neither is the appearance — that is `src/styles.css`, imported by the shell that uses it.
-
-  `class="dark"` is what @unom/ui's `dark:` variants key on. The client has no light theme to
-  toggle to, so it is pinned here rather than switched anywhere.
+  Neither is the appearance — that is `src/styles/`, imported by the shell that uses it.
 -->
 
 <!--
   The one rule that has to hold before the module loads. Everything else about the look is in
-  `src/styles.css`, but the ground is not optional: a stylesheet reached through a module graph
-  arrives a frame or two late, and the default white page in that gap is a flash in a dark room
-  with a game about to start on it.
+  `src/styles/tokens.css`, but the ground is not optional: a stylesheet reached through a module
+  graph arrives a frame or two late, and the default white page in that gap is a flash in a dark
+  room with a game about to start on it.
 -->
 <style>
   html, body { margin: 0; height: 100%; overflow: hidden; background: #0b0b0d; }
@@ -36,4 +32,3 @@
 
 <!-- No wasm here: `@punktfunk/stream` loads its module on `Engine.create()`, not before. -->
 <script type="module" src="./src/app.ts"></script>
-</html>

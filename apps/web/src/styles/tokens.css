@@ -1,0 +1,98 @@
+/*
+ * The punktfunk look, as custom properties.
+ *
+ * These are not invented here. They are `crates/pf-console-ui/src/theme.rs` — the shell every
+ * other punktfunk client draws — transcribed from its `Color4f` literals so a browser and a Deck
+ * render the same brand. The Rust side is the source of truth; when it moves, this moves with it.
+ *
+ * The client is dark and stays dark. There is no light theme to switch to, because every screen
+ * here either sits in front of a video plane or is about to: a pale field around a game is glare,
+ * and the one component that must never change meaning with its surroundings is the error red.
+ */
+
+:root {
+  color-scheme: dark;
+
+  /* --- ground ---------------------------------------------------------------------------
+   * The field the glass sits on. `lift` is for the one surface that has to read as raised
+   * without being glass (a cover with no art). */
+  --pf-ground: #0b0b0d;
+  --pf-ground-lift: #131318;
+
+  /* --- glass ----------------------------------------------------------------------------
+   * theme.rs `DARK_INK.glass` — rgba(0.086, 0.086, 0.125, 0.62). The console cannot afford a
+   * real backdrop blur on a Deck GPU and fakes it with a soft gradient; a browser can, so the
+   * blur is here and the fill is the same. */
+  --pf-glass: rgb(22 22 32 / 0.62);
+  --pf-glass-strong: rgb(22 22 32 / 0.86);
+  --pf-blur: blur(20px) saturate(1.4);
+
+  /* The hairline: `PanelStroke::Gradient`, white .22 at the top edge fading to .04 at the
+   * bottom. It is what separates a panel from its field when the fill alone cannot. */
+  --pf-edge-top: rgb(255 255 255 / 0.22);
+  --pf-edge-bottom: rgb(255 255 255 / 0.04);
+  --pf-edge-flat: rgb(255 255 255 / 0.10);
+
+  /* --- ink ------------------------------------------------------------------------------
+   * theme.rs `fg(alpha)`: one white, four weights of presence. */
+  --pf-fg: rgb(255 255 255 / 1);
+  --pf-fg-strong: rgb(255 255 255 / 0.92);
+  --pf-fg-dim: rgb(255 255 255 / 0.62);
+  --pf-fg-faint: rgb(255 255 255 / 0.38);
+  --pf-fg-ghost: rgb(255 255 255 / 0.16);
+
+  /* --- brand ----------------------------------------------------------------------------
+   * The punktfunk violet at its dark-appearance value (#8678F5), and the ink that reads on it.
+   * theme.rs picks that ink by luminance: this accent computes to 0.52, under the 0.55 line,
+   * so white wins. Hardcoded rather than derived because there is one accent here. */
+  --pf-accent: #8678f5;
+  --pf-accent-ink: #ffffff;
+  --pf-accent-wash: rgb(134 120 245 / 0.16);
+  --pf-accent-line: rgb(134 120 245 / 0.55);
+
+  /* Fixed status colours. theme.rs keeps these out of the palette on purpose: a warning must
+   * not change meaning with the wallpaper. */
+  --pf-error: #ff938a;
+  --pf-online: #33d64a;
+  --pf-warn: #f5c46b;
+
+  /* --- type -----------------------------------------------------------------------------
+   * Geist, the same OFL faces the Apple client bundles and the website serves. The fallback
+   * stack matters: the variable font is a separate request, and the shell must be legible
+   * before it lands. */
+  --pf-font: "Geist Variable", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --pf-font-mono: ui-monospace, SFMono-Regular, Menlo, "Liberation Mono", monospace;
+
+  /* --- metrics --------------------------------------------------------------------------
+   * `EDGE_INSET` is theme.rs's 24, the distance anything keeps from the edge of the screen. */
+  --pf-inset: 24px;
+  --pf-radius: 12px;
+  --pf-radius-lg: 18px;
+  --pf-radius-pill: 999px;
+
+  /* --- motion ---------------------------------------------------------------------------
+   * Two curves and three durations, so nothing in the shell invents its own timing. The exit
+   * is faster than the entrance: a thing leaving should not be waited on. */
+  --pf-ease: cubic-bezier(0.2, 0.8, 0.2, 1);
+  --pf-ease-out: cubic-bezier(0.4, 0, 0.2, 1);
+  --pf-fast: 140ms;
+  --pf-mid: 240ms;
+  --pf-slow: 420ms;
+
+  --pf-shadow: 0 24px 64px rgb(0 0 0 / 0.55);
+  --pf-shadow-sm: 0 8px 24px rgb(0 0 0 / 0.4);
+}
+
+/*
+ * Reduced motion is a first-class mode here, as it is in the console (`theme::reduce_motion`).
+ * The rule there is worth keeping exactly: callers keep the STATE change and drop the journey —
+ * a focused row is still focused, it simply arrives instead of gliding. So durations collapse
+ * rather than transitions being removed, which would also take the state change with them.
+ */
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --pf-fast: 1ms;
+    --pf-mid: 1ms;
+    --pf-slow: 1ms;
+  }
+}

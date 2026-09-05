@@ -21,7 +21,7 @@ import {
   VersionSkew,
 } from "@punktfunk/stream";
 import { ConsoleUi } from "./ui/console.ts";
-import { WebShell } from "./ui/shell.tsx";
+import { SolidShell } from "./ui/solid.tsx";
 import type { HostCard, Screen, Ui } from "./ui/types.ts";
 
 /** How long a reachability probe is believed. Long enough that returning to the home screen
@@ -397,12 +397,12 @@ function size(canvas: HTMLCanvasElement): [number, number] {
  * Which interface to wear.
  *
  * `?ui=console` asks for the gamepad shell — the same `pf-console-ui` every other client draws,
- * which is what a TV or a controller wants. Anything else gets the web-native one on React,
+ * which is what a TV or a controller wants. Anything else gets the web-native one on Solid,
  * because a browser is usually held by a mouse and a keyboard and the console cannot offer a
  * text field.
  */
 function pickUi(engine: Engine, uiCanvas: HTMLCanvasElement): Ui {
-  const shell = new WebShell(document.body);
+  const shell = new SolidShell(document.body);
   const wanted = new URLSearchParams(location.search).get("ui");
   return wanted === "console" ? new ConsoleUi(engine, uiCanvas, shell) : shell;
 }
@@ -423,7 +423,7 @@ try {
 } catch (e) {
   // Before there is an engine there is no interface to say this on; the one sheet the page
   // carries for exactly this case does.
-  const shell = new WebShell(document.body);
+  const shell = new SolidShell(document.body);
   shell.mount({
     connect() {}, pair() {}, retry() {}, back() {}, play() {}, forget() {}, disconnect() {},
     setAdding() {}, rename() {}, openSettings() {}, setSettings() {}, toggleCapture() {},

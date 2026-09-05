@@ -5,12 +5,12 @@
 // misbehaving, and `trust` needs a second machine answering at the same address.
 //
 // This mounts the shell alone and hands it a value. `?s=<name>` picks one; nothing else on the
-// page runs, so what it renders is exactly what the stylesheet and `shell.tsx` say and nothing
+// page runs, so what it renders is exactly what the stylesheet and `solid.tsx` say and nothing
 // the engine contributed. Dev-only: the build takes `index.html` as its one entry, so neither
 // this nor `_e2e.html` reaches `dist/`.
 
 import { DEFAULTS, type LibraryEntry } from "@punktfunk/stream";
-import { WebShell } from "./ui/shell.tsx";
+import { SolidShell } from "./ui/solid.tsx";
 import type { Actions, Screen } from "./ui/types.ts";
 
 /** A poster, as a data URI. Real art is a fetch through the credential; the grid only needs
@@ -95,7 +95,7 @@ const noop: Actions = {
   showDiagnostics() {},
 };
 
-const shell = new WebShell(document.body);
+const shell = new SolidShell(document.body);
 let live: Screen = SCREENS["home"]!;
 // Settings are the one screen with controls that must visibly respond, so the harness keeps a
 // copy and re-renders. Everything else is static by design.

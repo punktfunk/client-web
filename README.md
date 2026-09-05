@@ -59,7 +59,7 @@ the `wasm32-unknown-emscripten` Rust target.
 
 ```sh
 rustup target add wasm32-unknown-emscripten
-npm install           # @punktfunk/host and @unom/ui come from the Gitea registry; .npmrc names both scopes
+npm install           # @punktfunk/host comes from the Gitea registry; .npmrc names the scope
 npm run build         # the library, then the app
 ```
 
@@ -131,11 +131,8 @@ Rust owns the protocol; TypeScript owns the browser. The library owns everything
 |---|---|
 | `src/app.ts` | `EngineState` in, `Screen` out: the wording, the choice of interface, the library's art. |
 | `src/ui/types.ts` | The `Screen` a UI renders and the `Actions` it may emit. The seam between the two interfaces. |
-| `src/ui/shell.tsx` | The web-native interface, on React: `WebShell` is one external store of `Screen`, a component per kind, one live region. The default. |
-| `src/ui/{home,sheets,library,hud,settings}.tsx` | The screens, one file per shape. `pieces.tsx` is what they share. |
+| `src/ui/solid.tsx` | The web-native interface, on Solid: one signal of `Screen`, a component per kind, one live region. The default. |
 | `src/ui/console.ts` | The gamepad interface: `pf-console-ui` on a canvas, through `engine.console`. `?ui=console`. |
-| `src/components/ui/*` | `@unom/ui` adapted to this app's tokens once — the management console's arrangement, and its corrections. |
-| `src/styles.css` | Tailwind, and the brand token contract both `@unom/ui` and the shadcn vocabulary read. |
 
 `src/pf-glue.ts` is load-bearing, not a detail, and it has a constraint the others do not:
 emscripten **stringifies each function** and splices it into the module it generates, so anything
@@ -171,14 +168,11 @@ renderer knows anything about pairing, trust or the session.
 stay DOM, and the canvas takes over once a session is live. That is honest about what a D-pad
 shell can and cannot do, and it is why adding the second interface cost one file.
 
-The web shell is the same stack as the host's management console — **React, `@unom/ui` for
-every control, Tailwind on the shared brand tokens** — so a button here and a button there are one
-component on one palette. The whole interface is still one `Screen` value: `WebShell` is an
-external store the tree subscribes to, a component per kind, and React commits on its own tick
-without the frame loop underneath waiting on it. It carries one `aria-live` region every screen
-speaks through, focus lands on the field each screen is about, errors are `role="alert"`, and the
-library grid takes arrow keys — a grid someone can only tab through one tile at a time is not
-really a grid.
+The web shell is on **Solid**: the whole interface is one reactive `Screen` value, so a renderer
+is a signal and a component per kind, with no reconciliation sitting in the way of the frame loop
+underneath. It carries one `aria-live` region every screen speaks through, focus lands on the
+field each screen is about, errors are `role="alert"`, and the library grid takes arrow keys —
+a grid someone can only tab through one tile at a time is not really a grid.
 
 ## The management API, done the way it is meant to be
 
