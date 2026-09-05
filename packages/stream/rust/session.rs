@@ -128,13 +128,33 @@ fn take_msg(inbox: &mut Vec<u8>) -> Option<Vec<u8>> {
     Some(body)
 }
 
-/// Open the session: offer a stream of `width` × `height` at `fps`.
+/// Open the session: offer a stream of `width` × `height` at `fps`, optionally launching a title.
 ///
 /// Called once the page's control stream is up. The browser always speaks first — a stream it
 /// opened does not reach the host until it writes on it — so `Hello` goes out here even against
 /// a host that will demand a credential. Everything after arrives through [`pf_ctl_recv`].
+///
+/// `launch` is a library id (`OperatorGameEntry::id`) or null: the host resolves it to a command
+/// on the real-display source and streams the desktop otherwise.
+///
+/// # Safety
+/// `launch` is null or points to `launch_len` readable UTF-8 bytes, valid for the call.
 #[unsafe(no_mangle)]
-pub extern "C" fn pf_session_hello(width: u32, height: u32, fps: u32, bitrate_kbps: u32) -> i32 {
+pub unsafe extern "C" fn pf_session_hello(
+    width: u32,
+    height: u32,
+    fps: u32,
+    bitrate_kbps: u32,
+    launch: *const u8,
+    launch_len: u32,
+) -> i32 {
+    let launch = if launch.is_null() || launch_len == 0 {
+        None
+    } else {
+        // SAFETY: the caller guarantees `launch_len` readable bytes at `launch` for this call.
+        let bytes = unsafe { std::slice::from_raw_parts(launch, launch_len as usize) };
+        std::str::from_utf8(bytes).ok().map(str::to_string)
+    };
     CLIENT.with(|c| {
         let mut c = c.borrow_mut();
         let hello = Hello {
@@ -148,7 +168,7 @@ pub extern "C" fn pf_session_hello(width: u32, height: u32, fps: u32, bitrate_kb
             gamepad: GamepadPref::Auto,
             bitrate_kbps,
             name: Some("Browser".to_string()),
-            launch: None,
+            launch,
             // `STREAMED_AU` is deliberately absent: slice-progressive delivery hands over pieces
             // of an access unit, and `VideoDecoder` wants whole ones.
             video_caps: punktfunk_core::quic::VIDEO_CAP_PROBE_SEQ,

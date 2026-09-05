@@ -29,6 +29,7 @@ requestAnimationFrame(tick);
 const q = new URLSearchParams(location.search);
 const PIN = q.get("pin") ?? "";
 const SECONDS = Number(q.get("seconds") ?? "8");
+const LAUNCH = q.get("launch") ?? "";
 
 try {
   const engine = await Engine.create({
@@ -83,7 +84,8 @@ try {
     if (l.kind !== "ready") throw new Error("unreachable");
     const info = await l.host.info();
     log("ok   ready; host " + info.hostname);
-    engine.startStream({ width: 1280, height: 720, fps: 60, bitrateKbps: 8000 });
+    engine.startStream({ width: 1280, height: 720, fps: 60, bitrateKbps: 8000, ...(LAUNCH ? { launch: { id: LAUNCH, title: LAUNCH, store: "e2e", art: {} } as any } : {}) });
+    if (LAUNCH) log("requested launch id: " + LAUNCH);
     const t0 = performance.now();
     let poked = false;
     while (performance.now() - t0 < SECONDS * 1000) {
