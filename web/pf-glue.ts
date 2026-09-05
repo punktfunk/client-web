@@ -292,9 +292,9 @@ mergeInto(LibraryManager.library, {
             spki: function () {
               return Promise.resolve(btoa(String.fromCharCode.apply(null, Array.from(s))));
             },
-            sign: function (message: Uint8Array<ArrayBuffer>) {
+            sign: function (message: Uint8Array) {
               return crypto.subtle
-                .sign({ name: "ECDSA", hash: "SHA-256" }, pfCred.key!.privateKey, message)
+                .sign({ name: "ECDSA", hash: "SHA-256" }, pfCred.key!.privateKey, new Uint8Array(message))
                 .then(function (sig) {
                   return new Uint8Array(sig);
                 });

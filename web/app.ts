@@ -10,7 +10,7 @@
 // fail in one direction, and a browser that has never paired simply has nothing to check.
 
 import type { PunktfunkModule } from "./emscripten.ts";
-import { Mgmt, type LibraryEntry } from "./mgmt.ts";
+import { Host, type LibraryEntry, VersionSkew } from "./host.ts";
 import * as pf from "./pf-connect.ts";
 import { decodeSupported, VideoPipe } from "./video.ts";
 import { ConsoleUi } from "./ui/console.ts";
@@ -31,8 +31,8 @@ class App {
   private origin: string | null = null;
   private plane: pf.Plane | null = null;
   private video: VideoPipe | null = null;
-  /** The management-API session, once this browser has a pairing to prove. */
-  private mgmt: Mgmt | null = null;
+  /** The management API, once this browser has a pairing to prove. */
+  private host: Host | null = null;
   private entries: LibraryEntry[] = [];
   private art = new Map<string, string>();
   private hostName: string | undefined;
@@ -187,12 +187,21 @@ class App {
       // than show an empty library.
       return this.play();
     }
-    this.mgmt ??= new Mgmt(origin, fingerprint, device);
+    this.host ??= new Host(origin, fingerprint, device);
     this.show({ kind: "library", origin, entries: [], art: this.art, busy: true });
 
     try {
-      this.entries = await this.mgmt.library();
+      this.entries = [...(await this.host.library())];
     } catch (e) {
+      // A host on a different API version is worth its own screen: nothing on this page will
+      // read right, and the fix is an update on one side or the other.
+      if (e instanceof VersionSkew) {
+        return this.show({
+          kind: "error",
+          head: "This host speaks a different version",
+          text: `${e.message}. Update the host, or this page, so the two agree.`,
+        });
+      }
       // The stream still works without a library, so this is a line on the screen rather than a
       // dead end.
       return this.show({
@@ -203,8 +212,8 @@ class App {
         error: `${message(e)} — you can still stream the desktop.`,
       });
     }
-    this.mgmt
-      .host()
+    this.host
+      .info()
       .then((h) => {
         this.hostName = h.hostname;
         pf.hosts.remember(origin, { name: h.hostname });
@@ -214,9 +223,11 @@ class App {
     this.redrawLibrary();
 
     for (const entry of this.entries) {
-      if (!entry.art || this.art.has(entry.id)) continue;
-      this.mgmt
-        .art(entry.art)
+      // Portrait for a grid, header as the universal fallback — the shapes the API documents.
+      const art = entry.art.portrait ?? entry.art.header;
+      if (!art || this.art.has(entry.id)) continue;
+      this.host
+        .art(art)
         .then((url) => {
           if (!url) return;
           this.art.set(entry.id, url);
@@ -266,9 +277,11 @@ class App {
   private disconnect(): void {
     this.video?.close();
     this.video = null;
-    this.mgmt = null;
+    this.host = null;
     this.entries = [];
-    for (const url of this.art.values()) URL.revokeObjectURL(url);
+    for (const url of this.art.values()) {
+      if (url.startsWith("blob:")) URL.revokeObjectURL(url);
+    }
     this.art.clear();
     this.hostName = undefined;
     this.mod._pf_wt_close?.();

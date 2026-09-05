@@ -69,7 +69,7 @@ export interface PunktfunkModule {
    *  Installed by `pf_device_init` once the key is out of IndexedDB; absent before that. */
   __pfDevice?: {
     spki(): Promise<string>;
-    sign(message: Uint8Array<ArrayBuffer>): Promise<Uint8Array>;
+    sign(message: Uint8Array): Promise<Uint8Array>;
   };
   /** The device key is loaded and Rust holds its SPKI. Dial now, not before. */
   __pfOnDeviceReady?: () => void;

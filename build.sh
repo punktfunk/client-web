@@ -21,7 +21,8 @@ if [ "${1:-}" = "--release" ]; then profile="release"; cargo_profile=(--release)
 # `--js-library`. Everything else tsc emits is the page, copied into `dist/` at the end.
 echo "==> tsc"
 if [ ! -d "$here/node_modules" ]; then npm --prefix "$here" ci --silent || npm --prefix "$here" install --silent; fi
-npm --prefix "$here" run --silent build
+rm -rf "$here/build"
+npm --prefix "$here" run --silent build:glue
 
 command -v emcc >/dev/null || {
   echo "emcc not on PATH: source your emsdk's emsdk_env.sh first (README.md pins the version)" >&2
@@ -110,20 +111,18 @@ fi
 
 # --- Page -------------------------------------------------------------------------------------
 #
-# The emitted JS asks for the underscored wasm name rustc gave the linker; cargo only renames the
-# `.js`. Copy both under the names the module actually looks for.
-dist="$here/dist"
-mkdir -p "$dist"
-cp "$here/web/index.html" "$dist/"
-# The page's own modules, imported at runtime — everything tsc emitted except the glue, which
-# was linked into the wasm module above rather than fetched. Copied wholesale rather than by a
-# hand-kept list: a module missing from `dist` is a bare import failure with no other symptom.
-# `install -D` is GNU-only and fails on macOS, so the directories are made by hand.
-( cd "$here/build" && find . -name '*.js' ! -name 'pf-glue.js' | while read -r f; do
-    mkdir -p "$dist/$(dirname "$f")"
-    cp "$f" "$dist/$f"
-  done )
-cp "$target/wasm32-unknown-emscripten/$profile/punktfunk-client-web.js" "$dist/"
-cp "$target/wasm32-unknown-emscripten/$profile/punktfunk_client_web.wasm" "$dist/"
-echo "==> $dist"
-ls -la "$dist"
+# The wasm module is a static asset, not an input to the bundler: emscripten's glue is a
+# self-contained classic script that loads its own `.wasm` by a relative URL, and re-processing
+# it would break exactly that. So the two files go into `public/`, which Vite serves untouched,
+# and everything else — the app, the SDK, Effect — is bundled from source into `dist/`.
+#
+# The emitted JS asks for the underscored wasm name rustc gave the linker; cargo only renames
+# the `.js`. Both are copied under the names the module actually looks for.
+public="$here/public"
+mkdir -p "$public"
+cp "$target/wasm32-unknown-emscripten/$profile/punktfunk-client-web.js" "$public/"
+cp "$target/wasm32-unknown-emscripten/$profile/punktfunk_client_web.wasm" "$public/"
+echo "==> vite build"
+npm --prefix "$here" run --silent build:web
+echo "==> $here/dist"
+ls -la "$here/dist"

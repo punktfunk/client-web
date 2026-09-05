@@ -9,7 +9,7 @@
 // trust or the session lives in a renderer.
 
 import type { KnownHost } from "../pf-connect.ts";
-import type { LibraryEntry } from "../mgmt.ts";
+import type { LibraryEntry } from "../host.ts";
 
 /** Everything worth showing about a live session. */
 export interface SessionStats {

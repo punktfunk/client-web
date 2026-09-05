@@ -18,7 +18,7 @@
 // over the short-lived WebTransport hash, and `verify` refuses to dial a host that cannot produce
 // it.
 
-import { derToRaw, fromBase64, hexBytes, type Bytes } from "./ecdsa.ts";
+import { derToRaw, fromBase64, hexToBytes } from "@punktfunk/host/core";
 
 const CTX = "punktfunk-wt-cert-v1:";
 
@@ -106,13 +106,13 @@ export async function verify(plane: Plane, hostFingerprint: string): Promise<tru
     throw new Error("this host published no attestation, so a paired browser cannot dial it");
   }
   const der = fromBase64(plane.host_cert_der);
-  const seen = hex(new Uint8Array(await crypto.subtle.digest("SHA-256", der)));
+  const seen = hex(new Uint8Array(await crypto.subtle.digest("SHA-256", buffer(der))));
   if (seen !== hostFingerprint) {
     throw new Error("this is not the host that was paired with");
   }
   const key = await crypto.subtle.importKey(
     "spki",
-    spkiOf(der),
+    buffer(spkiOf(der)),
     { name: "ECDSA", namedCurve: "P-256" },
     false,
     ["verify"],
@@ -122,19 +122,23 @@ export async function verify(plane: Plane, hostFingerprint: string): Promise<tru
     key,
     // The host signs ASN.1 DER; WebCrypto verifies raw `r || s`, the same mismatch the client's
     // own signatures have in the other direction.
-    derToRaw(hexBytes(plane.cert_hash_sig)),
+    buffer(derToRaw(hexToBytes(plane.cert_hash_sig))),
     new TextEncoder().encode(CTX + plane.cert_hash_sha256),
   );
   if (!ok) throw new Error("the host's signature over its certificate hash does not verify");
   return true;
 }
 
+/** WebCrypto refuses a view over a `SharedArrayBuffer`, which is what a plain `Uint8Array`
+ *  type leaves open; this is the copy that makes the type say `ArrayBuffer`. */
+const buffer = (b: Uint8Array): Uint8Array<ArrayBuffer> => new Uint8Array(b);
+
 // The SubjectPublicKeyInfo inside an X.509 certificate.
 //
 // A P-256 SPKI is a fixed 91-byte shape, so finding its header is exact rather than a parse: the
 // SEQUENCE, both OIDs and the BIT STRING tag are all determined by the key type. Anything else
 // is not a certificate we can verify, which is the correct answer for a non-P-256 host.
-function spkiOf(der: Bytes): Bytes {
+function spkiOf(der: Uint8Array): Uint8Array {
   const header = [
     0x30, 0x59, 0x30, 0x13, 0x06, 0x07, 0x2a, 0x86, 0x48, 0xce, 0x3d, 0x02, 0x01, 0x06, 0x08,
     0x2a, 0x86, 0x48, 0xce, 0x3d, 0x03, 0x01, 0x07, 0x03, 0x42, 0x00,
@@ -193,5 +197,7 @@ export const hosts = {
  *  certificate, which is replaced every twelve days. */
 export async function hostFingerprint(plane: Plane): Promise<string | null> {
   if (!plane.host_cert_der) return null;
-  return hex(new Uint8Array(await crypto.subtle.digest("SHA-256", fromBase64(plane.host_cert_der))));
+  return hex(
+    new Uint8Array(await crypto.subtle.digest("SHA-256", buffer(fromBase64(plane.host_cert_der)))),
+  );
 }

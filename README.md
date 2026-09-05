@@ -54,14 +54,26 @@ the `wasm32-unknown-emscripten` Rust target.
 
 ```sh
 rustup target add wasm32-unknown-emscripten
-npm install
+npm install           # @punktfunk/host comes from the Gitea registry; .npmrc names the scope
 ./build.sh            # or --release
 ```
 
 The result is a servable directory in `dist/`. Serve it from anywhere; it is static.
 
-`build.sh` runs `tsc` first, because `build/pf-glue.js` is an **input** to the wasm link rather
-than an output beside it — emscripten reads it with `--js-library`.
+Three tools, each for what it is for. `tsc` runs first, because `build/pf-glue.js` is an
+**input** to the wasm link — emscripten reads it with `--js-library`. `cargo` builds the wasm.
+**Vite** bundles the page, the SDK and Effect from source; the two emscripten files are copied
+into `public/` and served untouched, because the glue is a self-contained classic script that
+loads its own `.wasm` by a relative URL and re-processing it would break exactly that.
+
+For development against a real host without accepting its certificate first:
+
+```sh
+PF_HOST=https://192.168.1.25:47990 npm run dev
+```
+
+The dev server answers `/api` on the page's own origin. Only the dev server does this — a built
+page talks to the host it was pointed at, cross-origin, as designed.
 
 ### Why Skia is built, not downloaded
 
@@ -94,8 +106,7 @@ Rust owns the protocol; TypeScript owns the browser. Nothing crosses that line b
 | `web/ui/shell.ts` | The web-native interface: DOM, pointer, touch, a text field. The default. |
 | `web/ui/console.ts` | The gamepad interface: `pf-console-ui` on a canvas, as on every other client. `?ui=console`. |
 | `web/pf-connect.ts` | Reaching a host, and checking its attestation before dialling. |
-| `web/mgmt.ts` | The management API: the device-key token exchange, then the library. |
-| `web/ecdsa.ts` | WebCrypto's raw `r \|\| s` against the DER the host speaks, both directions. |
+| `web/host.ts` | The management API **through `@punktfunk/host/core`**: the generated client on an `HttpClient` carrying the device credential. Effect stops at this file's edge. |
 | `web/video.ts` | `VideoDecoder` in, `VideoFrame` onto the plane. The only file that knows WebCodecs. |
 | `web/video-surface.ts` | The video plane, WebGL2. |
 | `web/video-surface-webgpu.ts` | The same seam on WebGPU — `importExternalTexture`, and the only HDR route either engine ships. |
@@ -136,11 +147,24 @@ renderer knows anything about pairing, trust or the session.
 stay DOM, and the canvas takes over once a session is live. That is honest about what a D-pad
 shell can and cannot do, and it is why adding the second interface cost one file.
 
-**The library grid is here.** It needed the management API, which a browser could not reach: that
-API takes a client certificate, and its bearer lane is loopback-only. The host now accepts the
-same device key this client pairs with — `POST /auth/device/challenge`, sign, exchange for a
-short-lived token — and that token reaches exactly the paired-certificate route set. `mgmt.ts` is
-that exchange; nothing else in the client holds a token.
+## The management API, done the way it is meant to be
+
+This client consumes the host's API through **[`@punktfunk/host`](https://git.unom.io/unom/punktfunk/src/branch/main/sdk)**,
+the SDK generated from the host's OpenAPI spec into Effect Schemas and a typed client. Nothing
+in `web/` names an API path or hand-writes a JSON shape: every operation is a method, every
+response is decoded through its Schema, and if the host's API changes this client finds out by
+failing to compile against the regenerated SDK. That is the whole reason to consume it rather
+than `fetch`.
+
+Authentication is the SDK's `deviceKey` credential: the host issues a nonce, the device key
+signs it bound to the host's own identity, and the exchange returns a short-lived token that the
+SDK's `HttpClient` layer attaches and re-earns on 401. The signing is never in this client either
+— the wasm glue hands over a `Signer` and keeps the non-extractable key.
+
+`/core` is the SDK entry with nothing Node in it, and a test in the SDK walks its import graph
+to keep it that way. Effect is used for what it is good at — the client, the schemas, the
+credential — and stops at `host.ts`: the app holds a plain `Screen` and neither renderer imports
+`effect`.
 
 ## Tests
 

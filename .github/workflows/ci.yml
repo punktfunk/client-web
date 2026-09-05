@@ -20,6 +20,8 @@ jobs:
         with:
           node-version: 24
           cache: npm
+      # `@punktfunk/host` comes from the Gitea npm registry (`.npmrc` names the scope). Reads
+      # are anonymous there, so no secret is needed to install.
       - run: npm ci
       - run: npm run check
       - run: npm test

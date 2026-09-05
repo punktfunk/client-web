@@ -8,7 +8,7 @@
 // Everything is built with `textContent`, never `innerHTML`: host names and error strings come
 // from the network and from the user.
 
-import type { LibraryEntry } from "../mgmt.ts";
+import type { LibraryEntry } from "../host.ts";
 import type { Actions, Screen, SessionStats, Ui } from "./types.ts";
 
 const el = <K extends keyof HTMLElementTagNameMap>(
