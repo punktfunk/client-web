@@ -43,6 +43,10 @@ class App {
   private entries: LibraryEntry[] = [];
   private readonly art = new Map<string, string>();
   private libraryFor: string | null = null;
+  /** Has the library been read yet? Not the same as "is it empty": a host with nothing in it
+   *  answers instantly with an empty list, and deriving the spinner from the entry count left
+   *  that host spinning for ever instead of saying so. */
+  private libraryLoaded = false;
   private hostName: string | undefined;
   private running: string | undefined;
   private statusTimer = 0;
@@ -236,6 +240,7 @@ class App {
   // --- the library ---------------------------------------------------------------------
   private async openLibrary(s: Extract<EngineState, { kind: "ready" }>): Promise<void> {
     this.libraryFor = s.origin;
+    this.libraryLoaded = false;
     this.entries = [];
     try {
       this.entries = [...(await s.host.library())];
@@ -249,8 +254,10 @@ class App {
       }
       // The stream still works without a library, so this is a line on the screen rather than a
       // dead end.
+      this.libraryLoaded = true;
       return this.redrawLibrary(s, e instanceof Error ? e.message : String(e));
     }
+    this.libraryLoaded = true;
     this.redrawLibrary(s);
     // The one thing worth refreshing while someone looks at the grid: what the host is running.
     // Polled, because the event stream is not on this browser's lane; five seconds is plenty.
@@ -292,7 +299,7 @@ class App {
       origin: s.origin,
       entries: this.entries,
       art: this.art,
-      busy: this.libraryFor === s.origin && this.entries.length === 0 && !error,
+      busy: this.libraryFor === s.origin && !this.libraryLoaded,
       ...(this.hostName ? { host: this.hostName } : {}),
       ...(this.running ? { running: this.running } : {}),
       ...(error ? { error: `${error} — you can still stream the desktop.` } : {}),
@@ -302,6 +309,7 @@ class App {
   private clearLibrary(): void {
     clearTimeout(this.statusTimer);
     this.libraryFor = null;
+    this.libraryLoaded = false;
     this.hostName = undefined;
     this.running = undefined;
     this.entries = [];

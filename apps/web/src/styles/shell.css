@@ -580,10 +580,12 @@ button:disabled {
   flex: 1;
 }
 
+/* Bottom-right, not top-right: the name is the widest thing on the card and the row it sits in
+ * is the one place these cannot go without covering it. */
 .host-slot .controls {
   position: absolute;
-  top: 0.6rem;
   right: 0.6rem;
+  bottom: 0.6rem;
   display: flex;
   gap: 0.2rem;
   opacity: 0;
