@@ -34,6 +34,8 @@ mod credential;
 #[cfg_attr(not(target_family = "wasm"), allow(dead_code))]
 mod ecdsa;
 #[cfg(target_family = "wasm")]
+mod audio;
+#[cfg(target_family = "wasm")]
 mod host;
 #[cfg(target_family = "wasm")]
 mod input;

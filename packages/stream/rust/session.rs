@@ -50,6 +50,9 @@ struct Client {
     /// `Welcome::host_caps`: what this host understands beyond the base wire (gamepad snapshots,
     /// text input). Input chooses its vocabulary by it.
     host_caps: u8,
+    /// `Welcome::audio_channels`: what the Opus frames carry. The page's decoder is configured
+    /// from it.
+    audio_channels: u8,
     /// Access units delivered, so the page can tell "connected" from "streaming".
     frames: u64,
 }
@@ -64,9 +67,16 @@ impl Client {
             width: 0,
             height: 0,
             host_caps: 0,
+            audio_channels: 0,
             frames: 0,
         }
     }
+}
+
+/// Channels in the negotiated audio plane; `0` before `Welcome`.
+#[unsafe(no_mangle)]
+pub extern "C" fn pf_session_audio_channels() -> u32 {
+    CLIENT.with(|c| u32::from(c.borrow().audio_channels))
 }
 
 /// Is a session up? Input is sent only then: the host reads it on the connection it admitted.
@@ -264,10 +274,12 @@ pub unsafe extern "C" fn pf_ctl_recv(ptr: *const u8, len: u32) {
 /// The host accepted: build the session the `Welcome` describes and say we are starting.
 fn on_welcome(c: &mut Client, welcome: Welcome) {
     let cfg = welcome.session_config(Role::Client);
+    crate::audio::reset();
     c.codec = welcome.codec;
     c.width = welcome.mode.width;
     c.height = welcome.mode.height;
     c.host_caps = welcome.host_caps;
+    c.audio_channels = welcome.audio_channels;
     match Session::new(cfg, Box::new(WebTransportDatagrams)) {
         Ok(session) => {
             c.session = Some(Box::new(session));

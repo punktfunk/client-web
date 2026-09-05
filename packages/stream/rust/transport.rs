@@ -110,6 +110,11 @@ pub extern "C" fn pf_rx_claim() -> i32 {
 }
 
 /// Publish the slot `pf_rx_claim` handed out. `len` is clamped to the slot.
+///
+/// Everything on the flow that is not video is demuxed here, by its first byte, before the slot
+/// is published: the session pump treats every ring entry as a sealed video datagram, and an
+/// audio frame handed to it would fail to open and vanish. Audio goes to [`crate::audio`] and
+/// the slot is reused.
 #[unsafe(no_mangle)]
 pub extern "C" fn pf_rx_commit(slot: i32, len: u32) {
     RING.with(|r| {
@@ -120,7 +125,13 @@ pub extern "C" fn pf_rx_commit(slot: i32, len: u32) {
         if slot >= RING_SLOTS || slot != r.head {
             return;
         }
-        r.lens[slot] = len.min(SLOT_BYTES as u32);
+        let len = len.min(SLOT_BYTES as u32) as usize;
+        let start = slot * SLOT_BYTES;
+        if len > 0 && crate::audio::is_audio(r.buf[start]) {
+            crate::audio::on_datagram(&r.buf[start..start + len]);
+            return;
+        }
+        r.lens[slot] = len as u32;
         r.head = (r.head + 1) % RING_SLOTS;
     });
 }

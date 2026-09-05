@@ -33,6 +33,10 @@ export interface PunktfunkModule {
   /** `0` idle, `1` offered, `2` live, `3` failed. */
   _pf_session_phase(): number;
   _pf_session_frames(): number;
+  /** Channels in the negotiated audio plane; `0` before `Welcome`. */
+  _pf_session_audio_channels(): number;
+  _pf_audio_frames(): number;
+  _pf_audio_lost(): number;
 
   // --- the device credential ---------------------------------------------------------------
   _pf_device_init(hashPtr: number): number;
@@ -92,6 +96,8 @@ export interface PunktfunkModule {
   __pfOnVideoConfig?: (codec: number, width: number, height: number) => void;
   /** One access unit. The bytes are copied out of wasm memory before this is called. */
   __pfOnAccessUnit?: (data: Uint8Array, ptsUs: number, key: boolean) => void;
+  /** One Opus frame, in order, for the page's decoder. */
+  __pfOnAudioFrame?: (data: Uint8Array, seq: number, ptsNs: number) => void;
 }
 
 declare global {
