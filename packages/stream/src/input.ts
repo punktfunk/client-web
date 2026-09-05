@@ -177,30 +177,20 @@ export class InputPipe {
   private pointer(e: PointerEvent, phase: "down" | "move" | "up"): void {
     if (e.pointerType === "touch") return this.touch(e, phase);
     e.preventDefault();
-    if (phase === "down") {
-      this.canvas.focus();
-      // A locked pointer is what a game wants; a desktop is fine without. The first click
-      // asks, and a browser that refuses (or a user who leaves with Escape) gets absolute moves.
-      if (document.pointerLockElement !== this.canvas) this.canvas.requestPointerLock?.();
-    }
+    if (phase === "down") this.canvas.focus();
+    // Absolute: the local cursor maps onto the remote one, which is what a desktop wants — the
+    // pointer tracks on hover, no click needed. Relative capture (pointer lock) for games with
+    // mouselook is a deliberate mode to add on top, not the default.
     if (phase === "move") {
-      if (document.pointerLockElement === this.canvas) {
-        if (e.movementX || e.movementY) {
-          this.mod._pf_input(KIND.MOUSE_MOVE, 0, e.movementX, e.movementY, 0);
-        }
-      } else {
-        const [x, y] = this.stream(e);
-        this.mod._pf_input(KIND.MOUSE_MOVE_ABS, 0, x, y, this.extent());
-      }
+      const [x, y] = this.stream(e);
+      this.mod._pf_input(KIND.MOUSE_MOVE_ABS, 0, x, y, this.extent());
       return;
     }
     const button = MOUSE_BUTTON[e.button];
     if (button === undefined) return;
-    if (document.pointerLockElement !== this.canvas) {
-      // Absolute mode: put the pointer where the click is before the click lands.
-      const [x, y] = this.stream(e);
-      this.mod._pf_input(KIND.MOUSE_MOVE_ABS, 0, x, y, this.extent());
-    }
+    // Put the pointer where the click is before the click lands.
+    const [x, y] = this.stream(e);
+    this.mod._pf_input(KIND.MOUSE_MOVE_ABS, 0, x, y, this.extent());
     this.mod._pf_input(phase === "down" ? KIND.MOUSE_BUTTON_DOWN : KIND.MOUSE_BUTTON_UP, button, 0, 0, 0);
   }
 
