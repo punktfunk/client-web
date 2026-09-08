@@ -11,7 +11,8 @@
     "build": "npm run build -w @punktfunk/stream && npm run build -w punktfunk-web",
     "check": "npm run check --workspaces",
     "test": "npm run test --workspaces --if-present",
-    "dev": "npm run dev -w punktfunk-web"
+    "dev": "npm run dev -w punktfunk-web",
+    "storybook": "npm run storybook -w punktfunk-web"
   },
   "devDependencies": {
     "typescript": "^5.9.3"
