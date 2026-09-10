@@ -150,7 +150,7 @@ export interface StreamOptions {
   height: number;
   fps?: number;
   bitrateKbps?: number;
-  /** What the host should launch. Not carried to the host yet — see `startStream`. */
+  /** What the host should launch. Its `id` goes on the wire; unset streams the desktop. */
   launch?: LibraryEntry;
 }
 
