@@ -71,7 +71,12 @@ const noop: Actions = {
 
 function Shell({ shell }: { shell: WebShell }): JSX.Element {
   const screen = useSyncExternalStore(shell.subscribe, shell.snapshot);
-  const actions = shell.act;
+  return <ShellFrame screen={screen} actions={shell.act} />;
+}
+
+/** The whole interface for one `Screen`: the layout, the live region, the screen itself.
+ *  Exported so Storybook can draw a screen exactly as the page does, with no `WebShell` behind it. */
+export function ShellFrame({ screen, actions }: { screen: Screen; actions: Actions }): JSX.Element {
   const kind = screen.kind;
   // Streaming is the one screen that must not cover the picture: no centring, and transparent
   // to the pointer except where the HUD itself is. The lists own the full viewport rather than
