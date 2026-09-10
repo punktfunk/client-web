@@ -54,6 +54,8 @@ why Skia is built from source here.
 
 ## Not yet
 
-- Launching a title: `startStream({ launch })` is accepted and reported, not carried. `Hello`
-  has the field on the wire; the wasm side does not take it yet.
-- Audio and gamepad input.
+- The microphone: host → browser audio plays, browser → host is the same plane the other way
+  (`0xCB`) and is not written.
+- Latency and packet loss on `SessionStats`. The fields are there; only decoder drops are filled
+  in.
+- Codec and HDR, both pinned in `rust/session.rs` — choosing either needs the wire, not an option.
