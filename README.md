@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="apps/web/public/punktfunk-logo.svg" alt="punktfunk" width="300" />
+  <img src="assets/logo/logo-sidebar.png" alt="punktfunk" width="300">
 </p>
 
 <p align="center">
@@ -24,10 +24,10 @@ never enters the wasm heap.
 💬 [Discord](https://discord.gg/kaPNvzMuGU) · 🔒 Vulnerabilities go privately to
 **security@punktfunk.com**, not to an issue.
 
-Built on the [punktfunk](https://git.unom.io/unom/punktfunk) project by **Enrico Bühler
-([unom](https://unom.io))** — the protocol, the FEC/crypto core and the host belong there. This
-repo is the browser half, and it reimplements none of it: handshake, FEC, decrypt, reassembly and
-the SPAKE2 pairing ceremony are `punktfunk-core`'s, a pinned git dependency, compiled to wasm.
+The protocol is not reimplemented anywhere here: handshake, FEC, decrypt, reassembly and the
+SPAKE2 pairing ceremony are [`punktfunk-core`](https://git.unom.io/unom/punktfunk)'s, a pinned git
+dependency compiled to wasm. The management API is consumed through the SDK generated from the
+host's own OpenAPI spec.
 
 ## What ships
 
