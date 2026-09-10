@@ -25,6 +25,9 @@ jobs:
       - run: npm ci
       - run: npm run check
       - run: npm test
+      # The screens as Storybook renders them, without the wasm: the stories never start the
+      # engine, so this proves the shell and its fixtures on every push.
+      - run: npm run build-storybook -w punktfunk-web
 
   # The Rust half that does not need emscripten: the credential ceremony and the signature
   # encodings. These are the pieces where the client and the host can disagree silently, which
