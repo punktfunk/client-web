@@ -57,7 +57,6 @@ class App {
   private probing = false;
   /** The settings sheet renders over whatever is showing, so it is a flag rather than a state. */
   private settingsOpen = false;
-  private diagnostics = false;
   private prefs: Settings = settings.get();
   private resizeTimer = 0;
 
@@ -101,9 +100,10 @@ class App {
         const s = engine.current;
         engine.capturePointer(s.kind === "streaming" ? !s.stats.pointerCaptured : true);
       },
+      // The dot opens the overlay at the tier settings start from, or Normal when that is off.
       showDiagnostics: (on) => {
-        this.diagnostics = on;
-        this.render(engine.current);
+        const start = this.prefs.statsTier;
+        engine.setStatsTier(on ? (start === "off" ? "normal" : start) : "off");
       },
     });
     this.applyPrefs();
@@ -174,7 +174,7 @@ class App {
         return this.show({
           kind: "streaming",
           stats: { origin: s.origin, ...s.stats },
-          diagnostics: this.diagnostics,
+          diagnostics: s.stats.statsTier !== "off",
         });
       case "error":
         return this.show({
@@ -329,6 +329,8 @@ class App {
       captureInput: this.prefs.captureInput,
       pointer: this.prefs.pointer,
       deadzone: this.prefs.deadzone,
+      statsTier: this.prefs.statsTier,
+      advancedStats: this.prefs.advancedStats,
     });
   }
 

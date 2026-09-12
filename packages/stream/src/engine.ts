@@ -19,6 +19,7 @@ import * as pf from "./pf-connect.ts";
 import { decodeSupported, VideoPipe } from "./video.ts";
 import { InputPipe } from "./input.ts";
 import { AudioPipe, type AudioSnapshot } from "./audio.ts";
+import { STATS_TIERS, type StatsTier } from "./settings.ts";
 
 export type { AudioSnapshot, AudioState } from "./audio.ts";
 export type { HostInfo, HostStatus, LibraryEntry } from "./host.ts";
@@ -35,6 +36,14 @@ const CLOSE = { PAIR_DENIED: 0x64, ACCESS_EXPIRED: 0x69, HOST_POWER: 0x6b } as c
  *  closes the session without a message, so nothing else says so. */
 const OFFERED_GRACE_MS = 5000;
 
+/** One stats-overlay line. `role` is how to paint it: headline, breakdown, aside or warning. */
+export interface HudLine {
+  role: "primary" | "detail" | "muted" | "warn";
+  text: string;
+}
+const ROLES: readonly HudLine["role"][] = ["primary", "detail", "muted", "warn"];
+const UTF8 = new TextDecoder();
+
 export interface SessionStats {
   width: number;
   height: number;
@@ -50,6 +59,9 @@ export interface SessionStats {
   audio: AudioSnapshot;
   /** Is the pointer locked to the video canvas? Only ever true in `capture` mode. */
   pointerCaptured: boolean;
+  /** The stats overlay at this session's tier, one entry per line. Empty at `off`. */
+  hud: HudLine[];
+  statsTier: StatsTier;
 }
 
 /**
@@ -106,6 +118,10 @@ export interface TunableOptions {
   pointer: "absolute" | "capture";
   /** Stick travel below this is rest, 0–1. */
   deadzone: number;
+  /** The overlay tier a session starts at; Ctrl+Alt+Shift+S cycles it for that session. */
+  statsTier: StatsTier;
+  /** The overlay's Advanced vocabulary instead of the figures Moonlight shows. Applies at once. */
+  advancedStats: boolean;
 }
 
 const TUNABLE_DEFAULTS: TunableOptions = {
@@ -114,6 +130,8 @@ const TUNABLE_DEFAULTS: TunableOptions = {
   captureInput: true,
   pointer: "absolute",
   deadzone: 0.05,
+  statsTier: "off",
+  advancedStats: false,
 };
 
 export interface EngineOptions {
@@ -137,6 +155,8 @@ export interface EngineOptions {
    *  [`Engine.configure`]. */
   readonly pointer?: "absolute" | "capture";
   readonly deadzone?: number;
+  readonly statsTier?: StatsTier;
+  readonly advancedStats?: boolean;
   /**
    * Where to dial the WebTransport plane, when it is not the management origin's hostname.
    * The one case: a dev server proxying `/api` to a host on the LAN — the API answers on
@@ -172,6 +192,10 @@ export class Engine {
   private inputSize = { width: 0, height: 0 };
   private tunable: TunableOptions = TUNABLE_DEFAULTS;
   private fps = 0;
+  /** This session's overlay tier and its last lines; `dropped` as of the last window. */
+  private tier: StatsTier = TUNABLE_DEFAULTS.statsTier;
+  private hud: HudLine[] = [];
+  private lastDropped = 0;
   private running = true;
   /** A PIN given while the connection was down, sent when the next control stream opens. */
   private pendingPin: string | null = null;
@@ -186,6 +210,8 @@ export class Engine {
       captureInput: opts.captureInput ?? TUNABLE_DEFAULTS.captureInput,
       pointer: opts.pointer ?? TUNABLE_DEFAULTS.pointer,
       deadzone: opts.deadzone ?? TUNABLE_DEFAULTS.deadzone,
+      statsTier: opts.statsTier ?? TUNABLE_DEFAULTS.statsTier,
+      advancedStats: opts.advancedStats ?? TUNABLE_DEFAULTS.advancedStats,
     };
     mod.__pfOnDeviceReady = () => this.dial();
     mod.__pfOnCtlReady = () => this.onControlStream();
@@ -320,6 +346,9 @@ export class Engine {
     if (!this.origin || this.state.kind !== "ready") return;
     this.video ??= new VideoPipe(this.mod, this.opts.videoCanvas, this.tunable.videoBackend);
     this.video.attach();
+    this.tier = this.tunable.statsTier;
+    this.hud = [];
+    this.lastDropped = 0;
     this.set({ kind: "starting", origin: this.origin });
     const id = opts.launch?.id ?? "";
     withStr(this.mod, [id], (p, len) =>
@@ -333,8 +362,38 @@ export class Engine {
    * session starts, because both own a pipeline that cannot be swapped under a running decoder.
    */
   configure(next: Partial<TunableOptions>): void {
-    this.tunable = { ...this.tunable, ...next };
+    const was = this.tunable;
+    this.tunable = { ...was, ...next };
     this.input?.tune({ pointer: this.tunable.pointer, deadzone: this.tunable.deadzone });
+    // A tier picked in settings mid-stream replaces whatever the chord left.
+    if (this.tunable.statsTier !== was.statsTier) this.tier = this.tunable.statsTier;
+    this.hud = this.readHud();
+  }
+
+  /** This session's overlay tier; `off` hides it. The next stream starts from settings again. */
+  setStatsTier(tier: StatsTier): void {
+    this.tier = tier;
+    this.hud = this.readHud();
+  }
+
+  /** Off → Compact → Normal → Detailed → Off, for this session. */
+  cycleStats(): void {
+    this.setStatsTier(STATS_TIERS[(STATS_TIERS.indexOf(this.tier) + 1) % STATS_TIERS.length] ?? "off");
+  }
+
+  /** The last closed window as lines, at this session's tier and vocabulary. */
+  private readHud(): HudLine[] {
+    const len = this.mod._pf_hud_text(STATS_TIERS.indexOf(this.tier), this.tunable.advancedStats ? 1 : 0);
+    if (!len) return [];
+    const ptr = this.mod._pf_hud_text_ptr();
+    const text = UTF8.decode(this.mod.HEAPU8.subarray(ptr, ptr + len));
+    return text
+      .split("\n")
+      .filter(Boolean)
+      .map((line) => {
+        const tab = line.indexOf("\t");
+        return { role: ROLES[Number(line.slice(0, tab))] ?? "primary", text: line.slice(tab + 1) };
+      });
   }
 
   /** What the engine is currently tuned to. */
@@ -572,6 +631,7 @@ export class Engine {
         streamHeight: v.height,
         pointer: this.tunable.pointer,
         deadzone: this.tunable.deadzone,
+        onStatsChord: () => this.cycleStats(),
       });
       this.input.attach();
     }
@@ -597,6 +657,11 @@ export class Engine {
       this.fps = Math.round(((frames - this.lastFrames) * 1000) / (now - this.lastSecond));
       this.lastFrames = frames;
       this.lastSecond = now;
+      // The overlay's window closes on the same second; frames replaced before drawing are skips.
+      const dropped = v?.dropped ?? 0;
+      this.mod._pf_hud_drain(Math.max(0, dropped - this.lastDropped));
+      this.lastDropped = dropped;
+      this.hud = this.readHud();
     }
     this.set({
       kind: "streaming",
@@ -612,6 +677,8 @@ export class Engine {
         audio: this.audio?.snapshot() ?? { state: "off", frames: 0, lost: 0, errors: 0, underruns: 0 },
         backend: v?.backend ?? null,
         pointerCaptured: this.input?.captured ?? false,
+        hud: this.hud,
+        statsTier: this.tier,
       },
     });
   }

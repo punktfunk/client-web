@@ -103,6 +103,34 @@ export function SettingsDialog({ screen, actions }: { screen: Extract<Screen, { 
           onValueChange={(n) => set({ deadzone: n / 100 })}
         />
 
+        <Field label="Statistics overlay" htmlFor="pf-stats">
+          <Select value={v.statsTier} onValueChange={(value) => set({ statsTier: value as Settings["statsTier"] })}>
+            <SelectTrigger id="pf-stats"><SelectValue /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="off">Off</SelectItem>
+              <SelectItem value="compact">Compact</SelectItem>
+              <SelectItem value="normal">Normal</SelectItem>
+              <SelectItem value="detailed">Detailed</SelectItem>
+            </SelectContent>
+          </Select>
+        </Field>
+
+        <Toggle
+          id="pf-advanced-stats"
+          label="Advanced statistics"
+          hint="Off shows the figures Moonlight's overlay also shows. On shows capture to glass as p50/p95 and every stage between."
+          on={v.advancedStats}
+          onChange={(on) => set({ advancedStats: on })}
+        />
+        <a
+          href="https://docs.punktfunk.unom.io/docs/stats"
+          target="_blank"
+          rel="noreferrer"
+          className="-mt-2 text-xs text-muted-foreground underline"
+        >
+          What each number means
+        </a>
+
         <Toggle id="pf-audio" label="Play the host's audio" on={v.audio} onChange={(on) => set({ audio: on })} />
         <Toggle id="pf-input" label="Send keyboard, mouse and gamepads" on={v.captureInput} onChange={(on) => set({ captureInput: on })} />
         <Toggle

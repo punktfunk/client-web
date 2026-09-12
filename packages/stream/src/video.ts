@@ -12,6 +12,10 @@ import type { PunktfunkModule } from "./emscripten.ts";
 import { VideoSurface, type VideoPlane } from "./video-surface.ts";
 import { VideoSurfaceWebGPU } from "./video-surface-webgpu.ts";
 
+/** Unix ms from `Date.now()`, the clock the engine's receipt stamps come from, so the overlay's
+ *  decode and display stages subtract like for like. */
+const unixMs = (): number => Date.now();
+
 /** Wire codec ids, as `Welcome` carries them. */
 const CODEC_H264 = 1;
 const CODEC_HEVC = 2;
@@ -64,6 +68,8 @@ export class VideoPipe {
   private plane: VideoPlane | null = null;
   private backend: "webgpu" | "webgl2" | null = null;
   private pending: VideoFrame | null = null;
+  /** When `pending` left the decoder, for the overlay's display stage. */
+  private pendingDecodedMs = 0;
   private stats: VideoStats = {
     submitted: 0,
     decoded: 0,
@@ -147,11 +153,14 @@ export class VideoPipe {
   // than queued. Presenting happens on the page's own rAF, which is where pacing belongs.
   private onFrame(frame: VideoFrame): void {
     this.stats.decoded++;
+    const at = unixMs();
+    this.mod._pf_hud_decoded(frame.timestamp, at);
     if (this.pending) {
       this.pending.close();
       this.stats.dropped++;
     }
     this.pending = frame;
+    this.pendingDecodedMs = at;
   }
 
   /** Draw whatever the decoder has produced. Called once per `requestAnimationFrame`. */
@@ -161,6 +170,7 @@ export class VideoPipe {
     this.pending = null;
     try {
       this.plane.present(frame);
+      this.mod._pf_hud_presented(frame.timestamp, this.pendingDecodedMs, unixMs());
     } finally {
       // The plane borrows the frame for the call and no longer: closing here is what keeps the
       // decoder from stalling on outstanding frames.

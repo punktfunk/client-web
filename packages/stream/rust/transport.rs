@@ -131,6 +131,11 @@ pub extern "C" fn pf_rx_commit(slot: i32, len: u32) {
             crate::audio::on_datagram(&r.buf[start..start + len]);
             return;
         }
+        // The host's per-frame timing rides the same plane; it feeds the stats overlay.
+        if len > 0 && r.buf[start] == punktfunk_core::quic::HOST_TIMING_MAGIC {
+            crate::session::on_host_timing(&r.buf[start..start + len]);
+            return;
+        }
         r.lens[slot] = len as u32;
         r.head = (r.head + 1) % RING_SLOTS;
     });

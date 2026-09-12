@@ -1,6 +1,7 @@
 // The overlay over a live picture. Out of the way by default — this is the screen someone came
 // for — and brought back by a pointer, a key or a tap, then hidden again.
 
+import type { HudLine } from "@punktfunk/stream";
 import { Badge } from "@unom/ui/badge";
 import { cn } from "@unom/ui/lib/utils";
 import { type JSX, useEffect, useState } from "react";
@@ -99,38 +100,38 @@ export function Hud({ screen, actions }: { screen: Extract<Screen, { kind: "stre
   );
 }
 
-/** The numbers behind the dot, in a fixed two-column list so nothing jumps as the counters
- *  tick. Everything here is already counted by the engine; this is the panel that stops "it
- *  feels bad" from being the only report anyone can make. */
+/** How each overlay role reads: headline, breakdown, aside, warning. */
+const ROLE_CLASS: Record<HudLine["role"], string> = {
+  primary: "text-foreground",
+  detail: "text-foreground/80",
+  muted: "text-muted-foreground",
+  warn: "text-amber-500",
+};
+
+/** The stats overlay every client draws, in this session's tier and vocabulary, then what only a
+ *  browser measures. Lines come from the engine formatted; this panel only paints them. */
 function Diagnostics({ stats: s }: { stats: SessionStats }): JSX.Element {
-  const pct = (n: number, of: number) => (of > 0 ? `${((n / of) * 100).toFixed(2)}%` : "—");
-  const rows: [string, string][] = [
-    ["Resolution", s.width ? `${s.width}×${s.height}` : "—"],
-    ["Frame rate", `${s.fps} fps`],
-    ["Video plane", s.backend ?? "—"],
-    ["Upload", `${s.uploadMs.toFixed(2)} ms`],
-    ["Access units", s.accessUnits.toLocaleString()],
-    ["Decoded", s.decoded.toLocaleString()],
-    ["Dropped", `${s.dropped.toLocaleString()} (${pct(s.dropped, s.decoded + s.dropped)})`],
-    ["Audio", s.audio.state],
-    ["Audio frames", s.audio.frames.toLocaleString()],
-    ["Audio lost", s.audio.lost.toLocaleString()],
-    ["Underruns", s.audio.underruns.toLocaleString()],
-    ["Audio errors", s.audio.errors.toLocaleString()],
-  ];
+  const lines = s.hud ?? [];
+  const browser = [
+    s.backend ?? "",
+    s.uploadMs ? `upload ${s.uploadMs.toFixed(2)} ms` : "",
+    `audio ${s.audio.state}`,
+    s.audio.underruns ? `${s.audio.underruns.toLocaleString()} underruns` : "",
+  ]
+    .filter(Boolean)
+    .join(" · ");
   return (
     <Card
-      aria-label="Diagnostics"
-      className="pointer-events-auto fixed top-[calc(3.5rem+var(--pf-inset))] right-inset max-h-[60dvh] w-[min(22rem,calc(100vw-2*var(--pf-inset)))] overflow-y-auto px-5 py-4"
+      aria-label="Statistics"
+      className="pointer-events-auto fixed top-[calc(3.5rem+var(--pf-inset))] right-inset max-h-[60dvh] w-[min(34rem,calc(100vw-2*var(--pf-inset)))] overflow-y-auto px-5 py-4 font-mono text-sm leading-relaxed"
     >
-      <dl className="m-0 grid gap-x-4 gap-y-1.5">
-        {rows.map(([k, v]) => (
-          <div key={k} className="grid grid-cols-[1fr_auto] items-baseline gap-4">
-            <dt className="text-sm text-muted-foreground">{k}</dt>
-            <dd className="m-0 text-right font-mono text-sm tabular-nums">{v}</dd>
-          </div>
-        ))}
-      </dl>
+      {lines.map((l, i) => (
+        // Lines have no identity beyond their place in the list.
+        <div key={i} className={cn("break-words", ROLE_CLASS[l.role])}>
+          {l.text}
+        </div>
+      ))}
+      <div className="mt-2 text-xs text-muted-foreground">{browser}</div>
     </Card>
   );
 }

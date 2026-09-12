@@ -9,11 +9,12 @@ export {
   Engine,
   type EngineOptions,
   type EngineState,
+  type HudLine,
   type SessionStats,
   type StreamOptions,
   type TunableOptions,
 } from "./engine.ts";
-export { DEFAULTS, settings, type Settings } from "./settings.ts";
+export { DEFAULTS, settings, type Settings, type StatsTier } from "./settings.ts";
 export type { AudioSnapshot, AudioState } from "./audio.ts";
 export { Host, type HostInfo, type HostStatus, type LibraryEntry, VersionSkew } from "./host.ts";
 export { hosts, originOf, reach, type KnownHost, type Plane, type Reach } from "./pf-connect.ts";

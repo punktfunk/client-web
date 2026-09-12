@@ -16,12 +16,18 @@
 use crate::credential;
 use crate::transport::WebTransportDatagrams;
 use punktfunk_core::config::{CompositorPref, GamepadPref, Mode, Role};
+use punktfunk_core::hud::{self, StatsSnapshot, StatsVerbosity};
 use punktfunk_core::quic::{
     AuthChallenge, Hello, PairChallenge, PairResult, Reconfigure, Reconfigured, Refused, Start,
     Welcome, MAGIC,
 };
 use punktfunk_core::session::Session;
 use std::cell::RefCell;
+use std::collections::VecDeque;
+use std::sync::{atomic::AtomicI64, Arc};
+
+/// Receipt stamps kept for timing a decode: about 2 s of frames at 120 Hz.
+const RECEIPTS: usize = 256;
 
 /// How far the handshake has got. A browser cannot block, so the client is a state machine the
 /// page steps rather than an `async fn`.
@@ -56,6 +62,21 @@ struct Client {
     audio_channels: u8,
     /// Access units delivered, so the page can tell "connected" from "streaming".
     frames: u64,
+    /// The stats overlay's window. No clock handshake runs in a browser, so its offset stays
+    /// zero and every capture-anchored figure carries the same-host tag.
+    hud: hud::Stats,
+    /// Receipt stamps by pts in whole µs (what `VideoFrame.timestamp` hands back), so a decoded
+    /// frame is timed from its arrival.
+    receipts: VecDeque<(u64, u64)>,
+    /// The refresh `Hello` asked for, which the overlay names.
+    fps: u32,
+    /// The last closed window, and its lines as last asked for.
+    snap: Option<StatsSnapshot>,
+    text: String,
+}
+
+fn new_hud() -> hud::Stats {
+    hud::Stats::new(Arc::new(AtomicI64::new(0)))
 }
 
 impl Client {
@@ -70,6 +91,11 @@ impl Client {
             host_caps: 0,
             audio_channels: 0,
             frames: 0,
+            hud: new_hud(),
+            receipts: VecDeque::with_capacity(RECEIPTS),
+            fps: 0,
+            snap: None,
+            text: String::new(),
         }
     }
 }
@@ -103,6 +129,10 @@ pub extern "C" fn pf_session_reset() {
         c.height = 0;
         c.host_caps = 0;
         c.audio_channels = 0;
+        c.hud = new_hud();
+        c.receipts.clear();
+        c.snap = None;
+        c.text.clear();
     });
     crate::audio::reset();
 }
@@ -114,7 +144,7 @@ pub extern "C" fn pf_session_reset() {
 #[unsafe(no_mangle)]
 pub extern "C" fn pf_session_reconfigure(width: u32, height: u32, fps: u32) {
     CLIENT.with(|c| {
-        let mut c = c.borrow_mut();
+        let c = c.borrow();
         if c.phase != Phase::Live || (c.width == width && c.height == height) {
             return;
         }
@@ -218,7 +248,9 @@ pub unsafe extern "C" fn pf_session_hello(
             launch,
             // `STREAMED_AU` is deliberately absent: slice-progressive delivery hands over pieces
             // of an access unit, and `VideoDecoder` wants whole ones.
-            video_caps: punktfunk_core::quic::VIDEO_CAP_PROBE_SEQ,
+            // `HOST_TIMING`: the host's own share of each frame, which the overlay reports.
+            video_caps: punktfunk_core::quic::VIDEO_CAP_PROBE_SEQ
+                | punktfunk_core::quic::VIDEO_CAP_HOST_TIMING,
             audio_channels: 2,
             // H.264 only for now: it is what a GPU-less host can encode, and what every engine
             // decodes. HEVC and AV1 wait until there is a stream to test them against.
@@ -229,8 +261,10 @@ pub unsafe extern "C" fn pf_session_hello(
             max_shard_payload: punktfunk_core::config::max_shard_payload() as u16,
             audio_rate_hz: 0,
             audio_bits: 0,
+            audio_layout: punktfunk_core::audio::AudioLayout::Legacy.wire(),
         };
         write_msg(&hello.encode());
+        c.fps = fps;
         c.phase = Phase::Offered;
         1
     })
@@ -387,8 +421,16 @@ pub extern "C" fn pf_session_pump() -> u32 {
         if c.phase != Phase::Live {
             return 0;
         }
-        let codec = c.codec;
-        let Some(session) = c.session.as_mut() else {
+        let Client {
+            session,
+            hud,
+            receipts,
+            codec,
+            frames,
+            ..
+        } = &mut *c;
+        let codec = *codec;
+        let Some(session) = session.as_mut() else {
             return 0;
         };
         let mut delivered = 0;
@@ -398,6 +440,11 @@ pub extern "C" fn pf_session_pump() -> u32 {
             if frame.data.is_empty() {
                 break;
             }
+            hud.note_received(frame.pts_ns, frame.received_ns, frame.data.len(), true);
+            if receipts.len() >= RECEIPTS {
+                receipts.pop_front();
+            }
+            receipts.push_back((frame.pts_ns / 1000, frame.received_ns));
             let key = i32::from(is_keyframe(&frame.data, codec));
             // SAFETY: the page reads `len` bytes at `ptr` and returns before this does; `frame`
             // owns the buffer for the whole call. R3: what crosses is the encoded access unit,
@@ -415,9 +462,96 @@ pub extern "C" fn pf_session_pump() -> u32 {
                 break; // a burst this large means the page is behind; let it draw.
             }
         }
-        c.frames += u64::from(delivered);
+        *frames += u64::from(delivered);
         delivered
     })
+}
+
+/// Unix ms from the page's `Date.now()`, the clock `SystemTime` reads here, as ns.
+fn ms_to_ns(ms: f64) -> u64 {
+    if ms.is_finite() && ms > 0.0 {
+        (ms * 1e6) as u64
+    } else {
+        0
+    }
+}
+
+/// The page's decoder produced the frame stamped `pts_us` at `decoded_ms`.
+#[unsafe(no_mangle)]
+pub extern "C" fn pf_hud_decoded(pts_us: f64, decoded_ms: f64) {
+    let key = pts_us as u64;
+    let decoded_ns = ms_to_ns(decoded_ms);
+    CLIENT.with(|c| {
+        let c = c.borrow();
+        c.hud.note_decoded(key * 1000, decoded_ns);
+        if let Some(&(_, received_ns)) = c.receipts.iter().rev().find(|(p, _)| *p == key) {
+            c.hud
+                .note_decode_us(decoded_ns.saturating_sub(received_ns) / 1000, false);
+        }
+    });
+}
+
+/// The page drew the frame stamped `pts_us`: decoded at `decoded_ms`, drawn at `presented_ms`.
+#[unsafe(no_mangle)]
+pub extern "C" fn pf_hud_presented(pts_us: f64, decoded_ms: f64, presented_ms: f64) {
+    CLIENT.with(|c| {
+        let key = pts_us as u64;
+        c.borrow()
+            .hud
+            .note_displayed(key * 1000, ms_to_ns(decoded_ms), 0, ms_to_ns(presented_ms));
+    });
+}
+
+/// Close the overlay window. `skipped`: frames the page decoded and replaced before drawing.
+#[unsafe(no_mangle)]
+pub extern "C" fn pf_hud_drain(skipped: u32) {
+    CLIENT.with(|c| {
+        let mut c = c.borrow_mut();
+        c.hud.note_skipped(skipped, 0);
+        let counters = c.session.as_ref().map_or_else(hud::Counters::default, |s| {
+            let st = s.stats();
+            hud::Counters {
+                frames_dropped: st.frames_dropped,
+                fec_recovered: st.fec_recovered_shards,
+                ..hud::Counters::default()
+            }
+        });
+        let mut snap = c.hud.drain(&counters);
+        (snap.width, snap.height, snap.refresh_hz) = (c.width, c.height, c.fps);
+        snap.codec = hud::codec_label(c.codec).into();
+        snap.decoder = "WebCodecs".into();
+        c.snap = Some(snap);
+    });
+}
+
+/// The last window as overlay lines (`<role>\t<text>\n` each) for `tier` (`StatsVerbosity`
+/// index) and vocabulary. Returns the byte length; [`pf_hud_text_ptr`] points at the bytes until
+/// the next call.
+#[unsafe(no_mangle)]
+pub extern "C" fn pf_hud_text(tier: u32, advanced: u32) -> u32 {
+    CLIENT.with(|c| {
+        let mut c = c.borrow_mut();
+        let tier = StatsVerbosity::from_index(tier);
+        c.text = c
+            .snap
+            .as_ref()
+            .map(|s| hud::encode_lines(&hud::format(s, tier, advanced != 0)))
+            .unwrap_or_default();
+        u32::try_from(c.text.len()).unwrap_or(0)
+    })
+}
+
+/// See [`pf_hud_text`].
+#[unsafe(no_mangle)]
+pub extern "C" fn pf_hud_text_ptr() -> *const u8 {
+    CLIENT.with(|c| c.borrow().text.as_ptr())
+}
+
+/// One per-frame host timing datagram (0xCF): the host's own share, for the overlay.
+pub fn on_host_timing(datagram: &[u8]) {
+    if let Some(t) = punktfunk_core::quic::decode_host_timing_datagram(datagram) {
+        CLIENT.with(|c| c.borrow().hud.note_host_timing(&t));
+    }
 }
 
 /// Access units delivered so far — the page's "is it actually streaming" check.

@@ -471,6 +471,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "cros-codecs"
+version = "0.0.5"
+source = "git+https://git.unom.io/unom/punktfunk?rev=31d52f34d#31d52f34d6205609763594afc49179ee87a2931a"
+dependencies = [
+ "log",
+]
+
+[[package]]
 name = "crypto-common"
 version = "0.1.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -644,7 +652,7 @@ checksum = "da7c62ceae207dd37ea5b845da6a0696c799f85e97da1ab5b7910be3c1c80223"
 [[package]]
 name = "fec-rs"
 version = "0.1.0"
-source = "git+https://git.unom.io/unom/punktfunk?rev=efd6d064c407d0a388e39fac717d135929a1fefa#efd6d064c407d0a388e39fac717d135929a1fefa"
+source = "git+https://git.unom.io/unom/punktfunk?rev=31d52f34d#31d52f34d6205609763594afc49179ee87a2931a"
 
 [[package]]
 name = "fiat-crypto"
@@ -1123,9 +1131,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "pf-bitstream"
+version = "0.36.0"
+source = "git+https://git.unom.io/unom/punktfunk?rev=31d52f34d#31d52f34d6205609763594afc49179ee87a2931a"
+dependencies = [
+ "cros-codecs",
+ "tracing",
+]
+
+[[package]]
 name = "pf-client-core"
-version = "0.34.0"
-source = "git+https://git.unom.io/unom/punktfunk?rev=efd6d064c407d0a388e39fac717d135929a1fefa#efd6d064c407d0a388e39fac717d135929a1fefa"
+version = "0.36.0"
+source = "git+https://git.unom.io/unom/punktfunk?rev=31d52f34d#31d52f34d6205609763594afc49179ee87a2931a"
 dependencies = [
  "anyhow",
  "punktfunk-core",
@@ -1137,8 +1154,8 @@ dependencies = [
 
 [[package]]
 name = "pf-console-ui"
-version = "0.34.0"
-source = "git+https://git.unom.io/unom/punktfunk?rev=efd6d064c407d0a388e39fac717d135929a1fefa#efd6d064c407d0a388e39fac717d135929a1fefa"
+version = "0.36.0"
+source = "git+https://git.unom.io/unom/punktfunk?rev=31d52f34d#31d52f34d6205609763594afc49179ee87a2931a"
 dependencies = [
  "anyhow",
  "pf-client-core",
@@ -1236,8 +1253,8 @@ dependencies = [
 
 [[package]]
 name = "punktfunk-core"
-version = "0.34.0"
-source = "git+https://git.unom.io/unom/punktfunk?rev=efd6d064c407d0a388e39fac717d135929a1fefa#efd6d064c407d0a388e39fac717d135929a1fefa"
+version = "0.36.0"
+source = "git+https://git.unom.io/unom/punktfunk?rev=31d52f34d#31d52f34d6205609763594afc49179ee87a2931a"
 dependencies = [
  "aes-gcm",
  "cbindgen",
@@ -1248,12 +1265,13 @@ dependencies = [
  "libc",
  "log",
  "opus",
+ "pf-bitstream",
  "quinn",
  "rand 0.9.5",
  "rcgen",
  "reed-solomon-simd",
  "rustls",
- "rustls-pki-types",
+ "serde",
  "sha2 0.11.0",
  "socket2",
  "spake2",
