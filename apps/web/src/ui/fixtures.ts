@@ -38,6 +38,12 @@ const stats = {
   decoded: 18_400, dropped: 12, uploadMs: 0.8, backend: "webgpu" as const,
   pointerCaptured: false,
   audio: { state: "playing" as const, frames: 91_204, lost: 3, errors: 0, underruns: 1 },
+  hud: [
+    { role: "primary" as const, text: "2560×1440@60 · H.264 · WebCodecs" },
+    { role: "detail" as const, text: "received 60 fps · decoded 60 · presented 60 · 18.2 Mb/s" },
+    { role: "detail" as const, text: "host 3.4 ms · decode 2.0 ms · display 5.1 ms (avg)" },
+    { role: "detail" as const, text: "lost 0.1% · skipped 0.3%" },
+  ],
 };
 
 export const SCREENS = {

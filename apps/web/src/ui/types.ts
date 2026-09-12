@@ -8,7 +8,7 @@
 // The split is what makes a second interface cheap rather than a fork: nothing about pairing,
 // trust or the session lives in a renderer.
 
-import type { AudioSnapshot, KnownHost, LibraryEntry, Reach, Settings } from "@punktfunk/stream";
+import type { AudioSnapshot, HudLine, KnownHost, LibraryEntry, Reach, Settings } from "@punktfunk/stream";
 
 /** Everything worth showing about a live session. */
 export interface SessionStats {
@@ -29,6 +29,8 @@ export interface SessionStats {
   /** What the audio pipe last reported — underruns and losses are the half of "is this
    *  connection healthy" the video counters cannot see. */
   audio: AudioSnapshot;
+  /** The stats overlay, one entry per line; empty while the tier is off. */
+  hud?: HudLine[];
 }
 
 /**

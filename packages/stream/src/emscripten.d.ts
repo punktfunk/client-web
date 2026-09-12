@@ -42,6 +42,18 @@ export interface PunktfunkModule {
   _pf_audio_frames(): number;
   _pf_audio_lost(): number;
 
+  // --- the stats overlay -------------------------------------------------------------------
+  /** A frame left the decoder: its pts in µs, and when in Unix ms. */
+  _pf_hud_decoded(ptsUs: number, decodedMs: number): void;
+  /** A frame was drawn: its pts in µs, when it was decoded and when it was drawn, in Unix ms. */
+  _pf_hud_presented(ptsUs: number, decodedMs: number, presentedMs: number): void;
+  /** Close the overlay window. `skipped`: frames replaced before drawing since the last call. */
+  _pf_hud_drain(skipped: number): void;
+  /** Format the last window at `tier` (0–3) in the Advanced vocabulary or not; byte length. */
+  _pf_hud_text(tier: number, advanced: number): number;
+  /** Where `_pf_hud_text` left its bytes: `<role>\t<text>\n` per line. */
+  _pf_hud_text_ptr(): number;
+
   // --- the device credential ---------------------------------------------------------------
   _pf_device_init(hashPtr: number): number;
   _pf_device_set(spkiPtr: number, spkiLen: number, hostFpPtr: number): number;

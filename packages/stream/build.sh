@@ -85,7 +85,7 @@ link=(
   -C link-arg=-sSTACK_SIZE=4MB
   # The ring's entry points are called from pf-glue.js's read loop, so they must be exported
   # even though no page names them.
-  -C link-arg=-sEXPORTED_FUNCTIONS=_main,_pf_start,_pf_frame,_pf_key,_pf_rx_base,_pf_rx_stride,_pf_rx_claim,_pf_rx_commit,_pf_rx_dropped,_pf_net_blast,_pf_net_drain,_pf_wt_connect,_pf_wt_close,_pf_wt_ctl_open,_pf_ctl_recv,_pf_session_hello,_pf_session_pump,_pf_session_phase,_pf_session_frames,_pf_device_init,_pf_device_set,_pf_device_sign,_pf_device_fingerprint_hex,_pf_cred_phase,_pf_cred_sign_ptr,_pf_cred_sign_len,_pf_cred_signed,_pf_pair_begin,_pf_input,_pf_gamepad,_pf_gamepad_arrival,_pf_gamepad_remove,_pf_audio_frames,_pf_audio_lost,_pf_session_audio_channels,_pf_session_reset,_pf_session_reconfigure,_malloc,_free
+  -C link-arg=-sEXPORTED_FUNCTIONS=_main,_pf_start,_pf_frame,_pf_key,_pf_rx_base,_pf_rx_stride,_pf_rx_claim,_pf_rx_commit,_pf_rx_dropped,_pf_net_blast,_pf_net_drain,_pf_wt_connect,_pf_wt_close,_pf_wt_ctl_open,_pf_ctl_recv,_pf_session_hello,_pf_session_pump,_pf_session_phase,_pf_session_frames,_pf_device_init,_pf_device_set,_pf_device_sign,_pf_device_fingerprint_hex,_pf_cred_phase,_pf_cred_sign_ptr,_pf_cred_sign_len,_pf_cred_signed,_pf_pair_begin,_pf_input,_pf_gamepad,_pf_gamepad_arrival,_pf_gamepad_remove,_pf_audio_frames,_pf_audio_lost,_pf_session_audio_channels,_pf_session_reset,_pf_session_reconfigure,_pf_hud_decoded,_pf_hud_presented,_pf_hud_drain,_pf_hud_text,_pf_hud_text_ptr,_malloc,_free
   # `stringToNewUTF8` is how the page hands a host address across; `HEAPU8` is emscripten's
   # view of wasm memory, which pf-glue.js writes datagrams into.
   -C link-arg=-sEXPORTED_RUNTIME_METHODS=stringToNewUTF8,HEAPU8

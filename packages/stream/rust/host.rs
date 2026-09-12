@@ -82,6 +82,8 @@ fn start(width: i32, height: i32) -> anyhow::Result<App> {
         store: Some(store.clone()),
         platform: Platform::Web,
         gpu_cache_bytes: GPU_CACHE_BYTES,
+        // A Vulkan compute codec: a browser has no device to run it on.
+        pyrowave_ok: false,
     };
     let console = Console::new(opts, ConsoleEntry::Home, &handles)?;
     println!("punktfunk-web: console up, {width}×{height}");
