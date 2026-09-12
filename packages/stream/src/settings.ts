@@ -12,6 +12,10 @@
 // deliberately not here yet: it doubles the settings surface to serve a case — two hosts wanting
 // different bitrates from the same browser — that no one has hit.
 
+/** Stats overlay depth, in `punktfunk_core::hud::StatsVerbosity` order. */
+export const STATS_TIERS = ["off", "compact", "normal", "detailed"] as const;
+export type StatsTier = (typeof STATS_TIERS)[number];
+
 /** Everything a person can choose. `width`/`height` of 0 mean "whatever the window is". */
 export interface Settings {
   width: number;
@@ -34,6 +38,10 @@ export interface Settings {
   resizeStream: boolean;
   /** Stick travel below this is rest, 0–1. */
   deadzone: number;
+  /** How much the stats overlay shows when a stream starts. */
+  statsTier: StatsTier;
+  /** Punktfunk's pipeline view (capture to glass, p50/p95) instead of the figures Moonlight shows. */
+  advancedStats: boolean;
 }
 
 export const DEFAULTS: Settings = {
@@ -47,6 +55,8 @@ export const DEFAULTS: Settings = {
   pointer: "absolute",
   resizeStream: false,
   deadzone: 0.05,
+  statsTier: "off",
+  advancedStats: false,
 };
 
 const KEY = "pf.settings";
@@ -92,5 +102,7 @@ function sane(s: Settings): Settings {
     fps: Math.min(240, Math.max(1, Math.round(s.fps) || DEFAULTS.fps)),
     bitrateKbps: Math.min(200_000, Math.max(500, Math.round(s.bitrateKbps) || DEFAULTS.bitrateKbps)),
     deadzone: Math.min(0.5, Math.max(0, s.deadzone)),
+    statsTier: STATS_TIERS.includes(s.statsTier) ? s.statsTier : DEFAULTS.statsTier,
+    advancedStats: s.advancedStats === true,
   };
 }

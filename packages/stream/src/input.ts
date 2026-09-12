@@ -93,6 +93,8 @@ export interface InputOptions {
    *  sends relative motion. Stick travel below `deadzone` is rest. */
   pointer: "absolute" | "capture";
   deadzone: number;
+  /** Ctrl+Alt+Shift+S, the stats-overlay chord every client shares. Handled here, never sent. */
+  onStatsChord?: () => void;
 }
 
 /**
@@ -201,6 +203,11 @@ export class InputPipe {
     // A field elsewhere on the page keeps its keys: the HUD has none, but a consumer's might.
     const t = e.target as HTMLElement | null;
     if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable)) return;
+    if (e.code === "KeyS" && e.ctrlKey && e.altKey && e.shiftKey) {
+      e.preventDefault();
+      if (down && !e.repeat) this.opts.onStatsChord?.();
+      return;
+    }
     const vk = VK[e.code];
     if (vk === undefined) return;
     // Held keys repeat on the host; the browser's own repeat would double them.
