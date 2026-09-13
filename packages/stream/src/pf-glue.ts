@@ -397,10 +397,10 @@ mergeInto(LibraryManager.library, {
     Module.__pfOnAudioFrame(HEAPU8.slice(ptr, ptr + len), seq, ptsNs);
   },
 
-  pf_video_au: function (ptr: number, len: number, ptsUs: number, key: number): void {
+  pf_video_au: function (ptr: number, len: number, ptsUs: number, key: number, flags: number): void {
     if (!Module.__pfOnAccessUnit) return;
     // `slice`, not `subarray`: EncodedVideoChunk keeps the bytes past this call, and the Rust
-    // buffer is freed the moment we return.
-    Module.__pfOnAccessUnit(HEAPU8.slice(ptr, ptr + len), ptsUs, key !== 0);
+    // buffer is freed the moment we return. `flags` crosses as i32; `>>> 0` makes it the u32.
+    Module.__pfOnAccessUnit(HEAPU8.slice(ptr, ptr + len), ptsUs, key !== 0, flags >>> 0);
   },
 });
