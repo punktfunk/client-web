@@ -35,10 +35,13 @@ mod audio;
 mod credential;
 #[cfg_attr(not(target_family = "wasm"), allow(dead_code))]
 mod ecdsa;
+// Only the session drives it; on the host it compiles for its tests.
 #[cfg(target_family = "wasm")]
 mod host;
 #[cfg(target_family = "wasm")]
 mod input;
+#[cfg_attr(not(target_family = "wasm"), allow(dead_code))]
+mod recovery;
 #[cfg(target_family = "wasm")]
 mod session;
 #[cfg(target_family = "wasm")]

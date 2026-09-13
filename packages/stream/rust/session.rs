@@ -14,17 +14,24 @@
 //! decoded pixel ever enters this heap.
 
 use crate::credential;
+use crate::recovery::{self, Ask, Step};
 use crate::transport::WebTransportDatagrams;
 use punktfunk_core::config::{CompositorPref, GamepadPref, Mode, Role};
 use punktfunk_core::hud::{self, StatsSnapshot, StatsVerbosity};
 use punktfunk_core::quic::{
-    AuthChallenge, Hello, PairChallenge, PairResult, Reconfigure, Reconfigured, Refused, Start,
-    Welcome, MAGIC,
+    AuthChallenge, Hello, PairChallenge, PairResult, Reconfigure, Reconfigured, Refused,
+    RequestKeyframe, RfiRequest, Start, Welcome, MAGIC,
 };
+use punktfunk_core::reanchor::{GateVerdict, ReanchorGate};
 use punktfunk_core::session::Session;
 use std::cell::RefCell;
 use std::collections::VecDeque;
 use std::sync::{atomic::AtomicI64, Arc};
+use std::time::{Duration, Instant};
+
+/// One recovery ask per window, as every other client does: a burst of gaps must not storm the
+/// control stream, and the host coalesces further.
+const ASK_THROTTLE: Duration = Duration::from_millis(100);
 
 /// Receipt stamps kept for timing a decode: about 2 s of frames at 120 Hz.
 const RECEIPTS: usize = 256;
@@ -73,6 +80,14 @@ struct Client {
     /// The last closed window, and its lines as last asked for.
     snap: Option<StatsSnapshot>,
     text: String,
+    /// The shared post-loss freeze: the page withholds decoded frames until the stream
+    /// re-anchors, as every native client does.
+    gate: ReanchorGate,
+    /// The frame index the next access unit should carry; a jump is a loss.
+    next_index: Option<u32>,
+    /// A lost range not yet asked for (the throttle held it), widened by later gaps.
+    pending_rfi: Option<(u32, u32)>,
+    last_ask: Option<Instant>,
 }
 
 fn new_hud() -> hud::Stats {
@@ -96,6 +111,10 @@ impl Client {
             fps: 0,
             snap: None,
             text: String::new(),
+            gate: ReanchorGate::new(0),
+            next_index: None,
+            pending_rfi: None,
+            last_ask: None,
         }
     }
 }
@@ -174,7 +193,7 @@ unsafe extern "C" {
     fn pf_wt_ctl_send(ptr: *const u8, len: u32);
     /// Hand one access unit to the page for `VideoDecoder`. Borrowed for the call only — the
     /// page copies what it needs before returning, and no pixel comes back.
-    fn pf_video_au(ptr: *const u8, len: u32, pts_us: f64, key: i32);
+    fn pf_video_au(ptr: *const u8, len: u32, pts_us: f64, key: i32, flags: u32);
     /// The negotiated format, once `Welcome` has been read.
     fn pf_video_config(codec: u32, width: u32, height: u32);
     /// The host said why it is closing. `reason` is UTF-8, borrowed for the call.
@@ -391,6 +410,9 @@ fn on_welcome(c: &mut Client, welcome: Welcome) {
     c.height = welcome.mode.height;
     c.host_caps = welcome.host_caps;
     c.audio_channels = welcome.audio_channels;
+    c.gate = ReanchorGate::new(0);
+    c.next_index = None;
+    c.pending_rfi = None;
     match Session::new(cfg, Box::new(WebTransportDatagrams)) {
         Ok(session) => {
             c.session = Some(Box::new(session));
@@ -427,6 +449,10 @@ pub extern "C" fn pf_session_pump() -> u32 {
             receipts,
             codec,
             frames,
+            gate,
+            next_index,
+            pending_rfi,
+            last_ask,
             ..
         } = &mut *c;
         let codec = *codec;
@@ -439,6 +465,14 @@ pub extern "C" fn pf_session_pump() -> u32 {
         while let Ok(frame) = session.poll_frame() {
             if frame.data.is_empty() {
                 break;
+            }
+            // Frames are numbered consecutively: a jump is a lost frame, and everything after it
+            // predicts from a picture the decoder never got. Hold at once (the decoder still takes
+            // every frame, so a wave can heal it) and ask for the range.
+            match recovery::on_index(next_index, pending_rfi, frame.frame_index) {
+                Step::Deliver => {}
+                Step::Gap(gap) => gate.arm_expecting_drops(Instant::now(), u64::from(gap)),
+                Step::Straggler => continue,
             }
             hud.note_received(frame.pts_ns, frame.received_ns, frame.data.len(), true);
             if receipts.len() >= RECEIPTS {
@@ -455,6 +489,7 @@ pub extern "C" fn pf_session_pump() -> u32 {
                     frame.data.len() as u32,
                     frame.pts_ns as f64 / 1000.0,
                     key,
+                    frame.flags,
                 )
             };
             delivered += 1;
@@ -463,8 +498,72 @@ pub extern "C" fn pf_session_pump() -> u32 {
             }
         }
         *frames += u64::from(delivered);
+        // A drop the reassembler booked past the gap's credit is a fresh loss, and a hold with
+        // no re-anchor for 500 ms re-asks: both want an IDR. Otherwise the lost range goes out
+        // as RFI, which a capable host answers with a clean P or a wave instead of an IDR.
+        let now = Instant::now();
+        let want_keyframe = gate.poll(session.stats().frames_dropped, now);
+        let throttled = last_ask.is_some_and(|t| now.duration_since(t) < ASK_THROTTLE);
+        if !throttled {
+            if let Some(ask) = recovery::take_ask(want_keyframe, pending_rfi) {
+                *last_ask = Some(now);
+                match ask {
+                    Ask::Keyframe => write_msg(&RequestKeyframe.encode()),
+                    Ask::Rfi(first_frame, last_frame) => write_msg(
+                        &RfiRequest {
+                            first_frame,
+                            last_frame,
+                        }
+                        .encode(),
+                    ),
+                }
+            }
+        }
         delivered
     })
+}
+
+/// A frame left the decoder: may the page show it? `flags` are the wire flags of the access unit
+/// it came from and `key` whether that was an IDR. `1` present, `0` keep the last picture: after
+/// a loss only an IDR, an honoured recovery anchor or an intra-refresh wave lifts the hold.
+#[unsafe(no_mangle)]
+pub extern "C" fn pf_gate_decoded(flags: u32, key: i32) -> i32 {
+    CLIENT.with(|c| {
+        let verdict = c
+            .borrow_mut()
+            .gate
+            .on_decoded(flags, key != 0, Instant::now());
+        i32::from(verdict == GateVerdict::Present)
+    })
+}
+
+/// The decoder refused an access unit or failed. Three in a row hold the picture and ask for an
+/// IDR, the same streak the native clients count.
+#[unsafe(no_mangle)]
+pub extern "C" fn pf_gate_no_output() {
+    CLIENT.with(|c| {
+        let mut c = c.borrow_mut();
+        let now = Instant::now();
+        if c.gate.on_no_output(now) && c.phase == Phase::Live {
+            c.last_ask = Some(now);
+            write_msg(&RequestKeyframe.encode());
+        }
+    });
+}
+
+/// The page rebuilt its decoder, which can resume only on an IDR: hold, and ask for one now.
+#[unsafe(no_mangle)]
+pub extern "C" fn pf_request_keyframe() {
+    CLIENT.with(|c| {
+        let mut c = c.borrow_mut();
+        let now = Instant::now();
+        c.gate.arm(now);
+        c.pending_rfi = None;
+        if c.phase == Phase::Live {
+            c.last_ask = Some(now);
+            write_msg(&RequestKeyframe.encode());
+        }
+    });
 }
 
 /// Unix ms from the page's `Date.now()`, the clock `SystemTime` reads here, as ns.
