@@ -28,6 +28,8 @@ export interface VideoStats {
   /** Frames dropped rather than presented because a newer one had already arrived. */
   dropped: number;
   errors: number;
+  /** Frames withheld after a loss until the stream re-anchored. */
+  held: number;
   /** Average milliseconds in the plane's `present`. */
   uploadMs: number;
   width: number;
@@ -68,6 +70,12 @@ export class VideoPipe {
   private plane: VideoPlane | null = null;
   private backend: "webgpu" | "webgl2" | null = null;
   private pending: VideoFrame | null = null;
+  /** Each submitted access unit's wire flags and key bit, by timestamp, until its frame is out. */
+  private meta = new Map<number, { flags: number; key: boolean }>();
+  /** A fresh decoder takes a key frame first; deltas before one are refused. */
+  private needKey = true;
+  private codec = 0;
+  private lastRebuildMs = 0;
   /** When `pending` left the decoder, for the overlay's display stage. */
   private pendingDecodedMs = 0;
   private stats: VideoStats = {
@@ -75,6 +83,7 @@ export class VideoPipe {
     decoded: 0,
     dropped: 0,
     errors: 0,
+    held: 0,
     uploadMs: 0,
     width: 0,
     height: 0,
@@ -92,7 +101,7 @@ export class VideoPipe {
     this.mod.__pfOnVideoConfig = (codec, width, height) => {
       void this.configure(codec, width, height);
     };
-    this.mod.__pfOnAccessUnit = (data, ptsUs, key) => this.submit(data, ptsUs, key);
+    this.mod.__pfOnAccessUnit = (data, ptsUs, key, flags) => this.submit(data, ptsUs, key, flags);
   }
 
   private async configure(codec: number, width: number, height: number): Promise<void> {
@@ -106,12 +115,16 @@ export class VideoPipe {
     }
     this.plane.configure(width, height);
 
+    this.codec = codec;
     this.decoder?.close();
+    this.meta.clear();
+    this.needKey = true;
     const decoder = new VideoDecoder({
       output: (frame) => this.onFrame(frame),
       error: (e) => {
         this.stats.errors++;
         console.error("punktfunk: decoder", e);
+        this.rebuild();
       },
     });
     // Annex B, so no `description`: the host sends parameter sets inline with every IDR, which is
@@ -126,13 +139,13 @@ export class VideoPipe {
     this.decoder = decoder;
   }
 
-  private submit(data: Uint8Array, ptsUs: number, key: boolean): void {
+  private submit(data: Uint8Array, ptsUs: number, key: boolean, flags: number): void {
     const decoder = this.decoder;
     if (!decoder || decoder.state !== "configured") return;
-    // WebCodecs requires the first chunk to be a key frame, and a delta before one is a hard
-    // error rather than a dropped frame. The wire carries no such bit, so `is_keyframe` in
-    // `session.rs` reads it out of the bitstream; this is the other half of that.
-    if (this.stats.submitted === 0 && !key) return;
+    // WebCodecs requires the first chunk after a configure to be a key frame, and a delta before
+    // one is a hard error rather than a dropped frame. The wire carries no such bit, so
+    // `is_keyframe` in `session.rs` reads it out of the bitstream; this is the other half of that.
+    if (this.needKey && !key) return;
     try {
       decoder.decode(
         new EncodedVideoChunk({
@@ -141,11 +154,27 @@ export class VideoPipe {
           data,
         }),
       );
+      this.needKey = false;
       this.stats.submitted++;
+      this.meta.set(ptsUs, { flags, key });
+      // Frames the decoder dropped never come back to claim their entry.
+      if (this.meta.size > 256) this.meta.delete(this.meta.keys().next().value as number);
     } catch (e) {
       this.stats.errors++;
       console.error("punktfunk: decode", e);
+      this.mod._pf_gate_no_output();
     }
+  }
+
+  // A decoder that errored is closed for good. Build a fresh one and resume on the next IDR,
+  // asked for now; the gate holds the last picture meanwhile. At most twice a second, so a
+  // stream the browser cannot decode at all does not spin.
+  private rebuild(): void {
+    const now = performance.now();
+    if (now - this.lastRebuildMs < 500 || !this.plane) return;
+    this.lastRebuildMs = now;
+    this.mod._pf_request_keyframe();
+    void this.configure(this.codec, this.stats.width, this.stats.height);
   }
 
   // Keep only the newest frame. The decoder can outrun the display, and holding several open
@@ -155,6 +184,15 @@ export class VideoPipe {
     this.stats.decoded++;
     const at = unixMs();
     this.mod._pf_hud_decoded(frame.timestamp, at);
+    const meta = this.meta.get(frame.timestamp);
+    this.meta.delete(frame.timestamp);
+    // After a loss the decoder conceals, and a concealed picture is the gray smear: hold the last
+    // good one until the stream re-anchors (`ReanchorGate`, shared with the native clients).
+    if (!this.mod._pf_gate_decoded(meta?.flags ?? 0, meta?.key ? 1 : 0)) {
+      frame.close();
+      this.stats.held++;
+      return;
+    }
     if (this.pending) {
       this.pending.close();
       this.stats.dropped++;

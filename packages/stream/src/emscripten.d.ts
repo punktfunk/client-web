@@ -47,6 +47,12 @@ export interface PunktfunkModule {
   _pf_hud_decoded(ptsUs: number, decodedMs: number): void;
   /** A frame was drawn: its pts in µs, when it was decoded and when it was drawn, in Unix ms. */
   _pf_hud_presented(ptsUs: number, decodedMs: number, presentedMs: number): void;
+  /** A frame left the decoder: `1` show it, `0` keep the last picture (post-loss hold). */
+  _pf_gate_decoded(flags: number, key: number): number;
+  /** The decoder refused an access unit or failed; a streak asks the host for an IDR. */
+  _pf_gate_no_output(): void;
+  /** The page rebuilt its decoder: hold, and ask the host for an IDR. */
+  _pf_request_keyframe(): void;
   /** Close the overlay window. `skipped`: frames replaced before drawing since the last call. */
   _pf_hud_drain(skipped: number): void;
   /** Format the last window at `tier` (0–3) in the Advanced vocabulary or not; byte length. */
@@ -111,7 +117,7 @@ export interface PunktfunkModule {
   /** The negotiated video format, once `Welcome` has been read. */
   __pfOnVideoConfig?: (codec: number, width: number, height: number) => void;
   /** One access unit. The bytes are copied out of wasm memory before this is called. */
-  __pfOnAccessUnit?: (data: Uint8Array, ptsUs: number, key: boolean) => void;
+  __pfOnAccessUnit?: (data: Uint8Array, ptsUs: number, key: boolean, flags: number) => void;
   /** One Opus frame, in order, for the page's decoder. */
   __pfOnAudioFrame?: (data: Uint8Array, seq: number, ptsNs: number) => void;
 }
