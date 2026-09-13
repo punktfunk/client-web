@@ -520,6 +520,8 @@ pub extern "C" fn pf_hud_drain(skipped: u32) {
         (snap.width, snap.height, snap.refresh_hz) = (c.width, c.height, c.fps);
         snap.codec = hud::codec_label(c.codec).into();
         snap.decoder = "WebCodecs".into();
+        let rtt = crate::transport::rtt_us();
+        snap.rtt_us = (rtt > 0).then_some(rtt);
         c.snap = Some(snap);
     });
 }

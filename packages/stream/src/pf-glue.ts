@@ -16,6 +16,8 @@ interface PfNet {
   writer: WritableStreamDefaultWriter<Uint8Array> | null;
   ctl: WritableStreamDefaultWriter<Uint8Array> | null;
   reading: boolean;
+  /** The connection's smoothed round trip in µs, from the last `getStats()`; 0 = unknown. */
+  rttUs: number;
 }
 
 interface PfCred {
@@ -75,6 +77,7 @@ mergeInto(LibraryManager.library, {
     writer: null,
     ctl: null,
     reading: false,
+    rttUs: 0,
   },
 
   pf_wt_connect__deps: ["$pfNet", "$UTF8ToString", "pf_wt_close"],
@@ -204,6 +207,25 @@ mergeInto(LibraryManager.library, {
     pfNet.writer = null;
     pfNet.ctl = null;
     pfNet.reading = false;
+    pfNet.rttUs = 0;
+  },
+
+  // The connection's smoothed round trip in µs, from the last `getStats()`. Each call asks for
+  // a fresh reading, which the next call returns; a browser without `getStats` stays at 0.
+  pf_wt_rtt_us__deps: ["$pfNet"],
+  pf_wt_rtt_us: function (): number {
+    const wt = pfNet.wt;
+    const getStats =
+      wt && (wt as unknown as { getStats?: () => Promise<{ smoothedRtt?: number }> }).getStats;
+    if (wt && typeof getStats === "function") {
+      getStats.call(wt).then(
+        function (s) {
+          if (pfNet.wt === wt) pfNet.rttUs = Math.round((s.smoothedRtt ?? 0) * 1000);
+        },
+        function () {},
+      );
+    }
+    return pfNet.rttUs;
   },
 
   // --- the control stream ---------------------------------------------------------------------

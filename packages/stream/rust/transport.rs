@@ -78,6 +78,15 @@ unsafe extern "C" {
     /// Hand one datagram to the browser's WebTransport writer. `1` when it was queued. Defined in
     /// `web/pf-glue.js`, which is the only place a browser object is named.
     fn pf_wt_send(ptr: *const u8, len: u32) -> i32;
+    /// The connection's smoothed round trip in µs, `0` when the browser reports none. Each call
+    /// also asks for a fresh reading, which the next call returns.
+    fn pf_wt_rtt_us() -> u32;
+}
+
+/// See [`pf_wt_rtt_us`].
+pub fn rtt_us() -> u32 {
+    // SAFETY: no arguments and no memory handed across; the glue reads its own cached number.
+    unsafe { pf_wt_rtt_us() }
 }
 
 /// Base of the receive ring, for `HEAPU8.set(bytes, base + slot * stride)`.
