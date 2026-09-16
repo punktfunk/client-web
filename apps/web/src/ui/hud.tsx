@@ -87,6 +87,14 @@ export function Hud({ screen, actions }: { screen: Extract<Screen, { kind: "stre
         <Button size="sm" variant="ghost" onClick={() => actions.disconnect()}>Disconnect</Button>
       </div>
       {screen.diagnostics && <Diagnostics stats={stats} />}
+      {/* The host's word on a launch that did not give the player their game. */}
+      {stats.launchNotice && (
+        <div role="status" className="pointer-events-none fixed inset-x-0 bottom-[20%] flex justify-center px-inset animate-in fade-in slide-in-from-bottom-2">
+          <span className="max-w-[40rem] rounded-full bg-card/85 px-4 py-2 text-center text-sm backdrop-blur-xl">
+            {stats.launchNotice}
+          </span>
+        </div>
+      )}
       {/* A captured pointer has no cursor, so the way out has to be on screen. The browser
           releases on Escape itself; this only says so. */}
       {stats.pointerCaptured && (
