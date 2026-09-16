@@ -62,7 +62,13 @@ export interface SessionStats {
   /** The stats overlay at this session's tier, one entry per line. Empty at `off`. */
   hud: HudLine[];
   statsTier: StatsTier;
+  /** The host's sentence for a launch that did not give the player their game, for
+   *  `LAUNCH_NOTICE_MS` after it arrives. */
+  launchNotice?: string;
 }
+
+/** Long enough to read a sentence with its cause. */
+const LAUNCH_NOTICE_MS = 10_000;
 
 /**
  * Where the engine is. Exactly one at a time; `onState` fires on every change.
@@ -196,6 +202,8 @@ export class Engine {
   private tier: StatsTier = TUNABLE_DEFAULTS.statsTier;
   private hud: HudLine[] = [];
   private lastDropped = 0;
+  /** The last launch notice and when it arrived (`performance.now()`). */
+  private launchNotice: { text: string; at: number } | null = null;
   private running = true;
   /** A PIN given while the connection was down, sent when the next control stream opens. */
   private pendingPin: string | null = null;
@@ -217,6 +225,9 @@ export class Engine {
     mod.__pfOnCtlReady = () => this.onControlStream();
     mod.__pfOnClosed = (code, reason) => this.onClosed(code, reason);
     mod.__pfOnRefused = (code, reason) => this.onClosed(code, reason);
+    mod.__pfOnLaunchNotice = (text) => {
+      this.launchNotice = { text, at: performance.now() };
+    };
     requestAnimationFrame(() => this.frame());
   }
 
@@ -349,6 +360,7 @@ export class Engine {
     this.tier = this.tunable.statsTier;
     this.hud = [];
     this.lastDropped = 0;
+    this.launchNotice = null;
     this.set({ kind: "starting", origin: this.origin });
     const id = opts.launch?.id ?? "";
     withStr(this.mod, [id], (p, len) =>
@@ -679,6 +691,9 @@ export class Engine {
         pointerCaptured: this.input?.captured ?? false,
         hud: this.hud,
         statsTier: this.tier,
+        ...(this.launchNotice && now - this.launchNotice.at < LAUNCH_NOTICE_MS
+          ? { launchNotice: this.launchNotice.text }
+          : {}),
       },
     });
   }

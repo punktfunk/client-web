@@ -41,6 +41,8 @@ mod host;
 #[cfg(target_family = "wasm")]
 mod input;
 #[cfg_attr(not(target_family = "wasm"), allow(dead_code))]
+mod launch;
+#[cfg_attr(not(target_family = "wasm"), allow(dead_code))]
 mod recovery;
 #[cfg(target_family = "wasm")]
 mod session;
