@@ -386,6 +386,11 @@ mergeInto(LibraryManager.library, {
     if (Module.__pfOnRefused) Module.__pfOnRefused(code, UTF8ToString(ptr, len));
   },
 
+  pf_launch_notice__deps: ["$UTF8ToString"],
+  pf_launch_notice: function (ptr: number, len: number): void {
+    if (Module.__pfOnLaunchNotice) Module.__pfOnLaunchNotice(UTF8ToString(ptr, len));
+  },
+
   pf_video_config: function (codec: number, width: number, height: number): void {
     if (Module.__pfOnVideoConfig) Module.__pfOnVideoConfig(codec, width, height);
   },

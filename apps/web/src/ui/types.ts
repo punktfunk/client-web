@@ -31,6 +31,8 @@ export interface SessionStats {
   audio: AudioSnapshot;
   /** The stats overlay, one entry per line; empty while the tier is off. */
   hud?: HudLine[];
+  /** The host's sentence for a launch that did not give the player their game, while it shows. */
+  launchNotice?: string;
 }
 
 /**
