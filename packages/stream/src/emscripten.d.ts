@@ -114,6 +114,8 @@ export interface PunktfunkModule {
   __pfOnClosed?: (code: number, reason: string) => void;
   /** The host said why it is closing, on the control plane (`Refused`). Comes before the close. */
   __pfOnRefused?: (code: number, reason: string) => void;
+  /** The host's sentence for a launch that did not give the player their game. */
+  __pfOnLaunchNotice?: (text: string) => void;
   /** The negotiated video format, once `Welcome` has been read. */
   __pfOnVideoConfig?: (codec: number, width: number, height: number) => void;
   /** One access unit. The bytes are copied out of wasm memory before this is called. */
