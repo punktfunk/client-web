@@ -198,6 +198,9 @@ unsafe extern "C" {
     fn pf_video_config(codec: u32, width: u32, height: u32);
     /// The host said why it is closing. `reason` is UTF-8, borrowed for the call.
     fn pf_refused(code: u32, reason: *const u8, len: u32);
+    /// The host's sentence for a launch that did not give the player their game. UTF-8,
+    /// borrowed for the call.
+    fn pf_launch_notice(text: *const u8, len: u32);
 }
 
 /// Frame the way the control plane does everywhere else: `u16` length, then the payload.
@@ -396,6 +399,9 @@ pub unsafe extern "C" fn pf_ctl_recv(ptr: *const u8, len: u32) {
             } else if let Ok(r) = Refused::decode(&body) {
                 // SAFETY: the string is borrowed for a call into JavaScript that copies it.
                 unsafe { pf_refused(r.code, r.reason.as_ptr(), r.reason.len() as u32) };
+            } else if let Some(text) = crate::launch::notice(&body) {
+                // SAFETY: the string is borrowed for a call into JavaScript that copies it.
+                unsafe { pf_launch_notice(text.as_ptr(), text.len() as u32) };
             }
         }
     });
