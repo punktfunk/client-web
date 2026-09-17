@@ -290,11 +290,19 @@ export class InputPipe {
     }
   }
 
-  /** Where on the stream a pointer is, in the stream's own pixels. */
+  /** Where on the stream a pointer is, in the stream's own pixels. The picture is fitted inside
+   *  the element (`object-fit: contain`), so the bars map to the nearest edge. */
   private stream(e: PointerEvent): [number, number] {
     const r = this.canvas.getBoundingClientRect();
-    const x = ((e.clientX - r.left) / Math.max(1, r.width)) * this.opts.streamWidth;
-    const y = ((e.clientY - r.top) / Math.max(1, r.height)) * this.opts.streamHeight;
+    const { streamWidth: sw, streamHeight: sh } = this.opts;
+    const cw = this.canvas.width || sw;
+    const ch = this.canvas.height || sh;
+    const scale = Math.min(r.width / cw, r.height / ch) || 1;
+    const left = r.left + (r.width - cw * scale) / 2;
+    const top = r.top + (r.height - ch * scale) / 2;
+    const clamp = (v: number, max: number) => Math.min(Math.max(v, 0), max);
+    const x = clamp(((e.clientX - left) / (cw * scale)) * sw, sw - 1);
+    const y = clamp(((e.clientY - top) / (ch * scale)) * sh, sh - 1);
     return [Math.round(x), Math.round(y)];
   }
 
