@@ -172,8 +172,12 @@
   height: 100%;
 }
 
+/* The canvas holds the frame at its own size; a frame whose aspect differs from the window is
+   letterboxed, not stretched. `input.ts` maps the pointer through the same fit. */
 #pf-video {
   z-index: 0;
+  object-fit: contain;
+  background: #000;
 }
 
 /* Above the video, and transparent where it draws nothing. `pointer-events` stays off so the
