@@ -14,7 +14,7 @@
 // fail in one direction, and a browser that has never paired simply has nothing to check.
 
 import type { PunktfunkModule } from "./emscripten.ts";
-import { Host, type LibraryEntry, VersionSkew } from "./host.ts";
+import { DeviceRefused, Host, type LibraryEntry, VersionSkew } from "./host.ts";
 import * as pf from "./pf-connect.ts";
 import { decodeSupported, VideoPipe } from "./video.ts";
 import { InputPipe } from "./input.ts";
@@ -515,19 +515,25 @@ export class Engine {
       if (pin) this.sendPairRequest(pin);
       return;
     }
-    // Authenticated. The management API is reachable from here; nothing streams until asked.
-    this.host = new Host(origin, fingerprint, device);
-    this.set({ kind: "ready", origin, host: this.host });
-    // The host's name, remembered for the picker. Not re-emitted as state: a second `ready`
-    // would read as a second connection to anything listening.
-    void this.host
-      .info()
-      .then((h) => pf.hosts.remember(origin, { name: h.hostname }))
-      .catch((e: unknown) => {
-        if (e instanceof VersionSkew && this.origin === origin) {
-          this.set({ kind: "error", origin, message: e.message, skew: true });
-        }
-      });
+    // The management API is what knows whether the host still accepts this device, so `ready`
+    // waits for it. Refused: unpaired there. Any other failure leaves streaming possible.
+    const host = new Host(origin, fingerprint, device);
+    this.host = host;
+    void host.info().then(
+      (h) => {
+        pf.hosts.remember(origin, { name: h.hostname });
+        this.settle(host, origin);
+      },
+      (e: unknown) => this.settle(host, origin, e),
+    );
+  }
+
+  /** `ready` once the management API has answered for this connection, or what it refused. */
+  private settle(host: Host, origin: string, e?: unknown): void {
+    if (this.host !== host || this.origin !== origin) return;
+    if (e instanceof DeviceRefused) return this.set({ kind: "forgotten", origin });
+    if (e instanceof VersionSkew) return this.set({ kind: "error", origin, message: e.message, skew: true });
+    this.set({ kind: "ready", origin, host });
   }
 
   /**

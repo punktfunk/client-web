@@ -21,6 +21,7 @@ import {
 import { Effect } from "effect";
 import { SchemaError } from "effect/Schema";
 
+export { DeviceRefused };
 export type LibraryEntry = api.OperatorGameEntry;
 export type HostInfo = api.HostInfo;
 export type HostStatus = api.RuntimeStatus;
