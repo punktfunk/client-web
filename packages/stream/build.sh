@@ -52,7 +52,9 @@ export EMCC_CFLAGS="${EMCC_CFLAGS:-} -fwasm-exceptions"
 if [ -f "$archive" ]; then
   export SKIA_BINARIES_URL="file://$cache/skia-binaries-{key}.tar.gz"
 else
-  export SKIA_BINARIES_URL="${SKIA_BINARIES_URL:-https://git.unom.io/api/packages/unom/generic/skia-binaries/0.99.0/skia-binaries-{key}.tar.gz}"
+  # Not inline in `${…:-…}`: the `}` of `{key}` would end the expansion there.
+  published='https://git.unom.io/api/packages/unom/generic/skia-binaries/0.99.0/skia-binaries-{key}.tar.gz'
+  export SKIA_BINARIES_URL="${SKIA_BINARIES_URL:-$published}"
 fi
 
 link=(
