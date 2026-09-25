@@ -2,6 +2,7 @@
 // emscripten's glue lazily, and the glue finds its `.wasm` through `new URL(…, import.meta.url)`,
 // which Vite turns into an emitted asset. Nothing here names either file.
 
+import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import tailwindcss from "@tailwindcss/vite";
 import react from "@vitejs/plugin-react";
@@ -9,12 +10,24 @@ import { defineConfig } from "vite";
 
 const devHost = process.env["PF_HOST"];
 
+/** What the settings sheet names this build: the tag or commit, `-dirty` for local edits. */
+function version(): string {
+  try {
+    return execFileSync("git", ["describe", "--tags", "--always", "--dirty"], { encoding: "utf8" }).trim();
+  } catch {
+    return "unknown";
+  }
+}
+
 export default defineConfig({
+  // Relative asset URLs, so the same `dist/` works at a host's root, under a path, or packaged.
+  base: "./",
   plugins: [react(), tailwindcss()],
   // Through the dev proxy the API answers on the page's origin but the WebTransport plane does
   // not; this tells the engine where it is. Undefined in a real build, so the address the user
   // typed is used — exactly as designed.
   define: {
+    __PF_VERSION__: JSON.stringify(version()),
     __PF_TRANSPORT_HOST__: JSON.stringify(devHost ? new URL(devHost).hostname : undefined),
   },
   resolve: {
