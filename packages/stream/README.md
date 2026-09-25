@@ -47,10 +47,10 @@ repo verifies with.
 
 ## Building it
 
-Needs emsdk **4.0.9** activated (`emcc` on `PATH`, `EMSDK` exported) and the
-`wasm32-unknown-emscripten` Rust target. `./build.sh` builds the wasm module into `wasm/`;
-`npm run build:lib` (tsdown) packages the library. The repo README has the toolchain detail and
-why Skia is built from source here.
+Needs emsdk **6.0.10** activated (`emcc` on `PATH`, `EMSDK` exported); `rust-toolchain.toml` pins
+rustc and the wasm target. `npm run build:wasm` builds the release module into `wasm/` (plain
+`./build.sh` is the debug one), and `npm run build:lib` (tsdown) packages the library. The repo
+README has the toolchain detail and why Skia is our own build.
 
 ## Not yet
 
