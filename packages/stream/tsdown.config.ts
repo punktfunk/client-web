@@ -15,5 +15,5 @@ export default defineConfig({
   clean: true,
   // Both come from the consumer: Effect must be one instance per page, and the SDK is the thing
   // this library is a consumer of, not a vendor of.
-  external: ["effect", /^effect\//, /^@punktfunk\/host/],
+  deps: { neverBundle: ["effect", /^effect\//, /^@punktfunk\/host/] },
 });
