@@ -221,6 +221,7 @@ export class Engine {
       statsTier: opts.statsTier ?? TUNABLE_DEFAULTS.statsTier,
       advancedStats: opts.advancedStats ?? TUNABLE_DEFAULTS.advancedStats,
     };
+    if (opts.uiCanvas) mod.__pfUiCanvas = opts.uiCanvas;
     mod.__pfOnDeviceReady = () => this.dial();
     mod.__pfOnCtlReady = () => this.onControlStream();
     mod.__pfOnClosed = (code, reason) => this.onClosed(code, reason);
