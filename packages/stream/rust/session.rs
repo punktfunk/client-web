@@ -284,6 +284,8 @@ pub unsafe extern "C" fn pf_session_hello(
             audio_rate_hz: 0,
             audio_bits: 0,
             audio_layout: punktfunk_core::audio::AudioLayout::Legacy.wire(),
+            // The video plane letterboxes a frame whose shape differs from the window.
+            video_fit: punktfunk_core::video_fit::VideoFit::Fit.wire(),
         };
         write_msg(&hello.encode());
         c.fps = fps;
@@ -358,12 +360,7 @@ pub unsafe extern "C" fn pf_ctl_recv(ptr: *const u8, len: u32) {
     CLIENT.with(|c| {
         let mut c = c.borrow_mut();
         c.inbox.extend_from_slice(bytes);
-        // Take the message out first: `on_welcome` needs the whole client, and the inbox borrow
-        // would still be live inside the `while let`.
-        loop {
-            let Some(body) = take_msg(&mut c.inbox) else {
-                break;
-            };
+        while let Some(body) = take_msg(&mut c.inbox) {
             if c.phase == Phase::Offered && body.starts_with(MAGIC) {
                 match Welcome::decode(&body) {
                     Ok(welcome) => on_welcome(&mut c, welcome),
