@@ -160,8 +160,9 @@ async fn relay(
                 );
                 return (
                     StatusCode::BAD_GATEWAY,
-                    "This host's certificate changed since it was pinned. If the host was \
-                     reinstalled, remove its entry from pins.json and restart the server.",
+                    "This host's certificate changed since it was pinned. If you reinstalled it \
+                     or moved it to a new identity, remove its entry from pins.json and restart \
+                     the server.",
                 )
                     .into_response();
             }
@@ -170,9 +171,10 @@ async fn relay(
     }
 }
 
+/// 504, so the page reads it as "nothing answered". A 502 carries a refusal the page shows as said.
 fn gateway(host: &str, what: &str, cause: &str) -> Response {
     tracing::warn!(host, cause, "{what}");
-    (StatusCode::BAD_GATEWAY, "Couldn't reach this host.").into_response()
+    (StatusCode::GATEWAY_TIMEOUT, "Couldn't reach this host.").into_response()
 }
 
 fn client(pin: Option<[u8; 32]>, seen: Seen) -> anyhow::Result<reqwest::Client> {
@@ -279,6 +281,17 @@ mod tests {
         let first = Hosts::new(desk(None), &dir.join("c"), true).unwrap();
         assert_eq!(get_health(first.clone()).await.0, StatusCode::OK);
         assert_eq!(first.get("desk").unwrap().pin, Some(fp));
+
+        let closed = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let gone = Listed {
+            name: "desk".into(),
+            addr: "127.0.0.1".into(),
+            port: closed.local_addr().unwrap().port(),
+            pin: None,
+        };
+        drop(closed);
+        let silent = Hosts::new(vec![gone], &dir.join("d"), true).unwrap();
+        assert_eq!(get_health(silent).await.0, StatusCode::GATEWAY_TIMEOUT);
         let _ = std::fs::remove_dir_all(dir);
     }
 

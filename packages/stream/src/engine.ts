@@ -305,8 +305,10 @@ export class Engine {
 
     // Tell "certificate not accepted" apart from "nothing there" before saying anything: the two
     // are the same opaque error, and only one of them has a fix a person can follow.
-    const state = await pf.reach(origin);
-    if (state === "unreachable") return this.set({ kind: "unreachable", origin });
+    const { reach: state, said } = await pf.reachWhy(origin);
+    if (state === "unreachable") {
+      return said ? this.set({ kind: "error", origin, message: said }) : this.set({ kind: "unreachable", origin });
+    }
     if (state === "blocked") {
       return this.set({ kind: "blocked", origin, acceptUrl: pf.acceptUrl(origin) });
     }
