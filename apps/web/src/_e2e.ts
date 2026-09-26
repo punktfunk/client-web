@@ -106,6 +106,34 @@ try {
         catch (e: any) { tally.failed++; log("art failed: " + art + ": " + (e?.message ?? e)); }
       }
       log(`${tally.shown && !tally.failed ? "ok  " : "FAIL"} art: ${JSON.stringify(tally)}`);
+      // `?art=all`: every cover at once, as the grid asks, with each answer's status and time.
+      if (q.get("art") === "all") {
+        const conn = (l.host as any).conn;
+        const t0 = performance.now();
+        const results = await Promise.all(
+          lib.map(async (entry) => {
+            const art = entry.art.portrait ?? entry.art.header;
+            if (!art || /^https?:/.test(art)) return { id: entry.id, status: art ? "cdn" : "none", ms: 0 };
+            const t = performance.now();
+            try {
+              const fetchFn = conn.fetch;
+              const r = await fetchFn(`${l.host.origin}${art}`, { cache: "no-store", headers: { authorization: await conn.credential.header() } });
+              const body = r.ok ? "" : (await r.text()).slice(0, 60);
+              return { id: entry.id, status: String(r.status), ms: Math.round(performance.now() - t), body };
+            } catch (e: any) {
+              return { id: entry.id, status: "threw", ms: Math.round(performance.now() - t), body: String(e?.message ?? e) };
+            }
+          }),
+        );
+        const by: Record<string, number> = {};
+        for (const r of results) by[r.status] = (by[r.status] ?? 0) + 1;
+        log(`art=all: ${results.length} titles in ${Math.round(performance.now() - t0)} ms: ${JSON.stringify(by)}`);
+        for (const r of results.filter((r) => r.status !== "200" && r.status !== "none" && r.status !== "cdn")) {
+          log(`  ${r.status} ${r.ms}ms ${r.id} ${"body" in r ? r.body : ""}`);
+        }
+        const slow = results.filter((r) => r.ms > 3000).length;
+        log(`  answers slower than 3 s: ${slow}; slowest ${Math.max(...results.map((r) => r.ms))} ms`);
+      }
     } catch (e: any) {
       log("FAIL library: " + (e?.message ?? e));
     }
