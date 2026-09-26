@@ -229,6 +229,9 @@ class App {
     if (listed) return listed;
     const known = this.engine.knownHosts().find((h) => h.origin === address);
     if (known?.plane) return { api: address, plane: known.plane };
+    // Already a route through the server (a retry, a card): the address names its own plane.
+    const route = routeOf(address);
+    if (route) return route;
     const routed = this.viaServer ? throughServer(address) : null;
     if (!routed) return address;
     // A host tried directly before moves to the server route, name and pairing included.
@@ -465,7 +468,18 @@ function throughServer(address: string): HostTarget | null {
   }
   const ip = url.hostname;
   if (!/^\d{1,3}(\.\d{1,3}){3}$/.test(ip) && !/^\[[0-9a-f:.]+\]$/i.test(ip)) return null;
+  // The page's own server is not a host; routing it through itself only finds the page again.
+  if (url.host === location.host) return null;
   return { api: new URL(`a/${ip}:${url.port}`, location.href).href, plane: ip };
+}
+
+/** The target a server route (`…/a/<ip:port>`) stands for, or `null` for any other address. */
+function routeOf(address: string): HostTarget | null {
+  const base = new URL("a/", location.href).href;
+  if (!address.startsWith(base)) return null;
+  const ipPort = address.slice(base.length).split("/")[0] ?? "";
+  const plane = ipPort.replace(/:\d+$/, "");
+  return plane ? { api: address.replace(/\/+$/, ""), plane } : null;
 }
 
 /** A host from the page server's `config.json`. */
