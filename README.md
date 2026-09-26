@@ -53,7 +53,8 @@ host's own OpenAPI spec.
 - **Two interfaces on one state machine** — the React web shell, and `?ui=console`, the same
   `pf-console-ui` shell every other punktfunk client draws.
 
-Needs a browser with WebTransport and WebCodecs; verified against a real host on Safari 27.
+Needs a browser with WebTransport and WebCodecs; verified against a real host on Safari 27 and
+Firefox 156.
 
 ## Trust, and the one step it costs you
 
@@ -87,30 +88,32 @@ window is a new device every time.
 
 ## Build
 
-Needs [emsdk **4.0.9**](https://emscripten.org) activated (`emcc` on `PATH`, `EMSDK` exported) and
-the `wasm32-unknown-emscripten` Rust target.
+Needs Node 24 or newer, [rustup](https://rustup.rs) and [emsdk **6.0.10**](https://emscripten.org)
+activated (`emcc` on `PATH`, `EMSDK` exported; emsdk wants Python 3.10 or newer). `packages/stream/rust-toolchain.toml` pins rustc
+and the `wasm32-unknown-emscripten` target; rustup installs both on first use.
 
 ```sh
-rustup target add wasm32-unknown-emscripten
 npm install           # @punktfunk/host and @unom/ui come from the Gitea registry; .npmrc names both scopes
-npm run build         # the library, then the app
+npm run build         # release wasm, the library, then the app
 ```
 
-The app lands in `apps/web/dist/`, a static directory to serve from anywhere. The library lands
-in `packages/stream/dist/`, which is what `npm pack` ships.
+The app lands in `apps/web/dist/`, a static directory with relative asset paths, so it runs from
+any path. The library lands in `packages/stream/dist/`, which is what `npm pack` ships. The
+settings sheet names the build it came from (`git describe`).
 
 Four tools, each for what it is for, in this order:
 
 1. **`tsc`** emits one file, `packages/stream/build/pf-glue.js` — an *input* to the wasm link,
    which emscripten reads with `--js-library`.
 2. **`cargo`** builds the wasm module into `packages/stream/wasm/`, as an ES module with a
-   default-exported factory.
+   default-exported factory. `build.rs` makes a glue-only edit relink it.
 3. **tsdown** packages the library. The glue becomes a lazy chunk with its
    `new URL("….wasm", import.meta.url)` intact, and the `.wasm` is copied beside it.
 4. **Vite** builds the app from source — the library through a workspace alias, the SDK, Effect —
    and turns the library's wasm reference into an emitted asset.
 
-For development against a real host without accepting its certificate first:
+For development against a real host without accepting its certificate first, build the debug
+module once (`packages/stream/build.sh`, seconds to relink) and run the dev server:
 
 ```sh
 PF_HOST=https://192.168.1.25:47990 npm run dev
@@ -120,19 +123,21 @@ The dev server answers `/api` on the page's own origin. Only the dev server does
 page talks to the host it was pointed at, cross-origin, as designed. Through a proxy the
 WebTransport plane is not at the page's hostname; `Engine.create({ transportHost })` says where.
 
-### Why Skia is built, not downloaded
+### Skia is our own build
 
-The one target where `skia-safe`'s prebuilt does not work. rust-skia's published wasm archives —
-0.99.0 and 0.153.2 alike — are compiled for **emscripten** exception handling, while Rust's
-`wasm32-unknown-emscripten` std has used **wasm** exception handling since 1.87. They cannot be
-linked: with the prebuilt the link ends in `undefined symbol: emscripten_longjmp`, and dropping
-rustc's `-fwasm-exceptions` to meet it halfway ends in `undefined symbol: __cpp_exception` from
-libstd instead.
+rust-skia's published wasm archives — 0.99.0 and 0.153.2 alike — are compiled for **emscripten**
+exception handling, while Rust's `wasm32-unknown-emscripten` std has used **wasm** exception
+handling since 1.87. They cannot be linked: with the prebuilt the link ends in
+`undefined symbol: emscripten_longjmp`, and dropping rustc's `-fwasm-exceptions` to meet it
+halfway ends in `undefined symbol: __cpp_exception` from libstd instead.
 
-`build.sh` builds Skia with `EMCC_CFLAGS=-fwasm-exceptions` and caches the result under
-`~/.cache/punktfunk/skia-wasm/`, so the 30-minute cost is paid once per machine and every later
-build downloads it. Re-check at each `skia-safe` bump: if rust-skia ever publishes a wasm-EH
-archive, delete this whole arrangement.
+So Skia is built with `EMCC_CFLAGS=-fwasm-exceptions`, and that archive is published on the
+[unom package registry](https://git.unom.io/unom/-/packages/generic/skia-binaries/0.99.0).
+`build.sh` downloads it and keeps a copy under `~/.cache/punktfunk/skia-wasm/`, so later builds
+work offline. A key nobody published — after a `skia-safe` bump — builds from source (30 minutes, under
+emsdk 4.0.9: skia-bindings 0.99's bindgen does not run under 6.x) and lands in the same cache; publish that archive and pin its digest in punktfunk's
+`ci/skia-binaries.sh`, whose CI checks the same crates for wasm. If rust-skia ever ships a
+wasm-EH archive, delete this whole arrangement.
 
 ## Shape
 
@@ -162,6 +167,7 @@ Rust owns the protocol; TypeScript owns the browser. The library owns everything
 | `src/settings.ts` | What this browser prefers, in `localStorage` beside the known hosts. |
 | `src/pf-glue.ts` | Emscripten `--js-library`. **The only file that names a browser or GL object.** |
 | `src/emscripten.d.ts` | The wasm exports and the `--js-library` scope, typed once. |
+| `build.rs` | Names the glue to cargo, which does not track a `--js-library` input. |
 
 **`apps/web`**
 
@@ -242,17 +248,25 @@ npm run check                            # tsc --noEmit in both packages; stripp
 npm test                                 # node runs the .ts tests directly, no build step
 npm run storybook -w punktfunk-web       # every screen, from the fixtures, with no engine behind it
 cd packages/stream && cargo test         # the credential ceremony against the host's own SPAKE2 role B
+cargo clippy --target wasm32-unknown-emscripten -- -D warnings   # the Rust that only compiles for wasm
+./scripts/pack-gate.sh                   # after a build: the packed library in an empty Vite project
 ```
 
-CI runs all four plus the real build. `pf-connect.test.ts` checks the attestation verifier against
-bytes a real host produced, because the two languages agreeing is the part that fails silently.
-The Storybook build is a gate: the stories stub the lazy wasm import, so the shell renders on
-every push without an emscripten toolchain.
+CI runs all of these plus the real build. `pf-connect.test.ts` checks the attestation verifier
+against bytes a real host produced, because the two languages agreeing is the part that fails
+silently. The Storybook build is a gate: the stories stub the lazy wasm import, so the shell
+renders on every push without an emscripten toolchain.
 
-The gate that matters most is not a unit test: a consumer that has never seen this workspace
-installs `@punktfunk/stream` from `npm pack`'s tarball, and streams. That is what proves the
-packaging — the lazy wasm, the asset reference, the peers — and it was run against a live host
-on Safari before the split was called done.
+The pack gate installs `@punktfunk/stream` from `npm pack`'s tarball into a project that has never
+seen this workspace, type-checks a consumer and builds it. That proves the packaging — the lazy
+wasm, the asset reference, the peers. Streaming itself is proven against a live host with
+`apps/web/_e2e.html?pin=<PIN>&seconds=10` under the dev server: it pairs, streams, sends input,
+samples the picture and posts every state it passed through to `/report`.
+
+## Releases
+
+A `v*` tag builds everything above and attaches the app as
+`punktfunk-client-web-<tag>.tar.gz` to the GitHub release: `apps/web/dist`, ready to serve.
 
 ## Known gaps
 
@@ -270,7 +284,12 @@ on Safari before the split was called done.
   session overflows just by being constructed — and the symptom is `RuntimeError: Out of bounds
   memory access` from *every* export, including ones that do nothing. It reads like a corrupt
   module, not a stack overflow.
-- The release payload is around **8 MB of wasm**. The live heap under a stream is unmeasured.
+- **Automatic bitrate does not run in the browser.** The session streams at the bitrate the
+  settings name.
+- **The console still speaks as a native app** under `?ui=console`: it offers Quit, and says hosts
+  on the network appear by themselves, which a browser cannot discover.
+- The release payload is **8.2 MB of wasm, 3.5 MB gzipped**. The live heap under a stream is
+  unmeasured.
 
 ## License
 
