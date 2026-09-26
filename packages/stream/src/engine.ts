@@ -10,8 +10,9 @@
 // imports this library to show a host picker must not pay for it until someone connects.
 //
 // The order of the trust steps is the whole point and does not vary: reach the host, check its
-// attestation against what pairing stored, load the device key, *then* dial. Each step can only
-// fail in one direction, and a browser that has never paired simply has nothing to check.
+// attestation against what pairing stored, load the device key, *then* dial — and dial only to
+// pair or to stream. Each step can only fail in one direction, and a browser that has never paired
+// simply has nothing to check.
 
 import type { PunktfunkModule } from "./emscripten.ts";
 import { DeviceRefused, Host, type LibraryEntry, VersionSkew } from "./host.ts";
@@ -223,6 +224,8 @@ export class Engine {
   private running = true;
   /** A PIN given while the connection was down, sent when the next control stream opens. */
   private pendingPin: string | null = null;
+  /** A stream asked for from `ready`, sent as `Hello` when the dial it started opens. */
+  private pendingStream: StreamOptions | null = null;
 
   private constructor(
     private readonly mod: PunktfunkModule,
@@ -238,7 +241,7 @@ export class Engine {
       advancedStats: opts.advancedStats ?? TUNABLE_DEFAULTS.advancedStats,
     };
     if (opts.uiCanvas) mod.__pfUiCanvas = opts.uiCanvas;
-    mod.__pfOnDeviceReady = () => this.dial();
+    mod.__pfOnDeviceReady = () => this.onDeviceReady();
     mod.__pfOnCtlReady = () => this.onControlStream();
     mod.__pfOnClosed = (code, reason) => this.onClosed(code, reason);
     mod.__pfOnRefused = (code, reason) => this.onClosed(code, reason);
@@ -279,7 +282,8 @@ export class Engine {
 
   // --- verbs ---------------------------------------------------------------------------
   /**
-   * Reach a host, check it, load the device key and dial. Every failure is a state, not a
+   * Reach a host, check it and load the device key; `ready` or `needs-pairing` follows without a
+   * dial. Every failure is a state, not a
    * throw: the consumer renders `blocked`, `unreachable`, `untrusted` or `error`, and each
    * says what a person can do about it.
    */
@@ -358,7 +362,10 @@ export class Engine {
     if (!origin) return;
     switch (this.state.kind) {
       case "needs-pairing":
-        this.sendPairRequest(pin);
+        // Nothing is dialled while the PIN is typed; the request goes as the control stream opens.
+        this.pendingPin = pin;
+        this.set({ kind: "pairing", origin });
+        this.dial();
         return;
       case "forgotten":
       case "pair-refused": {
@@ -385,7 +392,7 @@ export class Engine {
   }
 
   /**
-   * Start streaming. Valid from `ready`.
+   * Start streaming. Valid from `ready`. Dials the plane; `Hello` goes as its control stream opens.
    *
    * `launch` names a library title to open (its `id`); the host resolves it on the real-display
    * source and streams the desktop otherwise. Left unset, the desktop streams.
@@ -399,6 +406,11 @@ export class Engine {
     this.lastDropped = 0;
     this.launchNotice = null;
     this.set({ kind: "starting", origin: this.origin });
+    this.pendingStream = opts;
+    this.dial();
+  }
+
+  private hello(opts: StreamOptions): void {
     const id = opts.launch?.id ?? "";
     withStr(this.mod, [id], (p, len) =>
       this.mod._pf_session_hello(opts.width, opts.height, opts.fps ?? 60, opts.bitrateKbps ?? 20000, id ? p : 0, id ? len : 0),
@@ -521,10 +533,26 @@ export class Engine {
     this.pairing = false;
     this.settled = false;
     this.offeredSince = 0;
+    this.pendingStream = null;
     // `pendingPin` survives: it is set right before the reconnect that calls this.
   }
 
-  /** The device key is loaded and the wasm side holds its SPKI. Dial now, not before. */
+  /**
+   * The device key is loaded. The plane is dialled only to pair or to stream: the host gives a
+   * session ten seconds to speak, so a browser looking at the library holds none, and `ready`
+   * comes from pairing records here plus the management API.
+   */
+  private onDeviceReady(): void {
+    const origin = this.origin;
+    if (!origin) return;
+    if (this.pendingPin || this.pendingStream) return this.dial();
+    const fingerprint = pf.hosts.fingerprint(origin);
+    const device = this.mod.__pfDevice;
+    if (!fingerprint || !device) return this.set({ kind: "needs-pairing", origin });
+    this.checkHost(origin, fingerprint, device);
+  }
+
+  /** Open the plane. Only after `onDeviceReady`: the wasm side must already hold the key's SPKI. */
   private dial(): void {
     if (!this.origin || !this.plane) return;
     const url = `https://${this.planeHost}:${this.plane.port}/stream`;
@@ -536,22 +564,25 @@ export class Engine {
     }
   }
 
+  /** The control stream is open: say at once what this dial was for. */
   private onControlStream(): void {
     const origin = this.origin;
     if (!origin) return;
-    const fingerprint = pf.hosts.fingerprint(origin);
-    const device = this.mod.__pfDevice;
-    if (!fingerprint || !device) {
-      // Never paired with this host. The stream would be refused unless the host was started
-      // with `serve --open`, so say so rather than let it fail silently.
-      this.set({ kind: "needs-pairing", origin });
-      const pin = this.pendingPin;
-      this.pendingPin = null;
-      if (pin) this.sendPairRequest(pin);
-      return;
-    }
-    // The management API is what knows whether the host still accepts this device, so `ready`
-    // waits for it. Refused: unpaired there. Any other failure leaves streaming possible.
+    const stream = this.pendingStream;
+    this.pendingStream = null;
+    if (stream) return this.hello(stream);
+    const pin = this.pendingPin;
+    this.pendingPin = null;
+    if (pin) return this.sendPairRequest(pin);
+    // A dial with nothing to say would be closed by the host within ten seconds anyway.
+    this.mod._pf_wt_close?.();
+  }
+
+  /**
+   * The management API is what knows whether the host still accepts this device, so `ready`
+   * waits for it. Refused: unpaired there. Any other failure leaves streaming possible.
+   */
+  private checkHost(origin: string, fingerprint: string, device: NonNullable<PunktfunkModule["__pfDevice"]>): void {
     const host = new Host(origin, fingerprint, device);
     this.host = host;
     void host.info().then(
@@ -583,6 +614,14 @@ export class Engine {
     const origin = this.origin;
     if (!origin || this.state.kind === "idle") return;
     const said = reason.trim();
+    if (code === NEVER_OPENED) {
+      this.stopSession();
+      return this.set({
+        kind: "error",
+        origin,
+        message: `couldn't reach the host on UDP ${this.plane?.port}, its browser streaming port. Check that nothing between this device and the host blocks it`,
+      });
+    }
     switch (this.state.kind) {
       case "pairing":
         // The ceremony's own verdict (`PairResult`) is authoritative; a close with a reason and
@@ -605,11 +644,8 @@ export class Engine {
       this.set({ kind: "forgotten", origin });
       return;
     }
-    const port = this.plane?.port;
     const message =
-      code === NEVER_OPENED
-        ? `couldn't reach the host on UDP ${port}, its browser streaming port. Check that nothing between this device and the host blocks it`
-        : code === CLOSE.HOST_POWER
+      code === CLOSE.HOST_POWER
         ? "the host is powering down"
         : code === CLOSE.ACCESS_EXPIRED
           ? "this device's access to the host has expired"
