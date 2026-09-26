@@ -6,3 +6,4 @@ node_modules/
 /packages/stream/wasm/*.wasm
 /apps/web/dist
 /apps/web/storybook-static
+/target

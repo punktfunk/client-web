@@ -25,7 +25,7 @@
   "sideEffects": false,
   "scripts": {
     "build:glue": "tsc -p tsconfig.glue.json",
-    "build:wasm": "./build.sh",
+    "build:wasm": "./build.sh --release",
     "build:lib": "tsdown && cp wasm/punktfunk_client_web.wasm dist/",
     "build": "npm run build:wasm && npm run build:lib",
     "check": "tsc --noEmit",

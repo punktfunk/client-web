@@ -24,6 +24,9 @@ const SIZES: ReadonlyArray<[label: string, width: number, height: number]> = [
 
 const RATES = [30, 60, 120, 144];
 
+/** Set by `vite.config.ts` from `git describe`. */
+declare const __PF_VERSION__: string;
+
 export function SettingsDialog({ screen, actions }: { screen: Extract<Screen, { kind: "settings" }>; actions: Actions }): JSX.Element {
   const v = screen.values;
   const set = (patch: Partial<Settings>) => actions.setSettings(patch);
@@ -145,6 +148,7 @@ export function SettingsDialog({ screen, actions }: { screen: Extract<Screen, { 
           <Button variant="secondary" onClick={() => set(DEFAULTS)}>Reset</Button>
           <Button autoFocus onClick={() => actions.openSettings(false)}>Done</Button>
         </DialogFooter>
+        <p className="-mt-2 text-center text-xs text-muted-foreground">punktfunk web {__PF_VERSION__}</p>
       </DialogContent>
     </Dialog>
   );

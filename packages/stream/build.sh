@@ -33,17 +33,16 @@ command -v emcc >/dev/null || {
 
 # --- Skia -------------------------------------------------------------------------------------
 #
-# 🛑 This is the ONE target where we build Skia instead of downloading it, and it is not a
-# packaging oversight. rust-skia's published wasm archives — 0.99.0 and 0.153.2 alike — are
+# 🛑 rust-skia's own wasm archives cannot be used here. They are — 0.99.0 and 0.153.2 alike —
 # compiled for EMSCRIPTEN exception handling, while Rust's `wasm32-unknown-emscripten` std has
 # used WASM exception handling since 1.87. The two cannot be linked: with the prebuilt the link
 # ends in `undefined symbol: emscripten_longjmp`, and stripping rustc's `-fwasm-exceptions` to
 # meet it halfway ends in `undefined symbol: __cpp_exception` from libstd instead. `EMCC_CFLAGS`
 # below is what puts Skia on Rust's side of that line.
 #
-# The cost is paid once per machine: the result is packed into an archive under the cache below,
-# and every later build downloads that instead — the same `SKIA_BINARIES_URL` mechanism the webOS
-# armv7 client uses for its self-hosted archive. Delete the cache to force a rebuild.
+# That archive is published, so a build downloads it (punktfunk's ci/skia-binaries.sh pins its
+# digest). A key nobody published 404s, skia-bindings then builds from source (30+ minutes), and
+# the result is packed into the cache below. A cached archive always wins, so rebuilds work offline.
 skia_key="a25a0fdb7d90429aa2d1-wasm32-unknown-emscripten-gl-jpegd-jpege-pdf-textlayout"
 cache="${PF_SKIA_WASM_CACHE:-${XDG_CACHE_HOME:-$HOME/.cache}/punktfunk/skia-wasm}"
 archive="$cache/skia-binaries-$skia_key.tar.gz"
@@ -53,8 +52,9 @@ export EMCC_CFLAGS="${EMCC_CFLAGS:-} -fwasm-exceptions"
 if [ -f "$archive" ]; then
   export SKIA_BINARIES_URL="file://$cache/skia-binaries-{key}.tar.gz"
 else
-  echo "==> no cached Skia wasm archive — building it from source (30+ minutes, once)"
-  export FORCE_SKIA_BUILD=1
+  # Not inline in `${…:-…}`: the `}` of `{key}` would end the expansion there.
+  published='https://git.unom.io/api/packages/unom/generic/skia-binaries/0.99.0/skia-binaries-{key}.tar.gz'
+  export SKIA_BINARIES_URL="${SKIA_BINARIES_URL:-$published}"
 fi
 
 link=(
@@ -99,7 +99,7 @@ echo "==> cargo rustc (${profile})"
 cargo rustc --manifest-path "$here/Cargo.toml" --target wasm32-unknown-emscripten \
   ${cargo_profile[@]+"${cargo_profile[@]}"} -- "${link[@]}"
 
-# Pack what the source build produced, so the next build is a download. skia-bindings renames
+# Pack what skia-bindings installed, so the next build needs no network. skia-bindings renames
 # `lib*.wasm.a` to `lib*.a` on import, so the archive has to carry both spellings.
 built="$(ls -td "$target"/wasm32-unknown-emscripten/"$profile"/build/skia-bindings-*/out/skia 2>/dev/null | head -1)"
 if [ ! -f "$archive" ] && [ -n "$built" ]; then

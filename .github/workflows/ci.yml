@@ -3,6 +3,7 @@ name: CI
 on:
   push:
     branches: [main]
+    tags: ["v*"]
   pull_request:
 
 env:
@@ -15,8 +16,8 @@ jobs:
   web:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
           node-version: 24
           cache: npm
@@ -29,57 +30,68 @@ jobs:
       # engine, so this proves the shell and its fixtures on every push.
       - run: npm run build-storybook -w punktfunk-web
 
-  # The Rust half that does not need emscripten: the credential ceremony and the signature
-  # encodings. These are the pieces where the client and the host can disagree silently, which
-  # is why they build off wasm at all.
+  # The Rust half. Natively: the credential ceremony and the signature encodings, where the
+  # client and the host can disagree silently. On wasm: clippy over everything else, which only
+  # compiles there. Neither links, so neither needs emsdk.
   check:
     runs-on: ubuntu-latest
     defaults:
       run:
         working-directory: packages/stream
+    env:
+      SKIA_BINARIES_URL: https://git.unom.io/api/packages/unom/generic/skia-binaries/0.99.0/skia-binaries-{key}.tar.gz
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: rustfmt, clippy
+      - uses: actions/checkout@v7
+      # rust-toolchain.toml: the pinned rustc, rustfmt, clippy and the wasm target.
+      - run: rustup toolchain install
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: packages/stream
       - run: cargo fmt --check
       - run: cargo clippy --all-targets -- -D warnings
+      - run: cargo clippy --target wasm32-unknown-emscripten -- -D warnings
       - run: cargo test
 
-  # The real artefacts: the library and the app. Skia is source-built for this target (see the
-  # README), so the cache is the difference between four minutes and forty.
+  # The real artefacts: the library and the app, release wasm. Skia comes prebuilt (build.sh).
+  # A `v*` tag also publishes the app as a tarball on the GitHub release.
   build:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@v7
         with:
-          targets: wasm32-unknown-emscripten
-      - uses: actions/setup-node@v4
+          # `git describe` names the build on the settings sheet; it needs the tags.
+          fetch-depth: 0
+      - uses: actions/setup-node@v7
         with:
           node-version: 24
           cache: npm
-      - uses: mymindstorm/setup-emsdk@v14
+      - uses: mymindstorm/setup-emsdk@v16
         with:
-          version: 4.0.9
+          version: 6.0.10
+      - run: rustup toolchain install
+        working-directory: packages/stream
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: packages/stream
-      # Keyed on the crate manifest, because that is what decides the archive's key.
-      - uses: actions/cache@v4
-        with:
-          path: ~/.cache/punktfunk/skia-wasm
-          key: skia-wasm-${{ hashFiles('packages/stream/Cargo.toml') }}
       - run: npm ci
       - run: npm run build
-      - uses: actions/upload-artifact@v4
+      # The packed library, installed into an empty Vite project: the consumer's view.
+      - run: ./scripts/pack-gate.sh
+      - uses: actions/upload-artifact@v7
         with:
           name: punktfunk-stream
           path: packages/stream/dist/
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: punktfunk-web
           path: apps/web/dist/
+      - name: Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tarball="punktfunk-client-web-${GITHUB_REF_NAME}.tar.gz"
+          tar -czf "$tarball" -C apps/web/dist .
+          gh release create "$GITHUB_REF_NAME" "$tarball" --verify-tag --generate-notes
