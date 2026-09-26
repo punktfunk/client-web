@@ -3,6 +3,8 @@
   "compilerOptions": {
     "noEmit": true,
     "jsx": "react-jsx",
+    // `vite/client` declares the CSS imports, which TypeScript 7 checks like any other import.
+    "types": ["@webgpu/types", "node", "vite/client"],
     "paths": {
       // The library from source, not from its `dist/`: this is the workspace's own consumer, and
       // resolving the sources is what makes a change in the engine show up here without a build
