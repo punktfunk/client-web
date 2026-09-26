@@ -324,12 +324,16 @@ class App {
     for (const entry of this.entries) {
       const art = entry.art.portrait ?? entry.art.header;
       if (!art || this.art.has(entry.id)) continue;
-      void s.host.art(art).then((url) => {
-        if (!url) return;
-        this.art.set(entry.id, url);
-        const now = this.engine.current;
-        if (now.kind === "ready") this.redrawLibrary(now);
-      });
+      void s.host
+        .art(art)
+        .then((url) => {
+          if (!url) return;
+          this.art.set(entry.id, url);
+          const now = this.engine.current;
+          if (now.kind === "ready") this.redrawLibrary(now);
+        })
+        // A cover that cannot load leaves its tile's placeholder.
+        .catch(() => {});
     }
   }
 
