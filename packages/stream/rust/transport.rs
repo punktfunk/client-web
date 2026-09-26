@@ -217,8 +217,7 @@ pub extern "C" fn pf_net_blast(count: u32, size: u32) -> u32 {
         packet[..4].copy_from_slice(&seq.to_le_bytes());
         match WebTransportDatagrams.send(&packet) {
             Ok(true) => queued += 1,
-            Ok(false) => break,
-            Err(_) => break,
+            Ok(false) | Err(_) => break,
         }
     }
     queued

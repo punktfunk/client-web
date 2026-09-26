@@ -78,12 +78,17 @@ fn start(width: i32, height: i32) -> anyhow::Result<App> {
     let opts = ConsoleOptions {
         device_name: "Browser".to_string(),
         deck: false,
+        tv: false,
         fallback_ui: false,
         store: Some(store.clone()),
         platform: Platform::Web,
         gpu_cache_bytes: GPU_CACHE_BYTES,
         // A Vulkan compute codec: a browser has no device to run it on.
         pyrowave_ok: false,
+        // `Hello` offers H.264 only (session.rs).
+        av1_ok: false,
+        // The stream goes to a window, whose shape the Aspect row cannot know.
+        screen: None,
     };
     let console = Console::new(opts, ConsoleEntry::Home, &handles)?;
     println!("punktfunk-web: console up, {width}×{height}");
