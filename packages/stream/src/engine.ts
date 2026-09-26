@@ -316,6 +316,15 @@ export class Engine {
     } catch (e) {
       return this.set({ kind: "error", origin, message: message(e) });
     }
+    // Pairing keeps the identity the attestation names. Without one, every pairing is lost at once.
+    if (!this.plane.cert_hash_sig || !this.plane.host_cert_der) {
+      return this.set({
+        kind: "error",
+        origin,
+        message:
+          "this host still has its older identity, which a browser can't pair with. Moving it to the new one means unpairing its other devices, restarting it and pairing them again",
+      });
+    }
 
     const known = pf.hosts.fingerprint(origin);
     if (known) {
