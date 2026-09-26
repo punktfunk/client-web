@@ -8,12 +8,46 @@ use axum::body::Body;
 use axum::extract::{Path, Request, State};
 use axum::http::{header, HeaderMap, HeaderName, StatusCode};
 use axum::response::{IntoResponse, Response};
+use futures_util::StreamExt;
 use punktfunk_core::tls::PinVerify;
+use std::collections::HashMap;
 use std::net::{IpAddr, SocketAddr};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, LazyLock, Mutex};
 use std::time::Duration;
+use tokio::sync::Semaphore;
 
 type Seen = Arc<Mutex<Option<[u8; 32]>>>;
+
+/// Requests in flight to one host. A host drops connections past 32 per IP, and over HTTP/1.1
+/// each request is a connection; 16 leaves room for the other clients on this machine.
+const IN_FLIGHT: usize = 16;
+
+/// One kept client per host and pin. HTTP/2 to a host that offers it puts every request on one
+/// connection; `gate` holds an HTTP/1.1 host under its ceiling.
+struct Upstream {
+    client: reqwest::Client,
+    seen: Seen,
+    gate: Arc<Semaphore>,
+}
+
+type UpstreamKey = (String, u16, Option<[u8; 32]>);
+static UPSTREAMS: LazyLock<Mutex<HashMap<UpstreamKey, Arc<Upstream>>>> =
+    LazyLock::new(Default::default);
+
+fn upstream(addr: &str, port: u16, pin: Option<[u8; 32]>) -> anyhow::Result<Arc<Upstream>> {
+    let mut all = UPSTREAMS.lock().unwrap();
+    if let Some(up) = all.get(&(addr.to_string(), port, pin)) {
+        return Ok(up.clone());
+    }
+    let seen: Seen = Arc::default();
+    let up = Arc::new(Upstream {
+        client: client(pin, seen.clone())?,
+        seen,
+        gate: Arc::new(Semaphore::new(IN_FLIGHT)),
+    });
+    all.insert((addr.to_string(), port, pin), up.clone());
+    Ok(up)
+}
 
 /// A host this server lists: `/h/<id>/…`.
 pub async fn listed(
@@ -118,17 +152,21 @@ async fn relay(
         .map(|q| format!("?{q}"))
         .unwrap_or_default();
     let url = format!("https://{addr}:{port}/{rest}{query}");
-    let seen: Seen = Arc::default();
-    // ponytail: a client per request, so a TLS handshake each time (ms on a LAN). A pool keyed by
-    // pin is the upgrade if a library of hundreds of covers ever loads slowly.
-    let client = match client(pin, seen.clone()) {
-        Ok(c) => c,
-        Err(e) => return gateway(addr, "the proxy client did not build", &e.to_string()),
+    let up = match upstream(addr, port, pin) {
+        Ok(up) => up,
+        Err(e) => return gateway(addr, "the proxy client did not build", &format!("{e:#}")),
     };
+    let slot = up
+        .gate
+        .clone()
+        .acquire_owned()
+        .await
+        .expect("the gate is never closed");
     let (parts, body) = req.into_parts();
     let has_body = parts.headers.contains_key(header::CONTENT_LENGTH)
         || parts.headers.contains_key(header::TRANSFER_ENCODING);
-    let mut out = client
+    let mut out = up
+        .client
         .request(parts.method, url)
         .headers(strip(parts.headers));
     if has_body {
@@ -137,21 +175,31 @@ async fn relay(
     match out.send().await {
         Ok(resp) => {
             if pin.is_none() {
-                if let Some(fp) = *seen.lock().unwrap() {
+                if let Some(fp) = *up.seen.lock().unwrap() {
                     match learn {
                         Learn::Listed(id) => hosts.learned(&id, fp),
                         Learn::Address(key) => hosts.keep(&key, fp),
                     }
+                    // Pinned from here on: the next request builds that client instead.
+                    UPSTREAMS
+                        .lock()
+                        .unwrap()
+                        .remove(&(addr.to_string(), port, None));
                 }
             }
             let (status, headers) = (resp.status(), strip(resp.headers().clone()));
-            let mut res = Response::new(Body::from_stream(resp.bytes_stream()));
+            // The slot rides the body: over HTTP/1.1 the connection is busy until the last byte.
+            let body = resp.bytes_stream().map(move |chunk| {
+                let _ = &slot;
+                chunk
+            });
+            let mut res = Response::new(Body::from_stream(body));
             *res.status_mut() = status;
             *res.headers_mut() = headers;
             res
         }
         Err(e) => {
-            let presented = *seen.lock().unwrap();
+            let presented = *up.seen.lock().unwrap();
             if pin.is_some() && presented.is_some() && presented != pin {
                 tracing::warn!(
                     host = %addr,
@@ -166,7 +214,12 @@ async fn relay(
                 )
                     .into_response();
             }
-            gateway(addr, "host did not answer", &e.to_string())
+            // The chain, not the top line: reqwest's own message is only "error sending request".
+            gateway(
+                addr,
+                "host did not answer",
+                &format!("{:#}", anyhow::Error::new(e)),
+            )
         }
     }
 }
@@ -178,10 +231,12 @@ fn gateway(host: &str, what: &str, cause: &str) -> Response {
 }
 
 fn client(pin: Option<[u8; 32]>, seen: Seen) -> anyhow::Result<reqwest::Client> {
-    let tls = rustls::ClientConfig::builder()
+    let mut tls = rustls::ClientConfig::builder()
         .dangerous()
         .with_custom_certificate_verifier(Arc::new(PinVerify::with_observed(pin, seen)))
         .with_no_client_auth();
+    // reqwest leaves a preconfigured TLS config alone, ALPN included.
+    tls.alpn_protocols = vec![b"h2".to_vec(), b"http/1.1".to_vec()];
     Ok(reqwest::Client::builder()
         .tls_backend_preconfigured(tls)
         .connect_timeout(Duration::from_secs(5))
