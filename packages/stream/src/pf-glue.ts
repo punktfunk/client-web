@@ -28,16 +28,16 @@ declare const pfNet: PfNet;
 declare const pfCred: PfCred;
 
 mergeInto(LibraryManager.library, {
-  // Bring up a WebGL2 context on the UI canvas and make it current for emscripten's GL layer.
-  // Returns 1 on success, 0 if the browser gave us no WebGL2. Idempotent: a second call just
-  // re-makes the existing context current.
+  // Bring up a WebGL2 context on the console's canvas (`EngineOptions.uiCanvas`) and make it
+  // current for emscripten's GL layer. Returns 1 on success, 0 without a canvas or WebGL2.
+  // Idempotent: a second call just re-makes the existing context current.
   pf_gl_setup: function (): number {
     const mod = Module as unknown as { __pfUiCtx?: number };
     if (mod.__pfUiCtx) {
       GL.makeContextCurrent(mod.__pfUiCtx);
       return 1;
     }
-    const canvas = document.getElementById("pf-ui") as HTMLCanvasElement | null;
+    const canvas = Module.__pfUiCanvas;
     if (!canvas) return 0;
     // `alpha: true` is what lets the video canvas show through wherever the console draws
     // nothing. `antialias: false` because Skia does its own; `depth`/`stencil` off because

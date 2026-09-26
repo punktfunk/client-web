@@ -105,6 +105,8 @@ export interface PunktfunkModule {
     spki(): Promise<string>;
     sign(message: Uint8Array): Promise<Uint8Array>;
   };
+  /** The console's canvas (`EngineOptions.uiCanvas`), where `pf_gl_setup` brings up WebGL2. */
+  __pfUiCanvas?: HTMLCanvasElement;
   /** The device key is loaded and Rust holds its SPKI. Dial now, not before. */
   __pfOnDeviceReady?: () => void;
   /** The control stream is open. Send `Hello`, or ask for a PIN. */
