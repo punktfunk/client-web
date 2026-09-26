@@ -9,6 +9,7 @@ export {
   Engine,
   type EngineOptions,
   type EngineState,
+  type HostTarget,
   type HudLine,
   type SessionStats,
   type StreamOptions,

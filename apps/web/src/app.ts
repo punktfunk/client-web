@@ -12,6 +12,7 @@
 import {
   Engine,
   type EngineState,
+  type HostTarget,
   hosts,
   type LibraryEntry,
   type Reach,
@@ -64,16 +65,18 @@ class App {
     private readonly engine: Engine,
     private readonly ui: Ui,
     private readonly uiCanvas: HTMLCanvasElement,
+    /** The hosts the page's own server proxies, by the API origin the engine keys them under. */
+    private readonly configured: Map<string, Configured>,
   ) {
     ui.mount({
       connect: (address) => {
         this.adding = false;
-        void engine.connect(address);
+        void engine.connect(this.targetOf(address));
       },
       pair: (pin) => engine.pair(pin),
       retry: () => {
         const s = engine.current;
-        if ("origin" in s && s.origin) void engine.connect(s.origin);
+        if ("origin" in s && s.origin) void engine.connect(this.targetOf(s.origin));
       },
       back: () => engine.disconnect(),
       play: (entry) => this.play(entry),
@@ -153,7 +156,7 @@ class App {
         // The host closes after the ceremony, as it does for native clients; streaming is a
         // fresh connection.
         const origin = s.origin;
-        setTimeout(() => void this.engine.connect(origin), 300);
+        setTimeout(() => void this.engine.connect(this.targetOf(origin)), 300);
         return;
       }
       case "pair-refused":
@@ -188,8 +191,13 @@ class App {
 
   // --- the home screen -------------------------------------------------------------------
   private home(error?: string): void {
-    const known = this.engine.knownHosts();
-    const hosts: HostCard[] = known.map((h) => {
+    // The server's hosts first, under the name it gives them; then the ones typed here.
+    const known = new Map(this.engine.knownHosts().map((h) => [h.origin, h]));
+    const listed: HostCard[] = [
+      ...[...this.configured].map(([origin, c]) => ({ ...known.get(origin), origin, name: c.name })),
+      ...[...known.values()].filter((h) => !this.configured.has(h.origin)),
+    ];
+    const hosts: HostCard[] = listed.map((h) => {
       const seen = this.reachCache.get(h.origin);
       return seen ? { ...h, reach: seen.reach } : h;
     });
@@ -200,7 +208,12 @@ class App {
       adding: this.adding || hosts.length === 0,
       ...(error ? { error } : {}),
     });
-    void this.probe(known.map((h) => h.origin));
+    void this.probe(hosts.map((h) => h.origin));
+  }
+
+  /** A configured host is reached through the page's server; anything else by its address. */
+  private targetOf(origin: string): string | HostTarget {
+    return this.configured.get(origin) ?? origin;
   }
 
   /**
@@ -234,7 +247,7 @@ class App {
     const reconnect = this.screen.kind === "trust" && this.screen.origin === origin;
     this.reachCache.delete(origin);
     this.engine.forget(origin);
-    if (reconnect) void this.engine.connect(origin);
+    if (reconnect) void this.engine.connect(this.targetOf(origin));
   }
 
   // --- the library ---------------------------------------------------------------------
@@ -409,6 +422,31 @@ function pickUi(engine: Engine, uiCanvas: HTMLCanvasElement): Ui {
   return wanted === "console" ? new ConsoleUi(engine, uiCanvas, shell) : shell;
 }
 
+/** A host from the page server's `config.json`. */
+interface Configured extends HostTarget {
+  name: string;
+}
+
+/**
+ * The hosts `punktfunk-client-web-server` proxies, from its `config.json`. Any other server has
+ * none (a dev server answers `index.html`, which does not parse), and the page falls back to
+ * addresses typed here.
+ */
+async function configuredHosts(): Promise<Map<string, Configured>> {
+  try {
+    const r = await fetch("./config.json", { cache: "no-store" });
+    const c = (await r.json()) as { hosts?: Array<{ name: string; api: string; plane: string }> };
+    return new Map(
+      (c.hosts ?? []).map((h): [string, Configured] => {
+        const api = new URL(h.api, location.href).href.replace(/\/+$/, "");
+        return [api, { api, plane: h.plane, name: h.name }];
+      }),
+    );
+  } catch {
+    return new Map();
+  }
+}
+
 /** Set by `vite.config.ts` when the dev server proxies a host; absent in a build. */
 declare const __PF_TRANSPORT_HOST__: string | undefined;
 
@@ -421,7 +459,7 @@ try {
     uiCanvas,
     ...(__PF_TRANSPORT_HOST__ ? { transportHost: __PF_TRANSPORT_HOST__ } : {}),
   });
-  new App(engine, pickUi(engine, uiCanvas), uiCanvas);
+  new App(engine, pickUi(engine, uiCanvas), uiCanvas, await configuredHosts());
 } catch (e) {
   // Before there is an engine there is no interface to say this on; the one sheet the page
   // carries for exactly this case does.

@@ -82,6 +82,8 @@ export async function reach(origin: string, timeoutMs = 4000): Promise<Reach> {
       cache: "no-store",
       signal: abort.signal,
     });
+    // A gateway answering for the host (the page's own server) says it could not reach it.
+    if (r.status >= 502 && r.status <= 504) return "unreachable";
     return r.ok ? "ok" : "blocked";
   } catch {
     return performance.now() - started < timeoutMs * 0.75 ? "blocked" : "unreachable";
