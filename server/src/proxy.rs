@@ -52,6 +52,20 @@ pub async fn typed(
     if !rest.starts_with("api/") {
         return StatusCode::NOT_FOUND.into_response();
     }
+    // The page's own server, named as a host, would answer itself with the page.
+    // HTTP/2 carries the address in the URI authority; HTTP/1.1 in `Host`.
+    let own = req.uri().authority().map(|a| a.as_str()).or_else(|| {
+        req.headers()
+            .get(header::HOST)
+            .and_then(|h| h.to_str().ok())
+    });
+    if own == Some(target.as_str()) {
+        return (
+            StatusCode::BAD_REQUEST,
+            "That is this server's own address, not a host.",
+        )
+            .into_response();
+    }
     let addr = match ip {
         IpAddr::V4(v4) => v4.to_string(),
         IpAddr::V6(v6) => format!("[{v6}]"),
@@ -292,6 +306,21 @@ mod tests {
             get(hosts.clone(), "/a/example.com/api/v1/health").await.0,
             StatusCode::BAD_REQUEST
         );
+
+        let own = Request::get("/a/192.168.1.233:8443/api/v1/health")
+            .header("host", "192.168.1.233:8443")
+            .body(Body::empty())
+            .unwrap();
+        let own_h2 = Request::get("https://192.168.1.233:8443/a/192.168.1.233:8443/api/v1/health")
+            .body(Body::empty())
+            .unwrap();
+        for req in [own, own_h2] {
+            let res = crate::router(hosts.clone(), std::env::temp_dir())
+                .oneshot(req)
+                .await
+                .unwrap();
+            assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+        }
 
         let closed = Hosts::new(Vec::new(), &dir.join("closed"), false).unwrap();
         assert_eq!(get(closed, &health).await.0, StatusCode::NOT_FOUND);
