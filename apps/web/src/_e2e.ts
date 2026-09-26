@@ -9,6 +9,7 @@
 //
 // Behind punktfunk-client-web-server: `?api=h/<host>&plane=<host address>` reaches a host the
 // server proxies, and `?report=<url>` posts the lines to a collector the server does not serve.
+// `?idle=<s>` sits on `ready` that long first, as a person browsing the library does.
 import { Engine, type EngineState, type HostTarget } from "@punktfunk/stream";
 
 declare const __PF_TRANSPORT_HOST__: string | undefined;
@@ -96,8 +97,23 @@ try {
     try {
       const lib = await l.host.library();
       log(`ok   library: ${lib.length} entries`);
+      // Covers as the grid asks for them: an object URL, a CDN URL, nothing, or a throw.
+      const tally = { shown: 0, none: 0, missing: 0, failed: 0 };
+      for (const entry of lib.slice(0, 8)) {
+        const art = entry.art.portrait ?? entry.art.header;
+        if (!art) { tally.missing++; continue; }
+        try { (await l.host.art(art)) ? tally.shown++ : tally.none++; }
+        catch (e: any) { tally.failed++; log("art failed: " + art + ": " + (e?.message ?? e)); }
+      }
+      log(`${tally.shown && !tally.failed ? "ok  " : "FAIL"} art: ${JSON.stringify(tally)}`);
     } catch (e: any) {
       log("FAIL library: " + (e?.message ?? e));
+    }
+    // Sit on the library the way a person does; the host gives a silent session ten seconds.
+    const IDLE = Number(q.get("idle") ?? "0");
+    if (IDLE) {
+      await sleep(IDLE * 1000);
+      log(last().kind === "ready" ? `ok   still ready after ${IDLE}s idle` : `FAIL left ready while idle: ${last().kind}`);
     }
     engine.startStream({ width: 1280, height: 720, fps: 60, bitrateKbps: 8000, ...(LAUNCH ? { launch: { id: LAUNCH, title: LAUNCH, store: "e2e", art: {} } as any } : {}) });
     if (LAUNCH) log("requested launch id: " + LAUNCH);
