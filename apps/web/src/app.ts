@@ -134,7 +134,7 @@ class App {
       case "bad-address":
         // The field stays in front: what was typed is wrong and this is where it is fixed.
         this.adding = true;
-        return this.home(s.message);
+        return this.home(sentence(s.message));
       case "reaching":
         return this.show({ kind: "connecting", origin: s.origin, phase: "reaching" });
       case "blocked": {
@@ -150,7 +150,7 @@ class App {
           retry: true,
         });
       case "untrusted":
-        return this.show({ kind: "trust", origin: s.origin, reason: s.reason });
+        return this.show({ kind: "trust", origin: s.origin, reason: sentence(s.reason) });
       case "connecting":
         return this.show({ kind: "connecting", origin: s.origin, phase: "connecting" });
       case "needs-pairing":
@@ -170,7 +170,7 @@ class App {
           kind: "pair",
           origin: s.origin,
           mode: "first",
-          error: s.reason ?? "That PIN was refused.",
+          error: s.reason ? sentence(s.reason) : "That PIN was refused.",
         });
       case "forgotten":
         return this.show({ kind: "pair", origin: s.origin, mode: "again" });
@@ -189,7 +189,9 @@ class App {
         return this.show({
           kind: "error",
           head: s.skew ? "This host speaks a different version" : "Something went wrong",
-          text: s.skew ? `${s.message}. Update the host, or this page, so the two agree.` : s.message,
+          text: s.skew
+            ? `${sentence(s.message)} Update the host, or this page, so the two agree.`
+            : sentence(s.message),
           retry: !s.skew,
         });
     }
@@ -284,7 +286,7 @@ class App {
         return this.show({
           kind: "error",
           head: "This host speaks a different version",
-          text: `${e.message}. Update the host, or this page, so the two agree.`,
+          text: `${sentence(e.message)} Update the host, or this page, so the two agree.`,
         });
       }
       // The stream still works without a library, so this is a line on the screen rather than a
@@ -337,7 +339,7 @@ class App {
       busy: this.libraryFor === s.origin && !this.libraryLoaded,
       ...(this.hostName ? { host: this.hostName } : {}),
       ...(this.running ? { running: this.running } : {}),
-      ...(error ? { error: `${error} — you can still stream the desktop.` } : {}),
+      ...(error ? { error: `${sentence(error)} You can still stream the desktop.` } : {}),
     });
   }
 
@@ -407,6 +409,14 @@ class App {
       ...(entry ? { launch: entry } : {}),
     });
   }
+}
+
+/** The engine speaks in lowercase fragments, as logs do; a screen speaks in sentences. */
+function sentence(message: string): string {
+  const m = message.trim();
+  if (!m) return m;
+  const s = m[0]!.toUpperCase() + m.slice(1);
+  return /[.!?]$/.test(s) ? s : `${s}.`;
 }
 
 /** An origin without its scheme. Every screen shows a host this way; nothing gains from the
@@ -513,6 +523,6 @@ try {
   shell.render({
     kind: "error",
     head: "This browser cannot run the client",
-    text: e instanceof Error ? e.message : String(e),
+    text: sentence(e instanceof Error ? e.message : String(e)),
   });
 }
