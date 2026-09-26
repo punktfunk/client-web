@@ -1,0 +1,38 @@
+[package]
+name = "punktfunk-client-web-server"
+description = "Serves the punktfunk browser client and proxies each host's management API on the page's own origin."
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.85"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/punktfunk/client-web"
+publish = false
+
+[dependencies]
+anyhow = "1"
+axum = "0.8"
+axum-server = { version = "0.8", features = ["tls-rustls-no-provider"] }
+futures-util = { version = "0.3", default-features = false }
+rcgen = "0.14"
+reqwest = { version = "0.13", default-features = false, features = ["stream", "rustls-no-provider"] }
+rustls = { version = "0.23", default-features = false, features = ["std"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+time = "0.3"
+# The browse behind pf-client-core's discovery, used directly: that crate would bring core's whole
+# QUIC stack (and libopus) along on Linux for thirty lines of mDNS.
+mdns-sd = "0.21"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "fs", "signal", "sync", "time"] }
+tower-http = { version = "0.7", features = ["fs"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+# Pinned to the rev packages/stream builds against: the same PinVerify and address ranking the
+# native clients use, so this server trusts and reaches a host exactly the way they do.
+punktfunk-core = { git = "https://git.unom.io/unom/punktfunk", rev = "0a4aad079", default-features = false, features = ["tls"] }
+
+[dev-dependencies]
+tower = { version = "0.5", features = ["util"] }
+
+[profile.release]
+lto = "thin"
+strip = true

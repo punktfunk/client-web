@@ -82,6 +82,8 @@ export async function reach(origin: string, timeoutMs = 4000): Promise<Reach> {
       cache: "no-store",
       signal: abort.signal,
     });
+    // A gateway answering for the host (the page's own server) says it could not reach it.
+    if (r.status >= 502 && r.status <= 504) return "unreachable";
     return r.ok ? "ok" : "blocked";
   } catch {
     return performance.now() - started < timeoutMs * 0.75 ? "blocked" : "unreachable";
@@ -164,6 +166,8 @@ export interface KnownHost {
   /** What someone here decided to call it. Outranks `name`: two machines on a network can
    *  report the same hostname, and only the person looking at them can tell them apart. */
   label?: string;
+  /** Where the plane is dialled when the API is reached through the page's server. */
+  plane?: string;
   seen?: number;
 }
 

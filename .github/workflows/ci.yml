@@ -52,6 +52,22 @@ jobs:
       - run: cargo clippy --target wasm32-unknown-emscripten -- -D warnings
       - run: cargo test
 
+  # The server that serves the page and proxies the hosts' API (server/).
+  server:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: server
+    steps:
+      - uses: actions/checkout@v7
+      - run: rustup toolchain install
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: server
+      - run: cargo fmt --check
+      - run: cargo clippy --all-targets --locked -- -D warnings
+      - run: cargo test --locked
+
   # The real artefacts: the library and the app, release wasm. Skia comes prebuilt (build.sh).
   # A `v*` tag also publishes the app as a tarball on the GitHub release.
   build:
@@ -95,3 +111,69 @@ jobs:
           tarball="punktfunk-client-web-${GITHUB_REF_NAME}.tar.gz"
           tar -czf "$tarball" -C apps/web/dist .
           gh release create "$GITHUB_REF_NAME" "$tarball" --verify-tag --generate-notes
+
+  # The container: the server compiled natively on each architecture's runner, the client from the
+  # build job. Pushed to git.unom.io from main (`edge`) and from v* tags (`X.Y.Z` and `latest`);
+  # pull requests build it without pushing. Pushing needs the UNOM_REGISTRY_USER and
+  # UNOM_REGISTRY_TOKEN secrets, a Gitea token with package write.
+  image:
+    needs: build
+    strategy:
+      matrix:
+        include:
+          - { arch: amd64, runner: ubuntu-latest }
+          - { arch: arm64, runner: ubuntu-24.04-arm }
+    runs-on: ${{ matrix.runner }}
+    env:
+      IMAGE: git.unom.io/unom/punktfunk-client-web
+      PUSH: ${{ github.event_name == 'push' && secrets.UNOM_REGISTRY_TOKEN != '' }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with:
+          name: punktfunk-web
+          path: apps/web/dist
+      - name: Channel
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then echo "CHANNEL=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"
+          else echo "CHANNEL=edge" >> "$GITHUB_ENV"; fi
+      - uses: docker/setup-buildx-action@v4
+      - if: env.PUSH == 'true'
+        uses: docker/login-action@v4
+        with:
+          registry: git.unom.io
+          username: ${{ secrets.UNOM_REGISTRY_USER }}
+          password: ${{ secrets.UNOM_REGISTRY_TOKEN }}
+      - uses: docker/build-push-action@v7
+        with:
+          context: .
+          platforms: linux/${{ matrix.arch }}
+          push: ${{ env.PUSH == 'true' }}
+          tags: ${{ env.IMAGE }}:${{ env.CHANNEL }}-${{ matrix.arch }}
+          cache-from: type=gha,scope=server-${{ matrix.arch }}
+          cache-to: type=gha,mode=max,scope=server-${{ matrix.arch }}
+
+  # One tag for both architectures.
+  manifest:
+    needs: image
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    env:
+      IMAGE: git.unom.io/unom/punktfunk-client-web
+      TOKEN: ${{ secrets.UNOM_REGISTRY_TOKEN }}
+    steps:
+      - if: env.TOKEN != ''
+        uses: docker/login-action@v4
+        with:
+          registry: git.unom.io
+          username: ${{ secrets.UNOM_REGISTRY_USER }}
+          password: ${{ secrets.UNOM_REGISTRY_TOKEN }}
+      - uses: docker/setup-buildx-action@v4
+      - if: env.TOKEN != ''
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            channel="${GITHUB_REF_NAME#v}"; tags=(-t "$IMAGE:$channel" -t "$IMAGE:latest")
+          else
+            channel=edge; tags=(-t "$IMAGE:edge")
+          fi
+          docker buildx imagetools create "${tags[@]}" "$IMAGE:$channel-amd64" "$IMAGE:$channel-arm64"

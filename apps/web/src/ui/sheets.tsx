@@ -36,6 +36,13 @@ export function Accept({ screen, actions }: Props<"accept">): JSX.Element {
           A punktfunk host signs its own certificate, so your browser will not talk to it until
           you say so once. Open this, accept the warning, then come back.
         </Sub>
+        {screen.again && (
+          <Sub>
+            Still asking after you accepted it? Then the host is not answering pages like this one:
+            turn on Browser streaming in its console. Safari reaches a host this way only through a
+            punktfunk server.
+          </Sub>
+        )}
         <a
           autoFocus
           className="break-all text-primary underline-offset-4 hover:underline"

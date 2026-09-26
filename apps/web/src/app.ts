@@ -12,7 +12,9 @@
 import {
   Engine,
   type EngineState,
+  type HostTarget,
   hosts,
+  originOf,
   type LibraryEntry,
   type Reach,
   reach,
@@ -64,16 +66,20 @@ class App {
     private readonly engine: Engine,
     private readonly ui: Ui,
     private readonly uiCanvas: HTMLCanvasElement,
+    /** The hosts the page's own server proxies, by the API origin the engine keys them under. */
+    private readonly configured: Map<string, Configured>,
+    /** Whether that server also proxies a host typed here by its IP address. */
+    private readonly viaServer: boolean,
   ) {
     ui.mount({
       connect: (address) => {
         this.adding = false;
-        void engine.connect(address);
+        void engine.connect(this.targetOf(address));
       },
       pair: (pin) => engine.pair(pin),
       retry: () => {
         const s = engine.current;
-        if ("origin" in s && s.origin) void engine.connect(s.origin);
+        if ("origin" in s && s.origin) void engine.connect(this.targetOf(s.origin));
       },
       back: () => engine.disconnect(),
       play: (entry) => this.play(entry),
@@ -128,11 +134,14 @@ class App {
       case "bad-address":
         // The field stays in front: what was typed is wrong and this is where it is fixed.
         this.adding = true;
-        return this.home(s.message);
+        return this.home(sentence(s.message));
       case "reaching":
         return this.show({ kind: "connecting", origin: s.origin, phase: "reaching" });
-      case "blocked":
-        return this.show({ kind: "accept", origin: s.origin, url: s.acceptUrl });
+      case "blocked": {
+        // Back here for the host just sent here: accepting its certificate was not the fix.
+        const again = this.screen.kind === "accept" && this.screen.origin === s.origin;
+        return this.show({ kind: "accept", origin: s.origin, url: s.acceptUrl, ...(again ? { again } : {}) });
+      }
       case "unreachable":
         return this.show({
           kind: "error",
@@ -141,7 +150,7 @@ class App {
           retry: true,
         });
       case "untrusted":
-        return this.show({ kind: "trust", origin: s.origin, reason: s.reason });
+        return this.show({ kind: "trust", origin: s.origin, reason: sentence(s.reason) });
       case "connecting":
         return this.show({ kind: "connecting", origin: s.origin, phase: "connecting" });
       case "needs-pairing":
@@ -153,7 +162,7 @@ class App {
         // The host closes after the ceremony, as it does for native clients; streaming is a
         // fresh connection.
         const origin = s.origin;
-        setTimeout(() => void this.engine.connect(origin), 300);
+        setTimeout(() => void this.engine.connect(this.targetOf(origin)), 300);
         return;
       }
       case "pair-refused":
@@ -161,7 +170,7 @@ class App {
           kind: "pair",
           origin: s.origin,
           mode: "first",
-          error: s.reason ?? "That PIN was refused.",
+          error: s.reason ? sentence(s.reason) : "That PIN was refused.",
         });
       case "forgotten":
         return this.show({ kind: "pair", origin: s.origin, mode: "again" });
@@ -180,7 +189,9 @@ class App {
         return this.show({
           kind: "error",
           head: s.skew ? "This host speaks a different version" : "Something went wrong",
-          text: s.skew ? `${s.message}. Update the host, or this page, so the two agree.` : s.message,
+          text: s.skew
+            ? `${sentence(s.message)} Update the host, or this page, so the two agree.`
+            : sentence(s.message),
           retry: !s.skew,
         });
     }
@@ -188,8 +199,13 @@ class App {
 
   // --- the home screen -------------------------------------------------------------------
   private home(error?: string): void {
-    const known = this.engine.knownHosts();
-    const hosts: HostCard[] = known.map((h) => {
+    // The server's hosts first, under the name it gives them; then the ones typed here.
+    const known = new Map(this.engine.knownHosts().map((h) => [h.origin, h]));
+    const listed: HostCard[] = [
+      ...[...this.configured].map(([origin, c]) => ({ ...known.get(origin), origin, name: c.name, plane: c.plane })),
+      ...[...known.values()].filter((h) => !this.configured.has(h.origin)),
+    ];
+    const hosts: HostCard[] = listed.map((h) => {
       const seen = this.reachCache.get(h.origin);
       return seen ? { ...h, reach: seen.reach } : h;
     });
@@ -200,7 +216,28 @@ class App {
       adding: this.adding || hosts.length === 0,
       ...(error ? { error } : {}),
     });
-    void this.probe(known.map((h) => h.origin));
+    void this.probe(hosts.map((h) => h.origin));
+  }
+
+  /**
+   * How to reach what a card or the address field names. A host the server lists, or one reached
+   * through it before, keeps its route; a typed IP address goes through the server when it
+   * offers that; anything else is dialled directly.
+   */
+  private targetOf(address: string): string | HostTarget {
+    const listed = this.configured.get(address);
+    if (listed) return listed;
+    const known = this.engine.knownHosts().find((h) => h.origin === address);
+    if (known?.plane) return { api: address, plane: known.plane };
+    const routed = this.viaServer ? throughServer(address) : null;
+    if (!routed) return address;
+    // A host tried directly before moves to the server route, name and pairing included.
+    if (known) {
+      const { origin: _old, ...record } = known;
+      hosts.forget(address);
+      hosts.remember(routed.api, { ...record, plane: routed.plane });
+    }
+    return routed;
   }
 
   /**
@@ -234,7 +271,7 @@ class App {
     const reconnect = this.screen.kind === "trust" && this.screen.origin === origin;
     this.reachCache.delete(origin);
     this.engine.forget(origin);
-    if (reconnect) void this.engine.connect(origin);
+    if (reconnect) void this.engine.connect(this.targetOf(origin));
   }
 
   // --- the library ---------------------------------------------------------------------
@@ -249,7 +286,7 @@ class App {
         return this.show({
           kind: "error",
           head: "This host speaks a different version",
-          text: `${e.message}. Update the host, or this page, so the two agree.`,
+          text: `${sentence(e.message)} Update the host, or this page, so the two agree.`,
         });
       }
       // The stream still works without a library, so this is a line on the screen rather than a
@@ -302,7 +339,7 @@ class App {
       busy: this.libraryFor === s.origin && !this.libraryLoaded,
       ...(this.hostName ? { host: this.hostName } : {}),
       ...(this.running ? { running: this.running } : {}),
-      ...(error ? { error: `${error} — you can still stream the desktop.` } : {}),
+      ...(error ? { error: `${sentence(error)} You can still stream the desktop.` } : {}),
     });
   }
 
@@ -374,6 +411,14 @@ class App {
   }
 }
 
+/** The engine speaks in lowercase fragments, as logs do; a screen speaks in sentences. */
+function sentence(message: string): string {
+  const m = message.trim();
+  if (!m) return m;
+  const s = m[0]!.toUpperCase() + m.slice(1);
+  return /[.!?]$/.test(s) ? s : `${s}.`;
+}
+
 /** An origin without its scheme. Every screen shows a host this way; nothing gains from the
  *  `https://` that `originOf` put there. */
 const bare = (origin: string): string => origin.replace(/^https:\/\//, "");
@@ -409,6 +454,49 @@ function pickUi(engine: Engine, uiCanvas: HTMLCanvasElement): Ui {
   return wanted === "console" ? new ConsoleUi(engine, uiCanvas, shell) : shell;
 }
 
+/** A typed IP address as the page's server reaches it (`/a/<ip:port>/`). Names stay direct: the
+ *  server proxies private IP addresses only. */
+function throughServer(address: string): HostTarget | null {
+  let url: URL;
+  try {
+    url = new URL(originOf(address));
+  } catch {
+    return null;
+  }
+  const ip = url.hostname;
+  if (!/^\d{1,3}(\.\d{1,3}){3}$/.test(ip) && !/^\[[0-9a-f:.]+\]$/i.test(ip)) return null;
+  return { api: new URL(`a/${ip}:${url.port}`, location.href).href, plane: ip };
+}
+
+/** A host from the page server's `config.json`. */
+interface Configured extends HostTarget {
+  name: string;
+}
+
+/**
+ * The hosts `punktfunk-client-web-server` proxies, from its `config.json`. Any other server has
+ * none (a dev server answers `index.html`, which does not parse), and the page falls back to
+ * addresses typed here.
+ */
+async function configuredHosts(): Promise<{ listed: Map<string, Configured>; viaServer: boolean }> {
+  try {
+    const r = await fetch("./config.json", { cache: "no-store" });
+    const c = (await r.json()) as {
+      hosts?: Array<{ name: string; api: string; plane: string }>;
+      add?: boolean;
+    };
+    const listed = new Map(
+      (c.hosts ?? []).map((h): [string, Configured] => {
+        const api = new URL(h.api, location.href).href.replace(/\/+$/, "");
+        return [api, { api, plane: h.plane, name: h.name }];
+      }),
+    );
+    return { listed, viaServer: c.add === true };
+  } catch {
+    return { listed: new Map(), viaServer: false };
+  }
+}
+
 /** Set by `vite.config.ts` when the dev server proxies a host; absent in a build. */
 declare const __PF_TRANSPORT_HOST__: string | undefined;
 
@@ -421,7 +509,8 @@ try {
     uiCanvas,
     ...(__PF_TRANSPORT_HOST__ ? { transportHost: __PF_TRANSPORT_HOST__ } : {}),
   });
-  new App(engine, pickUi(engine, uiCanvas), uiCanvas);
+  const server = await configuredHosts();
+  new App(engine, pickUi(engine, uiCanvas), uiCanvas, server.listed, server.viaServer);
 } catch (e) {
   // Before there is an engine there is no interface to say this on; the one sheet the page
   // carries for exactly this case does.
@@ -434,6 +523,6 @@ try {
   shell.render({
     kind: "error",
     head: "This browser cannot run the client",
-    text: e instanceof Error ? e.message : String(e),
+    text: sentence(e instanceof Error ? e.message : String(e)),
   });
 }

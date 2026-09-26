@@ -7,3 +7,4 @@ node_modules/
 /apps/web/dist
 /apps/web/storybook-static
 /target
+/server/target

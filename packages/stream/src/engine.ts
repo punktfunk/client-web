@@ -171,6 +171,16 @@ export interface EngineOptions {
   readonly transportHost?: string;
 }
 
+/**
+ * A host reached through the page's own server (`punktfunk-client-web-server`), which proxies
+ * its management API: the API answers at `api`, and the browser still dials the plane at `plane`,
+ * a URL host (an IPv6 address in brackets).
+ */
+export interface HostTarget {
+  readonly api: string;
+  readonly plane: string;
+}
+
 export interface StreamOptions {
   width: number;
   height: number;
@@ -184,6 +194,10 @@ export class Engine {
   private state: EngineState = { kind: "idle" };
   private readonly listeners = new Set<(s: EngineState) => void>();
   private origin: string | null = null;
+  /** What `connect` was last given, so the engine's own reconnects reach the host the same way. */
+  private target: string | HostTarget | null = null;
+  /** Where the plane is dialled for the current connection. */
+  private planeHost: string | null = null;
   private plane: pf.Plane | null = null;
   private video: VideoPipe | null = null;
   private input: InputPipe | null = null;
@@ -267,15 +281,24 @@ export class Engine {
    * throw: the consumer renders `blocked`, `unreachable`, `untrusted` or `error`, and each
    * says what a person can do about it.
    */
-  async connect(address: string): Promise<void> {
+  async connect(address: string | HostTarget): Promise<void> {
     let origin: string;
-    try {
-      origin = pf.originOf(address);
-    } catch (e) {
-      return this.set({ kind: "bad-address", input: address, message: message(e) });
+    if (typeof address === "string") {
+      try {
+        origin = pf.originOf(address);
+      } catch (e) {
+        return this.set({ kind: "bad-address", input: address, message: message(e) });
+      }
+    } else {
+      origin = address.api.replace(/\/+$/, "");
     }
     this.reset();
     this.origin = origin;
+    this.target = address;
+    this.planeHost =
+      typeof address === "string"
+        ? (this.opts.transportHost ?? new URL(origin).hostname)
+        : address.plane;
     this.set({ kind: "reaching", origin });
 
     // Tell "certificate not accepted" apart from "nothing there" before saying anything: the two
@@ -302,7 +325,7 @@ export class Engine {
         return this.set({ kind: "untrusted", origin, reason: message(e) });
       }
     }
-    pf.hosts.remember(origin, {});
+    pf.hosts.remember(origin, typeof this.target === "object" && this.target ? { plane: this.target.plane } : {});
     this.set({ kind: "connecting", origin });
     // The key BEFORE the connection: the host may ask for a signature the moment the control
     // stream opens, and a key still coming out of IndexedDB would miss it.
@@ -331,7 +354,7 @@ export class Engine {
         // reconnect back through the credential the host just refused.
         pf.hosts.unpair(origin);
         this.mod._pf_wt_close?.();
-        void this.connect(origin);
+        void this.connect(this.target ?? origin);
         return;
       }
       default:
@@ -491,8 +514,7 @@ export class Engine {
   /** The device key is loaded and the wasm side holds its SPKI. Dial now, not before. */
   private dial(): void {
     if (!this.origin || !this.plane) return;
-    const hostname = this.opts.transportHost ?? new URL(this.origin).hostname;
-    const url = `https://${hostname}:${this.plane.port}/stream`;
+    const url = `https://${this.planeHost}:${this.plane.port}/stream`;
     const ok = withStr(this.mod, [url, this.plane.cert_hash_sha256], (u, _ul, h) =>
       this.mod._pf_wt_connect(u, h),
     );
