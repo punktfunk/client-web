@@ -6,7 +6,8 @@ import { type JSX, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
-import { ago, bare, Centre, ErrorLine, Mark, Row, Sheet, status, Sub } from "./pieces.tsx";
+import { Logo } from "./brand.tsx";
+import { ago, bare, Centre, ErrorLine, Row, Sheet, status, Sub } from "./pieces.tsx";
 import type { Actions, HostCard, Screen } from "./types.ts";
 
 type HomeScreen = Extract<Screen, { kind: "home" }>;
@@ -16,7 +17,7 @@ export function Home({ screen, actions }: { screen: HomeScreen; actions: Actions
   return (
     <div className="mx-auto w-full max-w-5xl px-inset pb-inset">
       <header className="flex items-center gap-4 pt-inset">
-        <Mark />
+        <Logo animate />
         <span className="flex-1" />
         <Button size="sm" variant="secondary" onClick={() => actions.setAdding(true)}>Add a host</Button>
         <Button size="sm" variant="ghost" aria-label="Settings" onClick={() => actions.openSettings(true)}>

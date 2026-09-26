@@ -7,7 +7,8 @@ import { Spinner } from "@unom/ui/spinner";
 import { type JSX, type KeyboardEvent, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { bare, ErrorLine, Mark } from "./pieces.tsx";
+import { Logo } from "./brand.tsx";
+import { bare, ErrorLine } from "./pieces.tsx";
 import type { Actions, Screen } from "./types.ts";
 
 type LibraryScreen = Extract<Screen, { kind: "library" }>;
@@ -32,7 +33,7 @@ export function Library({ screen, actions }: { screen: LibraryScreen; actions: A
   return (
     <>
       <header className="sticky top-0 z-2 flex items-center gap-3 border-b border-border bg-background/80 px-inset py-3.5 backdrop-blur-xl">
-        <Mark className="h-9" />
+        <Logo />
         <h1 className="m-0 truncate text-base font-semibold">{screen.host ?? bare(screen.origin)}</h1>
         <span className="flex-1" />
         {screen.entries.length > 0 && (
