@@ -14,6 +14,7 @@ import {
   type EngineState,
   type HostTarget,
   hosts,
+  originOf,
   type LibraryEntry,
   type Reach,
   reach,
@@ -67,6 +68,8 @@ class App {
     private readonly uiCanvas: HTMLCanvasElement,
     /** The hosts the page's own server proxies, by the API origin the engine keys them under. */
     private readonly configured: Map<string, Configured>,
+    /** Whether that server also proxies a host typed here by its IP address. */
+    private readonly viaServer: boolean,
   ) {
     ui.mount({
       connect: (address) => {
@@ -134,8 +137,11 @@ class App {
         return this.home(s.message);
       case "reaching":
         return this.show({ kind: "connecting", origin: s.origin, phase: "reaching" });
-      case "blocked":
-        return this.show({ kind: "accept", origin: s.origin, url: s.acceptUrl });
+      case "blocked": {
+        // Back here for the host just sent here: accepting its certificate was not the fix.
+        const again = this.screen.kind === "accept" && this.screen.origin === s.origin;
+        return this.show({ kind: "accept", origin: s.origin, url: s.acceptUrl, ...(again ? { again } : {}) });
+      }
       case "unreachable":
         return this.show({
           kind: "error",
@@ -194,7 +200,7 @@ class App {
     // The server's hosts first, under the name it gives them; then the ones typed here.
     const known = new Map(this.engine.knownHosts().map((h) => [h.origin, h]));
     const listed: HostCard[] = [
-      ...[...this.configured].map(([origin, c]) => ({ ...known.get(origin), origin, name: c.name })),
+      ...[...this.configured].map(([origin, c]) => ({ ...known.get(origin), origin, name: c.name, plane: c.plane })),
       ...[...known.values()].filter((h) => !this.configured.has(h.origin)),
     ];
     const hosts: HostCard[] = listed.map((h) => {
@@ -211,9 +217,25 @@ class App {
     void this.probe(hosts.map((h) => h.origin));
   }
 
-  /** A configured host is reached through the page's server; anything else by its address. */
-  private targetOf(origin: string): string | HostTarget {
-    return this.configured.get(origin) ?? origin;
+  /**
+   * How to reach what a card or the address field names. A host the server lists, or one reached
+   * through it before, keeps its route; a typed IP address goes through the server when it
+   * offers that; anything else is dialled directly.
+   */
+  private targetOf(address: string): string | HostTarget {
+    const listed = this.configured.get(address);
+    if (listed) return listed;
+    const known = this.engine.knownHosts().find((h) => h.origin === address);
+    if (known?.plane) return { api: address, plane: known.plane };
+    const routed = this.viaServer ? throughServer(address) : null;
+    if (!routed) return address;
+    // A host tried directly before moves to the server route, name and pairing included.
+    if (known) {
+      const { origin: _old, ...record } = known;
+      hosts.forget(address);
+      hosts.remember(routed.api, { ...record, plane: routed.plane });
+    }
+    return routed;
   }
 
   /**
@@ -422,6 +444,20 @@ function pickUi(engine: Engine, uiCanvas: HTMLCanvasElement): Ui {
   return wanted === "console" ? new ConsoleUi(engine, uiCanvas, shell) : shell;
 }
 
+/** A typed IP address as the page's server reaches it (`/a/<ip:port>/`). Names stay direct: the
+ *  server proxies private IP addresses only. */
+function throughServer(address: string): HostTarget | null {
+  let url: URL;
+  try {
+    url = new URL(originOf(address));
+  } catch {
+    return null;
+  }
+  const ip = url.hostname;
+  if (!/^\d{1,3}(\.\d{1,3}){3}$/.test(ip) && !/^\[[0-9a-f:.]+\]$/i.test(ip)) return null;
+  return { api: new URL(`a/${ip}:${url.port}`, location.href).href, plane: ip };
+}
+
 /** A host from the page server's `config.json`. */
 interface Configured extends HostTarget {
   name: string;
@@ -432,18 +468,22 @@ interface Configured extends HostTarget {
  * none (a dev server answers `index.html`, which does not parse), and the page falls back to
  * addresses typed here.
  */
-async function configuredHosts(): Promise<Map<string, Configured>> {
+async function configuredHosts(): Promise<{ listed: Map<string, Configured>; viaServer: boolean }> {
   try {
     const r = await fetch("./config.json", { cache: "no-store" });
-    const c = (await r.json()) as { hosts?: Array<{ name: string; api: string; plane: string }> };
-    return new Map(
+    const c = (await r.json()) as {
+      hosts?: Array<{ name: string; api: string; plane: string }>;
+      add?: boolean;
+    };
+    const listed = new Map(
       (c.hosts ?? []).map((h): [string, Configured] => {
         const api = new URL(h.api, location.href).href.replace(/\/+$/, "");
         return [api, { api, plane: h.plane, name: h.name }];
       }),
     );
+    return { listed, viaServer: c.add === true };
   } catch {
-    return new Map();
+    return { listed: new Map(), viaServer: false };
   }
 }
 
@@ -459,7 +499,8 @@ try {
     uiCanvas,
     ...(__PF_TRANSPORT_HOST__ ? { transportHost: __PF_TRANSPORT_HOST__ } : {}),
   });
-  new App(engine, pickUi(engine, uiCanvas), uiCanvas, await configuredHosts());
+  const server = await configuredHosts();
+  new App(engine, pickUi(engine, uiCanvas), uiCanvas, server.listed, server.viaServer);
 } catch (e) {
   // Before there is an engine there is no interface to say this on; the one sheet the page
   // carries for exactly this case does.

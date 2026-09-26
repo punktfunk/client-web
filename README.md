@@ -68,7 +68,7 @@ docker compose up -d
 ```
 
 Open `https://<that machine>:8443`, accept its certificate once, and pick a host: the server finds
-them over mDNS. On each host, turn on **Browser streaming** in its console and open UDP 9778. The
+them over mDNS, and one typed by its IP address goes through the server too. On each host, turn on **Browser streaming** in its console and open UDP 9778. The
 video goes from the host to the browser directly; only the host's management API passes through
 the container, on the page's own origin, which is what Safari needs.
 
@@ -83,6 +83,7 @@ away from home (`compose.tailscale.yaml`).
 | `TLS_NAMES` | | Names and addresses the page is opened at, for the self-signed certificate |
 | `PUNKTFUNK_HOSTS` | | Hosts mDNS cannot find: `name=address[:port][#fingerprint]`, comma-separated |
 | `DISCOVER` | on | `0` turns the mDNS browse off |
+| `ADD_HOSTS` | on | `0` stops the page reaching a host typed by address. Set it when the page is reachable from outside your network |
 
 The server pins every host before trusting it, as the native clients do: by the fingerprint it
 was listed with, the one it announces, or the one it presented first (`/data/pins.json`). It adds

@@ -15,6 +15,9 @@ pub struct Config {
     pub hosts: Vec<Listed>,
     /// Browse mDNS for hosts. Needs the container on the host's network to see anything.
     pub discover: bool,
+    /// Proxy a host the page names by its private IP address. Off for a page reachable from
+    /// outside the network, where it would let anyone probe the LAN through this server.
+    pub add_hosts: bool,
     /// The built client (`apps/web/dist`).
     pub dist: PathBuf,
     /// Where pins and the self-signed certificate live across restarts.
@@ -68,6 +71,7 @@ impl Config {
             tls_names: list(get("TLS_NAMES")),
             hosts: parse_hosts(&get("PUNKTFUNK_HOSTS").unwrap_or_default())?,
             discover: get("DISCOVER").as_deref() != Some("0"),
+            add_hosts: get("ADD_HOSTS").as_deref() != Some("0"),
             dist: get("DIST_DIR").unwrap_or_else(|| "dist".into()).into(),
             data: get("DATA_DIR").unwrap_or_else(|| "data".into()).into(),
         })
@@ -176,7 +180,7 @@ mod tests {
         let c = Config::from_lookup(|_| None).unwrap();
         assert_eq!(c.listen.port(), 8443);
         assert!(matches!(c.tls, Tls::SelfSigned));
-        assert!(c.discover && c.hosts.is_empty());
+        assert!(c.discover && c.add_hosts && c.hosts.is_empty());
         let off = Config::from_lookup(|k| (k == "TLS").then(|| "off".into())).unwrap();
         assert!(matches!(off.tls, Tls::Off));
     }

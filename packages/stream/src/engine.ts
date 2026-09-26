@@ -325,7 +325,7 @@ export class Engine {
         return this.set({ kind: "untrusted", origin, reason: message(e) });
       }
     }
-    pf.hosts.remember(origin, {});
+    pf.hosts.remember(origin, typeof this.target === "object" && this.target ? { plane: this.target.plane } : {});
     this.set({ kind: "connecting", origin });
     // The key BEFORE the connection: the host may ask for a signature the moment the control
     // stream opens, and a key still coming out of IndexedDB would miss it.

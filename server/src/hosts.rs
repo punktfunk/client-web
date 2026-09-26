@@ -33,13 +33,15 @@ impl Host {
 }
 
 pub struct Hosts {
+    /// Whether `/a/<address>/…` proxies a host the page names. See [`crate::config::Config`].
+    pub add_hosts: bool,
     list: RwLock<Vec<Host>>,
     pins: Mutex<BTreeMap<String, String>>,
     pins_path: PathBuf,
 }
 
 impl Hosts {
-    pub fn new(listed: Vec<Listed>, data: &Path) -> Result<Arc<Self>> {
+    pub fn new(listed: Vec<Listed>, data: &Path, add_hosts: bool) -> Result<Arc<Self>> {
         std::fs::create_dir_all(data).with_context(|| format!("create {}", data.display()))?;
         let pins_path = data.join("pins.json");
         let pins: BTreeMap<String, String> = match std::fs::read(&pins_path) {
@@ -66,6 +68,7 @@ impl Hosts {
             list.push(h);
         }
         Ok(Arc::new(Self {
+            add_hosts,
             list: RwLock::new(list),
             pins: Mutex::new(pins),
             pins_path,
@@ -95,9 +98,26 @@ impl Hosts {
             h.pin = Some(fp);
             h.pin_key()
         };
-        tracing::info!(host = id, fingerprint = %hex(&fp), "pinned on first contact");
+        self.keep(&key, fp);
+    }
+
+    /// The pin kept for a host at `addr:port`, whoever named it.
+    pub fn pin_at(&self, key: &str) -> Option<[u8; 32]> {
+        self.pins
+            .lock()
+            .unwrap()
+            .get(key)
+            .and_then(|hex| crate::config::parse_fp(hex).ok())
+    }
+
+    /// Keep a first-contact pin. An address already pinned keeps its first certificate.
+    pub fn keep(&self, key: &str, fp: [u8; 32]) {
         let mut pins = self.pins.lock().unwrap();
-        pins.insert(key, hex(&fp));
+        if pins.contains_key(key) {
+            return;
+        }
+        tracing::info!(host = key, fingerprint = %hex(&fp), "pinned on first contact");
+        pins.insert(key.to_owned(), hex(&fp));
         if let Err(e) = std::fs::write(
             &self.pins_path,
             serde_json::to_vec_pretty(&*pins).unwrap_or_default(),
@@ -244,6 +264,7 @@ mod tests {
                 listed("living room pc", "10.0.0.3"),
             ],
             &dir,
+            true,
         )
         .unwrap();
         let ids: Vec<_> = hosts.all().into_iter().map(|h| h.id).collect();
@@ -256,7 +277,7 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("pf-adverts-{}", std::process::id()));
         let mut desk = listed("desk", "10.0.0.2");
         desk.pin = Some([1; 32]);
-        let hosts = Hosts::new(vec![desk], &dir).unwrap();
+        let hosts = Hosts::new(vec![desk], &dir, true).unwrap();
         let advert = |name: &str, addr: &str, pin| Advert {
             fullname: format!("{name}._punktfunk._udp.local."),
             name: name.into(),
@@ -281,10 +302,10 @@ mod tests {
     #[test]
     fn a_first_contact_pin_survives_a_restart() {
         let dir = std::env::temp_dir().join(format!("pf-pins-{}", std::process::id()));
-        let hosts = Hosts::new(vec![listed("desk", "10.0.0.2")], &dir).unwrap();
+        let hosts = Hosts::new(vec![listed("desk", "10.0.0.2")], &dir, true).unwrap();
         hosts.learned("desk", [7; 32]);
         hosts.learned("desk", [9; 32]); // a second certificate does not replace the first
-        let again = Hosts::new(vec![listed("desk", "10.0.0.2")], &dir).unwrap();
+        let again = Hosts::new(vec![listed("desk", "10.0.0.2")], &dir, true).unwrap();
         assert_eq!(again.get("desk").unwrap().pin, Some([7; 32]));
         let _ = std::fs::remove_dir_all(dir);
     }

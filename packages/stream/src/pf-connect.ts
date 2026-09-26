@@ -166,6 +166,8 @@ export interface KnownHost {
   /** What someone here decided to call it. Outranks `name`: two machines on a network can
    *  report the same hostname, and only the person looking at them can tell them apart. */
   label?: string;
+  /** Where the plane is dialled when the API is reached through the page's server. */
+  plane?: string;
   seen?: number;
 }
 

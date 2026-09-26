@@ -88,7 +88,7 @@ function HostTile({ host, actions, busy }: { host: HostCard; actions: Actions; b
               <Badge variant={state.tint} size="sm" dot>{state.text}</Badge>
               <span className="flex-1 truncate text-base font-semibold">{label}</span>
             </span>
-            <span className="font-mono text-sm text-muted-foreground">{bare(host.origin)}</span>
+            <span className="font-mono text-sm text-muted-foreground">{host.plane ?? bare(host.origin)}</span>
             <span className="mt-auto pt-2 text-xs text-muted-foreground/70">{ago(host.seen)}</span>
             {/* The pinned identity, short. What someone compares against the host's own screen
                 when they want to be sure this is the machine they think it is. */}
