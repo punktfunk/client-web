@@ -31,6 +31,8 @@ const CRED = { EMPTY: 0, READY: 1, NEEDS_SIGNATURE: 2, PAIRING: 3, PAIRED: 4, FA
 const SESSION = { IDLE: 0, OFFERED: 1, LIVE: 2, FAILED: 3 } as const;
 /** The host's application close codes this engine reads (`punktfunk_core::reject`). */
 const CLOSE = { PAIR_DENIED: 0x64, ACCESS_EXPIRED: 0x69, HOST_POWER: 0x6b } as const;
+/** pf-glue's code for a session that never opened: no host was heard at all. */
+const NEVER_OPENED = -2;
 
 /** How long `Offered` may last before the host is taken to have refused the credential. It
  *  closes the session without a message, so nothing else says so. */
@@ -563,7 +565,8 @@ export class Engine {
    * plane first, then the transport's own close — and the first one settles the state: the
    * second finds it already in a terminal kind and leaves it. The host closes after every pairing
    * ceremony (nothing to say), refuses with a reason (say it), or drops a live session (say
-   * that). A close in `idle` is this engine's own `disconnect`.
+   * that). A dial that never opened names the port to check. A close in `idle` is this engine's
+   * own `disconnect`.
    */
   private onClosed(code: number, reason: string): void {
     const origin = this.origin;
@@ -591,8 +594,11 @@ export class Engine {
       this.set({ kind: "forgotten", origin });
       return;
     }
+    const port = this.plane?.port;
     const message =
-      code === CLOSE.HOST_POWER
+      code === NEVER_OPENED
+        ? `couldn't reach the host on UDP ${port}, its browser streaming port. Check that nothing between this device and the host blocks it`
+        : code === CLOSE.HOST_POWER
         ? "the host is powering down"
         : code === CLOSE.ACCESS_EXPIRED
           ? "this device's access to the host has expired"
