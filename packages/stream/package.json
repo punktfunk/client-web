@@ -1,7 +1,7 @@
 {
   "name": "@punktfunk/stream",
   "version": "0.1.0",
-  "description": "The punktfunk browser engine: WebTransport session, device-key pairing, WebCodecs video, the management API \u2014 as a library, with no DOM.",
+  "description": "The punktfunk browser engine: WebTransport session, device-key pairing, WebCodecs video, the management API — as a library, with no DOM.",
   "type": "module",
   "license": "MIT OR Apache-2.0",
   "repository": {
@@ -32,7 +32,7 @@
     "test": "node --test src/*.test.ts"
   },
   "dependencies": {
-    "@punktfunk/host": "^0.2.0",
+    "@punktfunk/host": "^0.3.1",
     "effect": "4.0.0-beta.98"
   },
   "devDependencies": {
