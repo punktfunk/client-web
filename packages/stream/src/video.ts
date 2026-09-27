@@ -19,6 +19,39 @@ const unixMs = (): number => Date.now();
 /** Wire codec ids, as `Welcome` carries them. */
 const CODEC_H264 = 1;
 const CODEC_HEVC = 2;
+const CODEC_AV1 = 4;
+
+/** What the decoder is configured with, per codec: Annex B for the two NAL codecs (no
+ *  `description`: the host sends parameter sets with every IDR), low-overhead OBUs for AV1. The
+ *  levels are 5.1, enough for 4K at 60. */
+const CODEC_STRING: Record<number, string> = {
+  [CODEC_H264]: "avc1.42E01F",
+  [CODEC_HEVC]: "hev1.1.6.L153.B0",
+  [CODEC_AV1]: "av01.0.13M.08",
+};
+
+/**
+ * The codecs this browser decodes in hardware, as `CODEC_*` bits: H.264 always, HEVC and AV1
+ * when `isConfigSupported` says so. Hardware only, because a software HEVC or AV1 decode of a
+ * game stream falls behind where H.264 would not.
+ */
+export async function decodableCodecs(): Promise<number> {
+  let mask = CODEC_H264;
+  for (const codec of [CODEC_HEVC, CODEC_AV1]) {
+    try {
+      const { supported } = await VideoDecoder.isConfigSupported({
+        codec: CODEC_STRING[codec]!,
+        codedWidth: 1920,
+        codedHeight: 1080,
+        hardwareAcceleration: "prefer-hardware",
+      });
+      if (supported) mask |= codec;
+    } catch {
+      // An engine that throws on a codec string it does not know simply does not decode it.
+    }
+  }
+  return mask;
+}
 
 export interface VideoStats {
   /** Access units handed to the decoder. */
@@ -127,10 +160,10 @@ export class VideoPipe {
         this.rebuild();
       },
     });
-    // Annex B, so no `description`: the host sends parameter sets inline with every IDR, which is
-    // what lets a browser join a stream already in progress.
+    // No `description`: the host sends parameter sets inline with every key frame, which is what
+    // lets a browser join a stream already in progress.
     decoder.configure({
-      codec: codec === CODEC_HEVC ? "hev1.1.6.L93.B0" : "avc1.42E01F",
+      codec: CODEC_STRING[codec] ?? CODEC_STRING[CODEC_H264]!,
       codedWidth: width,
       codedHeight: height,
       optimizeForLatency: true,
@@ -244,4 +277,4 @@ export function decodeSupported(): boolean {
   return typeof VideoDecoder !== "undefined";
 }
 
-export { CODEC_H264, CODEC_HEVC };
+export { CODEC_AV1, CODEC_H264, CODEC_HEVC };

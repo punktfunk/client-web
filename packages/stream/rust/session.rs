@@ -186,6 +186,18 @@ pub fn host_caps() -> u8 {
 
 thread_local! {
     static CLIENT: RefCell<Client> = RefCell::new(Client::new());
+    /// What this browser decodes, as `Hello` offers it. A capability of the page, not of one
+    /// session, so a reset leaves it.
+    static CODECS: std::cell::Cell<u8> = const { std::cell::Cell::new(punktfunk_core::quic::CODEC_H264) };
+}
+
+/// The codecs this browser decodes (`CODEC_*` bits), from the page's `isConfigSupported` probe.
+/// H.264 is always kept: a GPU-less host has nothing else.
+#[unsafe(no_mangle)]
+pub extern "C" fn pf_session_codecs(mask: u32) {
+    let supported = punktfunk_core::quic::CODEC_HEVC | punktfunk_core::quic::CODEC_AV1;
+    let offered = (mask as u8 & supported) | punktfunk_core::quic::CODEC_H264;
+    CODECS.with(|c| c.set(offered));
 }
 
 unsafe extern "C" {
@@ -276,8 +288,9 @@ pub unsafe extern "C" fn pf_session_hello(
             audio_channels: 2,
             // H.264 only for now: it is what a GPU-less host can encode, and what every engine
             // decodes. HEVC and AV1 wait until there is a stream to test them against.
-            video_codecs: punktfunk_core::quic::CODEC_H264,
-            preferred_codec: punktfunk_core::quic::CODEC_H264,
+            video_codecs: CODECS.with(std::cell::Cell::get),
+            // No preference: the host picks the best codec both sides have.
+            preferred_codec: 0,
             display_hdr: None,
             client_caps: 0,
             max_shard_payload: punktfunk_core::config::max_shard_payload() as u16,
@@ -683,6 +696,9 @@ pub extern "C" fn pf_session_phase() -> u32 {
 /// VPS/SPS for HEVC. Anything else is a delta, which is the safe direction — a mislabelled key
 /// corrupts the decoder's state, a mislabelled delta is only dropped.
 fn is_keyframe(au: &[u8], codec: u8) -> bool {
+    if codec == punktfunk_core::quic::CODEC_AV1 {
+        return av1_is_keyframe(au);
+    }
     let mut i = 0;
     while i + 3 < au.len() {
         // Annex B start code, three or four bytes.
@@ -714,6 +730,46 @@ fn is_keyframe(au: &[u8], codec: u8) -> bool {
         i = payload;
     }
     false
+}
+
+/// Does this temporal unit carry a key frame? Its first frame header says so: `show_existing_frame`
+/// clear, then `frame_type` 0. Low-overhead OBUs without a reduced still-picture header, which is
+/// what a streaming encoder writes.
+fn av1_is_keyframe(tu: &[u8]) -> bool {
+    let mut i = 0;
+    while let Some(&header) = tu.get(i) {
+        let obu_type = (header >> 3) & 0x0f;
+        i += 1 + usize::from(header & 0x04 != 0);
+        let size = if header & 0x02 != 0 {
+            let Some((size, used)) = leb128(tu.get(i..).unwrap_or_default()) else {
+                return false;
+            };
+            i += used;
+            size
+        } else {
+            tu.len().saturating_sub(i)
+        };
+        // OBU_FRAME_HEADER and OBU_FRAME both open with the uncompressed header.
+        if matches!(obu_type, 3 | 6) {
+            return tu
+                .get(i)
+                .is_some_and(|b| b & 0x80 == 0 && (b >> 5) & 0x03 == 0);
+        }
+        i = i.saturating_add(size);
+    }
+    false
+}
+
+/// An OBU size: the value and how many bytes it took. `None` past eight bytes, as the spec caps it.
+fn leb128(b: &[u8]) -> Option<(usize, usize)> {
+    let mut value = 0usize;
+    for (n, byte) in b.iter().take(8).enumerate() {
+        value |= usize::from(byte & 0x7f) << (7 * n);
+        if byte & 0x80 == 0 {
+            return Some((value, n + 1));
+        }
+    }
+    None
 }
 
 #[cfg(test)]
@@ -753,6 +809,17 @@ mod tests {
         assert!(is_keyframe(&[0, 0, 0, 1, 0x26, 0x01], hevc));
         // TRAIL_R = 1 -> 0x02 is a delta.
         assert!(!is_keyframe(&[0, 0, 0, 1, 0x02, 0x01], hevc));
+
+        let av1 = punktfunk_core::quic::CODEC_AV1;
+        // Temporal delimiter, sequence header, then OBU_FRAME (0x32: type 6, sized) whose
+        // uncompressed header opens `0 00`: shown, KEY_FRAME.
+        let key = [0x12, 0x00, 0x0a, 0x02, 0xaa, 0xbb, 0x32, 0x02, 0x10, 0x00];
+        assert!(is_keyframe(&key, av1));
+        // frame_type 1 (INTER) is a delta; so is showing an existing frame.
+        assert!(!is_keyframe(&[0x12, 0x00, 0x32, 0x02, 0x30, 0x00], av1));
+        assert!(!is_keyframe(&[0x12, 0x00, 0x32, 0x02, 0x80, 0x00], av1));
+        // A truncated size is no frame at all.
+        assert!(!is_keyframe(&[0x12, 0x80], av1));
     }
 
     #[test]

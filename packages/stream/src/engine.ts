@@ -17,7 +17,7 @@
 import type { PunktfunkModule } from "./emscripten.ts";
 import { DeviceRefused, Host, type LibraryEntry, VersionSkew } from "./host.ts";
 import * as pf from "./pf-connect.ts";
-import { decodeSupported, VideoPipe } from "./video.ts";
+import { decodableCodecs, decodeSupported, VideoPipe } from "./video.ts";
 import { InputPipe } from "./input.ts";
 import { AudioPipe, type AudioSnapshot } from "./audio.ts";
 import { STATS_TIERS, type StatsTier } from "./settings.ts";
@@ -259,7 +259,8 @@ export class Engine {
     if (!decodeSupported()) {
       throw new Error("this browser cannot decode video (no WebCodecs)");
     }
-    const mod = await loadModule();
+    const [mod, codecs] = await Promise.all([loadModule(), decodableCodecs()]);
+    mod._pf_session_codecs?.(codecs);
     return new Engine(mod, opts);
   }
 
