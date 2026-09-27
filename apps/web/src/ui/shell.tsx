@@ -13,7 +13,7 @@
 // did on Solid, and the frame loop underneath never waits on it: React commits on its own tick.
 
 import { cn } from "@unom/ui/lib/utils";
-import { MotionConfig } from "motion/react";
+import { AnimatePresence, MotionConfig, motion } from "motion/react";
 import { type JSX, useSyncExternalStore } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import "../styles.css";
@@ -81,25 +81,39 @@ function Shell({ shell }: { shell: WebShell }): JSX.Element {
  *  Exported so Storybook can draw a screen exactly as the page does, with no `WebShell` behind it. */
 export function ShellFrame({ screen, actions }: { screen: Screen; actions: Actions }): JSX.Element {
   const kind = screen.kind;
-  // Streaming is the one screen that must not cover the picture: no centring, and transparent
-  // to the pointer except where the HUD itself is. The lists own the full viewport rather than
-  // sitting in the middle of it, because both can outgrow the screen.
-  const layout =
-    kind === "streaming"
-      ? "pointer-events-none items-start justify-items-center overflow-hidden"
-      : kind === "home" || kind === "library"
-        ? "items-start justify-items-stretch content-start overflow-x-hidden overflow-y-auto"
-        : "place-items-center overflow-x-hidden overflow-y-auto";
+  const live = kind === "streaming";
+  // One screen gives way to the next with a short fade; each then brings its own parts in. The
+  // address field is its own screen for this, though it shares `home`'s kind.
+  const scene = kind === "home" && screen.adding ? "home-add" : kind;
   return (
     <MotionConfig reducedMotion="user">
       {/* `overscroll-contain`: Safari's rubber-band scroll on a fixed overlay drags the whole
-          shell without it. `data-screen` is for the harness driver and devtools, not styling. */}
-      <div className={cn("fixed inset-0 z-2 grid overscroll-contain", layout)} data-screen={kind}>
-        {kind !== "streaming" && <div className="pf-aurora" aria-hidden="true" />}
+          shell without it. `data-screen` is for the harness driver and devtools, not styling.
+          Streaming must not cover the picture: transparent to the pointer except where the HUD
+          itself is. */}
+      <div
+        className={cn(
+          "fixed inset-0 z-2 overscroll-contain",
+          live ? "pointer-events-none overflow-hidden" : "overflow-x-hidden overflow-y-auto",
+        )}
+        data-screen={kind}
+      >
+        {!live && <div className="pf-aurora" aria-hidden="true" />}
         {/* One live region for the whole interface: state changes are announced without any
             screen having to remember to. */}
         <div className="sr-only" role="status" aria-live="polite">{announce(screen)}</div>
-        <Screens screen={screen} actions={actions} />
+        <AnimatePresence mode="wait" initial={false}>
+          <motion.div
+            key={scene}
+            className={cn("min-h-full", live && "grid items-start justify-items-center")}
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: 0.18, ease: "easeOut" }}
+          >
+            <Screens screen={screen} actions={actions} />
+          </motion.div>
+        </AnimatePresence>
       </div>
     </MotionConfig>
   );

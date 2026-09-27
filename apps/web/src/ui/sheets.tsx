@@ -1,10 +1,10 @@
 // The screens that are a question rather than a list: one sheet each, centred.
 
-import { Badge } from "@unom/ui/badge";
-import { Spinner } from "@unom/ui/spinner";
 import { type JSX, useState } from "react";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Spinner } from "@/components/ui/spinner";
 import { bare, Centre, ErrorLine, Row, Sheet, Sub } from "./pieces.tsx";
 import type { Actions, Screen } from "./types.ts";
 
@@ -19,7 +19,7 @@ export function Connecting({ screen, actions }: Props<"connecting">): JSX.Elemen
     <Centre>
       <Sheet title={title}>
         <Sub>{bare(screen.origin)}</Sub>
-        <Spinner className="mx-auto my-10 block size-10" />
+        <Spinner className="mx-auto my-8 block size-12" />
         <Row>
           <Button variant="secondary" onClick={() => actions.back()}>Cancel</Button>
         </Row>
@@ -74,20 +74,21 @@ export function Pair({ screen, actions }: Props<"pair">): JSX.Element {
             : "Enter the PIN this host is showing. It is on the host's own screen, and it expires after a couple of minutes."}
         </Sub>
         <Sub>No PIN? Request access, and approve this browser in the host's console.</Sub>
-        {/* Wide tracking and a large size because it is copied off another screen, digit by
-            digit, and a mistyped one costs a whole pairing window. `h-16!` because the input's
+        {/* The console's PIN readout, as a field: it is copied off another screen digit by
+            digit, and a mistyped one costs a whole pairing window. `h-auto!` because the input's
             own `h-input-height` is a token tailwind-merge cannot see as a height. */}
         <Input
           autoFocus
           type="text"
           inputMode="numeric"
           maxLength={8}
+          placeholder="0000"
           autoComplete="one-time-code"
           aria-label="Pairing PIN"
           disabled={!!screen.busy}
-          className="h-16! text-center font-mono text-3xl tracking-[0.4em] tabular-nums md:text-3xl"
+          className="h-auto! rounded-lg bg-muted/40 py-5 text-center font-mono text-4xl font-semibold tracking-[0.3em] tabular-nums placeholder:text-muted-foreground/30 md:text-4xl"
           value={pin}
-          onChange={(e) => setPin(e.currentTarget.value)}
+          onChange={(e) => setPin(e.currentTarget.value.replace(/\D/g, ""))}
           onKeyDown={(e) => { if (e.key === "Enter") submit(); }}
         />
         {screen.error && <ErrorLine text={screen.error} />}
@@ -113,7 +114,7 @@ export function Waiting({ screen, actions }: Props<"waiting">): JSX.Element {
           Approve “{screen.name}” in the console of {bare(screen.origin)}, under Pairing. The
           stream starts as soon as you do. The request lapses after three minutes.
         </Sub>
-        <Spinner className="mx-auto my-10 block size-10" />
+        <Spinner className="mx-auto my-8 block size-12" />
         <Row>
           <Button autoFocus variant="secondary" onClick={() => actions.cancelRequest()}>Cancel</Button>
         </Row>
