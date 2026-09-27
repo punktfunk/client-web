@@ -264,10 +264,11 @@ fn take_msg(inbox: &mut Vec<u8>) -> Option<Vec<u8>> {
 /// a host that will demand a credential. Everything after arrives through [`pf_ctl_recv`].
 ///
 /// `launch` is a library id (`OperatorGameEntry::id`) or null: the host resolves it to a command
-/// on the real-display source and streams the desktop otherwise.
+/// on the real-display source and streams the desktop otherwise. `name` is this device's name.
 ///
 /// # Safety
-/// `launch` is null or points to `launch_len` readable UTF-8 bytes, valid for the call.
+/// `launch` and `name` are each null or point to their length in readable UTF-8 bytes, valid for
+/// the call.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pf_session_hello(
     width: u32,
@@ -276,14 +277,13 @@ pub unsafe extern "C" fn pf_session_hello(
     bitrate_kbps: u32,
     launch: *const u8,
     launch_len: u32,
+    name: *const u8,
+    name_len: u32,
 ) -> i32 {
-    let launch = if launch.is_null() || launch_len == 0 {
-        None
-    } else {
-        // SAFETY: the caller guarantees `launch_len` readable bytes at `launch` for this call.
-        let bytes = unsafe { std::slice::from_raw_parts(launch, launch_len as usize) };
-        std::str::from_utf8(bytes).ok().map(str::to_string)
-    };
+    // SAFETY: the caller guarantees `launch_len` readable bytes at `launch` for this call.
+    let launch = unsafe { utf8_arg(launch, launch_len) };
+    // SAFETY: as above, `name_len` bytes at `name`.
+    let name = unsafe { utf8_arg(name, name_len) };
     CLIENT.with(|c| {
         let mut c = c.borrow_mut();
         let hello = Hello {
@@ -296,7 +296,8 @@ pub unsafe extern "C" fn pf_session_hello(
             compositor: CompositorPref::Auto,
             gamepad: GamepadPref::Auto,
             bitrate_kbps,
-            name: Some("Browser".to_string()),
+            // What a request for access shows in the host's console, before any pairing names it.
+            name: Some(name.unwrap_or_else(|| "Browser".to_string())),
             launch,
             // `STREAMED_AU` is deliberately absent: slice-progressive delivery hands over pieces
             // of an access unit, and `VideoDecoder` wants whole ones.
@@ -322,6 +323,19 @@ pub unsafe extern "C" fn pf_session_hello(
         c.phase = Phase::Offered;
         1
     })
+}
+
+/// An optional UTF-8 argument from the page: `None` when absent, empty or not UTF-8.
+///
+/// # Safety
+/// `ptr` must point to `len` readable bytes for this call, or be null.
+unsafe fn utf8_arg(ptr: *const u8, len: u32) -> Option<String> {
+    if ptr.is_null() || len == 0 {
+        return None;
+    }
+    // SAFETY: the caller guarantees `len` readable bytes at `ptr`.
+    let bytes = unsafe { std::slice::from_raw_parts(ptr, len as usize) };
+    std::str::from_utf8(bytes).ok().map(str::to_string)
 }
 
 /// The page has signed the host's nonce. Send the credential; the host answers with `Welcome`.

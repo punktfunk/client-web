@@ -40,6 +40,10 @@ const NEVER_OPENED = -2;
  *  closes the session without a message, so nothing else says so. */
 const OFFERED_GRACE_MS = 5000;
 
+/** How long a request for access waits. The host gives up at 180 s and says so; this is the
+ *  backstop for a host that never answers. */
+const KNOCK_BUDGET_MS = 185_000;
+
 /** One stats-overlay line. `role` is how to paint it: headline, breakdown, aside or warning. */
 export interface HudLine {
   role: "primary" | "detail" | "muted" | "warn";
@@ -99,11 +103,15 @@ export type EngineState =
   | { kind: "connecting"; origin: string }
   /** The control stream is open and this browser has no pairing with the host. */
   | { kind: "needs-pairing"; origin: string }
+  /** The host holds this browser's request for access until someone approves it in the host's
+   *  console, where it shows as `name`. Approval streams on this same connection. */
+  | { kind: "awaiting-approval"; origin: string; name: string }
   | { kind: "pairing"; origin: string }
   /** The ceremony succeeded. The host closes after it, as it does for native clients; the
    *  consumer reconnects to stream. */
   | { kind: "paired"; origin: string }
-  /** `reason` is the host's own sentence when it gave one (not armed, rate-limited, wrong PIN). */
+  /** `reason` is the host's own sentence when it gave one: not armed, rate-limited, a wrong PIN,
+   *  or a request for access denied or left unanswered. */
   | { kind: "pair-refused"; origin: string; reason?: string }
   /** Authenticated. `host` reaches the management API; nothing is streaming yet. Emitted once
    *  per connection — the host's name and the library are read through `host`, not carried. */
@@ -236,6 +244,11 @@ export class Engine {
   private pendingPin: string | null = null;
   /** A stream asked for from `ready`, sent as `Hello` when the dial it started opens. */
   private pendingStream: StreamOptions | null = null;
+  /** A request for access, sent as `Hello` when the next control stream opens. Survives `reset`,
+   *  as `pendingPin` does, for the reconnect that clears a stale pairing first. */
+  private pendingKnock: StreamOptions | null = null;
+  /** When the request for access went out, while it waits; `0` otherwise. */
+  private knockSince = 0;
 
   private constructor(
     private readonly mod: PunktfunkModule,
@@ -399,9 +412,52 @@ export class Engine {
     }
   }
 
+  /**
+   * Ask for access without a PIN: someone approves this browser in the host's console. Valid
+   * where `pair` is, and the same reconnect applies. Approval streams `opts` on this connection;
+   * a denial or a request nobody answers ends in `pair-refused` with the host's reason.
+   */
+  requestAccess(opts: StreamOptions): void {
+    const origin = this.origin;
+    if (!origin) return;
+    switch (this.state.kind) {
+      case "needs-pairing":
+        this.pendingKnock = opts;
+        this.set({ kind: "awaiting-approval", origin, name: this.deviceName });
+        this.dial();
+        return;
+      case "forgotten":
+      case "pair-refused":
+        this.pendingKnock = opts;
+        pf.hosts.unpair(origin);
+        this.mod._pf_wt_close?.();
+        void this.connect(this.target ?? origin);
+        return;
+      default:
+        return;
+    }
+  }
+
+  /** Withdraw a request for access. The host drops it with the connection, so an approval that
+   *  lands later admits nothing. */
+  cancelRequest(): void {
+    const origin = this.origin;
+    if (!origin || this.state.kind !== "awaiting-approval") return;
+    this.pendingKnock = null;
+    this.knockSince = 0;
+    this.stopSession();
+    this.mod._pf_wt_close?.();
+    this.set({ kind: "needs-pairing", origin });
+  }
+
+  /** The name this device pairs and asks for access under. */
+  private get deviceName(): string {
+    return this.opts.deviceName ?? engineName();
+  }
+
   private sendPairRequest(pin: string): void {
     if (!this.origin) return;
-    const name = this.opts.deviceName ?? engineName();
+    const name = this.deviceName;
     this.pairing = true;
     this.settled = false;
     withStr(this.mod, [pin, name], (p, pl, n, nl) => this.mod._pf_pair_begin(p, pl, n, nl));
@@ -416,6 +472,13 @@ export class Engine {
    */
   startStream(opts: StreamOptions): void {
     if (!this.origin || this.state.kind !== "ready") return;
+    this.set({ kind: "starting", origin: this.origin });
+    this.pendingStream = opts;
+    this.dial();
+  }
+
+  /** Send `Hello`, with the video plane up to take what answers it. */
+  private hello(opts: StreamOptions): void {
     this.video ??= new VideoPipe(this.mod, this.opts.videoCanvas, this.tunable.videoBackend);
     this.video.attach();
     this.tier = this.tunable.statsTier;
@@ -424,15 +487,18 @@ export class Engine {
     this.launchNotice = null;
     this.access = { seq: 0, grants: 0, deadline: null };
     this.accessNotice = null;
-    this.set({ kind: "starting", origin: this.origin });
-    this.pendingStream = opts;
-    this.dial();
-  }
-
-  private hello(opts: StreamOptions): void {
     const id = opts.launch?.id ?? "";
-    withStr(this.mod, [id], (p, len) =>
-      this.mod._pf_session_hello(opts.width, opts.height, opts.fps ?? 60, opts.bitrateKbps ?? 20000, id ? p : 0, id ? len : 0),
+    withStr(this.mod, [id, this.deviceName], (p, len, n, nl) =>
+      this.mod._pf_session_hello(
+        opts.width,
+        opts.height,
+        opts.fps ?? 60,
+        opts.bitrateKbps ?? 20000,
+        id ? p : 0,
+        id ? len : 0,
+        n,
+        nl,
+      ),
     );
   }
 
@@ -596,8 +662,10 @@ export class Engine {
     this.pairing = false;
     this.settled = false;
     this.offeredSince = 0;
+    this.knockSince = 0;
     this.pendingStream = null;
-    // `pendingPin` survives: it is set right before the reconnect that calls this.
+    // `pendingPin` and `pendingKnock` survive: each is set right before the reconnect that calls
+    // this.
   }
 
   /**
@@ -608,7 +676,7 @@ export class Engine {
   private onDeviceReady(): void {
     const origin = this.origin;
     if (!origin) return;
-    if (this.pendingPin || this.pendingStream) return this.dial();
+    if (this.pendingPin || this.pendingStream || this.pendingKnock) return this.dial();
     const fingerprint = pf.hosts.fingerprint(origin);
     const device = this.mod.__pfDevice;
     if (!fingerprint || !device) return this.set({ kind: "needs-pairing", origin });
@@ -634,6 +702,13 @@ export class Engine {
     const stream = this.pendingStream;
     this.pendingStream = null;
     if (stream) return this.hello(stream);
+    const knock = this.pendingKnock;
+    this.pendingKnock = null;
+    if (knock) {
+      this.knockSince = performance.now();
+      this.set({ kind: "awaiting-approval", origin, name: this.deviceName });
+      return this.hello(knock);
+    }
     const pin = this.pendingPin;
     this.pendingPin = null;
     if (pin) return this.sendPairRequest(pin);
@@ -686,6 +761,14 @@ export class Engine {
       });
     }
     switch (this.state.kind) {
+      case "awaiting-approval":
+        // Denied, unanswered, or replaced by a newer request: the host's sentence says which.
+        this.knockSince = 0;
+        this.stopSession();
+        return this.set({ kind: "pair-refused", origin, ...(said ? { reason: said } : {}) });
+      // No connection is open here: a close is the one `cancelRequest` just made.
+      case "needs-pairing":
+        return;
       case "pairing":
         // The ceremony's own verdict (`PairResult`) is authoritative; a close with a reason and
         // no verdict is the host refusing before the ceremony began.
@@ -717,8 +800,10 @@ export class Engine {
     this.set({ kind: "error", origin, message });
   }
 
-  /** The session's two pipes, torn down together. Idempotent. */
+  /** The session's pipes and its wasm state, torn down together. Idempotent. The wasm session
+   *  goes too: a refusal leaves it `Offered`, which would read as a forgotten pairing later. */
   private stopSession(): void {
+    this.mod._pf_session_reset?.();
     this.input?.detach();
     this.input = null;
     this.inputSize = { width: 0, height: 0 };
@@ -767,6 +852,15 @@ export class Engine {
 
     // Offered and going nowhere means the host did not accept the credential — most often
     // because it has since unpaired this browser. It just closes, so nothing else says so.
+    if (phase === SESSION.OFFERED && this.knockSince) {
+      if (performance.now() - this.knockSince > KNOCK_BUDGET_MS) {
+        this.knockSince = 0;
+        this.stopSession();
+        this.mod._pf_wt_close?.();
+        this.set({ kind: "pair-refused", origin, reason: "nobody approved the request on the host in time" });
+      }
+      return;
+    }
     if (phase === SESSION.OFFERED && !this.pairing) {
       this.offeredSince ||= performance.now();
       if (performance.now() - this.offeredSince > OFFERED_GRACE_MS) {
@@ -777,6 +871,16 @@ export class Engine {
     }
     if (phase !== SESSION.LIVE) return;
     this.offeredSince = 0;
+    if (this.knockSince) {
+      // Approved. The host is pinned as a PIN pairing pins it, from its attested identity.
+      this.knockSince = 0;
+      const plane = this.plane;
+      if (plane) {
+        void pf.hostFingerprint(plane).then((fp) => {
+          if (fp) pf.hosts.remember(origin, { fingerprint: fp });
+        });
+      }
+    }
     const v = this.video?.snapshot();
 
     // Input from the first live frame: the negotiated size is known by then (`Welcome` set it
@@ -889,9 +993,31 @@ function withStr<T>(mod: PunktfunkModule, strings: string[], f: (...args: number
 
 const message = (e: unknown): string => (e instanceof Error ? e.message : String(e));
 
-const engineName = (): string =>
-  navigator.userAgent.includes("Firefox")
+/** The browser and the machine it runs on, which is what tells two devices apart in the host's
+ *  list. An iPad asks for the desktop site and says `Macintosh`; its touch points give it away. */
+const engineName = (): string => {
+  const ua = navigator.userAgent;
+  const browser = ua.includes("Firefox")
     ? "Firefox"
-    : navigator.userAgent.includes("Chrome")
-      ? "Chrome"
-      : "Safari";
+    : ua.includes("Edg/")
+      ? "Edge"
+      : ua.includes("Chrome")
+        ? "Chrome"
+        : "Safari";
+  const os = /iPad/.test(ua) || (/Macintosh/.test(ua) && navigator.maxTouchPoints > 1)
+    ? "iPad"
+    : /iPhone/.test(ua)
+      ? "iPhone"
+      : /Android/.test(ua)
+        ? "Android"
+        : /CrOS/.test(ua)
+          ? "ChromeOS"
+          : /Mac/.test(ua)
+            ? "Mac"
+            : /Windows/.test(ua)
+              ? "Windows"
+              : /Linux/.test(ua)
+                ? "Linux"
+                : "";
+  return os ? `${browser} on ${os}` : browser;
+};

@@ -30,7 +30,16 @@ export interface PunktfunkModule {
   _pf_session_access_seq?(): number;
   _pf_session_access_grants?(): number;
   _pf_session_access_secs?(): number;
-  _pf_session_hello(width: number, height: number, fps: number, bitrateKbps: number, launchPtr: number, launchLen: number): number;
+  _pf_session_hello(
+    width: number,
+    height: number,
+    fps: number,
+    bitrateKbps: number,
+    launchPtr: number,
+    launchLen: number,
+    namePtr: number,
+    nameLen: number,
+  ): number;
   /** Drain the ring and hand each finished access unit to the page. Returns how many. */
   _pf_session_pump(): number;
   /** `0` idle, `1` offered, `2` live, `3` failed. */
@@ -81,7 +90,7 @@ export interface PunktfunkModule {
   _pf_input(kind: number, code: number, x: number, y: number, flags: number): void;
   /** The whole pad; Rust sends what changed. Sticks −32768..32767 with +y = up, triggers 0..255. */
   _pf_gamepad(pad: number, buttons: number, lsX: number, lsY: number, rsX: number, rsY: number, lt: number, rt: number): void;
-  _pf_gamepad_arrival(pad: number): void;
+  _pf_gamepad_arrival(pad: number, kind: number): void;
   _pf_gamepad_remove(pad: number): void;
 
   // --- the datagram ring -------------------------------------------------------------------
