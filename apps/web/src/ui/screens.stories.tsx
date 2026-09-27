@@ -37,6 +37,7 @@ export const LibraryLoading = of(SCREENS["library-loading"]);
 export const Streaming = of(SCREENS["streaming"]);
 export const StreamingDiagnostics = of(SCREENS["streaming-diagnostics"]);
 export const StreamingCaptured = of(SCREENS["streaming-captured"]);
+export const StreamingMenu = of(SCREENS["streaming-menu"]);
 export const ErrorCard = of(SCREENS["error"]);
 
 /** The one screen with controls that must visibly respond, so it keeps a copy of its values. */

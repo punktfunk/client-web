@@ -18,7 +18,7 @@ import type { PunktfunkModule } from "./emscripten.ts";
 import { DeviceRefused, Host, type LibraryEntry, VersionSkew } from "./host.ts";
 import * as pf from "./pf-connect.ts";
 import { decodeSupported, VideoPipe } from "./video.ts";
-import { InputPipe } from "./input.ts";
+import { type Chord, InputPipe } from "./input.ts";
 import { AudioPipe, type AudioSnapshot } from "./audio.ts";
 import { STATS_TIERS, type StatsTier } from "./settings.ts";
 
@@ -31,7 +31,7 @@ export { type KnownHost, type Plane, type Reach, hosts, originOf, reach } from "
 const CRED = { EMPTY: 0, READY: 1, NEEDS_SIGNATURE: 2, PAIRING: 3, PAIRED: 4, FAILED: 5 } as const;
 const SESSION = { IDLE: 0, OFFERED: 1, LIVE: 2, FAILED: 3 } as const;
 /** The host's application close codes this engine reads (`punktfunk_core::reject`). */
-const CLOSE = { PAIR_DENIED: 0x64, ACCESS_EXPIRED: 0x69, HOST_POWER: 0x6b } as const;
+const CLOSE = { QUIT: 0x51, PAIR_DENIED: 0x64, ACCESS_EXPIRED: 0x69, HOST_POWER: 0x6b } as const;
 /** pf-glue's code for a session that never opened: no host was heard at all. */
 const NEVER_OPENED = -2;
 
@@ -196,6 +196,7 @@ export interface StreamOptions {
 export class Engine {
   private state: EngineState = { kind: "idle" };
   private readonly listeners = new Set<(s: EngineState) => void>();
+  private readonly menuListeners = new Set<() => void>();
   private origin: string | null = null;
   /** What `connect` was last given, so the engine's own reconnects reach the host the same way. */
   private target: string | HostTarget | null = null;
@@ -273,6 +274,13 @@ export class Engine {
     this.listeners.add(listener);
     listener(this.state);
     return () => this.listeners.delete(listener);
+  }
+
+  /** Called when the player asks for the quick menu: Ctrl+Alt+Shift+O, or Back+A on a pad.
+   *  The menu is the consumer's to draw. Returns the unsubscribe. */
+  onMenu(listener: () => void): () => void {
+    this.menuListeners.add(listener);
+    return () => this.menuListeners.delete(listener);
   }
 
   private set(state: EngineState): void {
@@ -482,15 +490,59 @@ export class Engine {
     this.mod._pf_session_reconfigure?.(even(width), even(height), Math.max(1, Math.round(fps)));
   }
 
+  /**
+   * Enter or leave fullscreen; toggles when `on` is omitted. Entering needs a user gesture. In
+   * fullscreen the keyboard is locked where the browser offers it (Chromium), so system shortcuts
+   * such as Alt+Tab reach the host.
+   */
+  fullscreen(on = !document.fullscreenElement): void {
+    const keyboard = (navigator as { keyboard?: { lock?: () => Promise<void>; unlock?: () => void } }).keyboard;
+    if (on && !document.fullscreenElement) {
+      void document.documentElement
+        .requestFullscreen()
+        .then(() => keyboard?.lock?.())
+        .catch(() => {});
+    } else if (!on && document.fullscreenElement) {
+      keyboard?.unlock?.();
+      void document.exitFullscreen().catch(() => {});
+    }
+  }
+
+  private chord(chord: Chord): void {
+    switch (chord) {
+      case "stats":
+        return this.cycleStats();
+      case "menu":
+        for (const l of this.menuListeners) l();
+        return;
+      case "release":
+        return this.capturePointer(false);
+      case "mouse":
+        return this.configure({ pointer: this.tunable.pointer === "capture" ? "absolute" : "capture" });
+      case "fullscreen":
+        return this.fullscreen();
+      case "escape":
+        this.capturePointer(false);
+        return this.fullscreen(false);
+      case "end":
+      case "escape-hold":
+        return this.disconnect(true);
+    }
+  }
+
   /** Forget a host this browser knows. Its pairing on the host side is untouched. */
   forget(origin: string): void {
     pf.hosts.forget(origin);
     if (this.origin === origin) this.disconnect();
   }
 
-  disconnect(): void {
+  /**
+   * Leave the host. `quit` ends the title too (End); without it the host keeps the game running
+   * for this device to come back to (Leave).
+   */
+  disconnect(quit = false): void {
     this.stopSession();
-    this.mod._pf_wt_close?.();
+    this.mod._pf_wt_close?.(quit ? CLOSE.QUIT : 0);
     this.reset();
     this.set({ kind: "idle" });
   }
@@ -725,7 +777,7 @@ export class Engine {
         streamHeight: v.height,
         pointer: this.tunable.pointer,
         deadzone: this.tunable.deadzone,
-        onStatsChord: () => this.cycleStats(),
+        onChord: (chord) => this.chord(chord),
       });
       this.input.attach();
     }

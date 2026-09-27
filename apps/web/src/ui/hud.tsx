@@ -50,10 +50,6 @@ export function Hud({ screen, actions }: { screen: Extract<Screen, { kind: "stre
     stats.fps ? `${stats.fps} fps` : "",
     stats.backend ?? "",
   ].filter(Boolean).join(" · ");
-  const fullscreen = () => {
-    if (document.fullscreenElement) void document.exitFullscreen();
-    else void document.documentElement.requestFullscreen();
-  };
   return (
     <>
       {/* Hidden means gone, not transparent: a 0-opacity toolbar still takes the pointer, and
@@ -83,9 +79,12 @@ export function Hud({ screen, actions }: { screen: Extract<Screen, { kind: "stre
           {stats.pointerCaptured ? "Release mouse" : "Capture mouse"}
         </Button>
         <Button size="sm" variant="ghost" onClick={() => actions.openSettings(true)}>Settings</Button>
-        <Button size="sm" variant="ghost" onClick={fullscreen}>Fullscreen</Button>
-        <Button size="sm" variant="ghost" onClick={() => actions.disconnect()}>Disconnect</Button>
+        <Button size="sm" variant="ghost" onClick={() => actions.fullscreen()}>Fullscreen</Button>
+        <Button size="sm" variant="ghost" aria-expanded={screen.menu} onClick={() => actions.openMenu(!screen.menu)}>
+          Menu
+        </Button>
       </div>
+      {screen.menu && <QuickMenu screen={screen} actions={actions} />}
       {screen.diagnostics && <Diagnostics stats={stats} />}
       {/* The host's word on a launch that did not give the player their game. */}
       {stats.launchNotice && (
@@ -105,6 +104,57 @@ export function Hud({ screen, actions }: { screen: Extract<Screen, { kind: "stre
         </div>
       )}
     </>
+  );
+}
+
+/**
+ * The quick actions every client offers mid-stream, named and ordered as the native dial has them
+ * (`overlay_actions.rs`). End asks twice, as there: it closes the title, not only the stream.
+ * `data-pf-keys` keeps the menu's keys on the page rather than the host.
+ */
+function QuickMenu({ screen, actions }: { screen: Extract<Screen, { kind: "streaming" }>; actions: Actions }): JSX.Element {
+  const [armed, setArmed] = useState(false);
+  useEffect(() => {
+    const close = (e: KeyboardEvent) => {
+      if (e.key === "Escape") actions.openMenu(false);
+    };
+    window.addEventListener("keydown", close);
+    return () => window.removeEventListener("keydown", close);
+  }, [actions]);
+  const item = "w-full justify-start";
+  return (
+    <Card
+      role="menu"
+      aria-label="Quick actions"
+      data-pf-keys="local"
+      className="pointer-events-auto fixed top-[calc(3.5rem+var(--pf-inset))] left-1/2 flex w-[min(22rem,calc(100vw-2*var(--pf-inset)))] -translate-x-1/2 flex-col gap-1 p-2 animate-in fade-in slide-in-from-top-2"
+    >
+      <Button
+        role="menuitem"
+        autoFocus
+        variant={armed ? "destructive" : "ghost"}
+        className={item}
+        onClick={() => (armed ? actions.disconnect(true) : setArmed(true))}
+      >
+        {armed ? "End stream? Press again" : "End stream"}
+      </Button>
+      <Button role="menuitem" variant="ghost" className={item} onClick={() => actions.disconnect(false)}>
+        Disconnect, keep the game running
+      </Button>
+      <Button role="menuitem" variant="ghost" className={item} onClick={() => actions.cycleStats()}>
+        Statistics
+        <span className="ml-auto text-muted-foreground">{screen.diagnostics ? "On" : "Off"}</span>
+      </Button>
+      <Button role="menuitem" variant="ghost" className={item} onClick={() => actions.fullscreen()}>
+        Fullscreen
+      </Button>
+      <Button role="menuitem" variant="ghost" className={item} onClick={() => actions.toggleCapture()}>
+        {screen.stats.pointerCaptured ? "Release mouse" : "Capture mouse"}
+      </Button>
+      <p className="px-3 pt-1 pb-0.5 text-xs text-muted-foreground">
+        Ctrl+Alt+Shift+O, or Back+A on a controller
+      </p>
+    </Card>
   );
 }
 

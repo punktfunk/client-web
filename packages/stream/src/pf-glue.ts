@@ -197,10 +197,12 @@ mergeInto(LibraryManager.library, {
   },
 
   pf_wt_close__deps: ["$pfNet"],
-  pf_wt_close: function (): void {
+  pf_wt_close: function (code?: number): void {
     if (pfNet.wt) {
       try {
-        pfNet.wt.close();
+        // A close code is how a player's choice reaches the host: `QUIT_CLOSE_CODE` ends the
+        // title, a plain close leaves it running.
+        pfNet.wt.close(code ? { closeCode: code, reason: "" } : undefined);
       } catch {
         // Already closed, or never opened. Either way there is nothing to do.
       }

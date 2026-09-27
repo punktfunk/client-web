@@ -64,7 +64,7 @@ export class WebShell implements Ui {
 const noop: Actions = {
   connect() {}, pair() {}, retry() {}, back() {}, play() {}, forget() {}, disconnect() {},
   setAdding() {}, rename() {}, openSettings() {}, setSettings() {}, toggleCapture() {},
-  showDiagnostics() {},
+  showDiagnostics() {}, openMenu() {}, fullscreen() {}, cycleStats() {},
 };
 
 // --- the root ---------------------------------------------------------------------------

@@ -22,7 +22,7 @@ export interface PunktfunkModule {
 
   // --- the transport ---------------------------------------------------------------------
   _pf_wt_connect(urlPtr: number, hashPtr: number): number;
-  _pf_wt_close(): void;
+  _pf_wt_close(code?: number): void;
   _pf_wt_ctl_open(): number;
   _pf_ctl_recv(ptr: number, len: number): void;
 
@@ -139,7 +139,7 @@ declare global {
   function _free(ptr: number): void;
   function UTF8ToString(ptr: number, maxBytes?: number): string;
   /** A library member calling another: emscripten exposes each under its C name. */
-  function _pf_wt_close(): void;
+  function _pf_wt_close(code?: number): void;
   /** Emscripten's WebGL bookkeeping. The only place a GL object may be named. */
   const GL: {
     createContext(canvas: HTMLCanvasElement, attrs: Record<string, unknown>): number;
