@@ -19,7 +19,7 @@ import type { PunktfunkModule } from "./emscripten.ts";
 import { DeviceRefused, Host, type LibraryEntry, VersionSkew } from "./host.ts";
 import * as pf from "./pf-connect.ts";
 import { type Decodable, decodableCodecs, decodeSupported, hdrDisplay, VideoPipe } from "./video.ts";
-import { type Chord, InputPipe } from "./input.ts";
+import { type Chord, InputPipe, playRumble } from "./input.ts";
 import { AudioPipe, type AudioSnapshot, opusHead, playableChannels } from "./audio.ts";
 import { MicPipe, type MicState } from "./mic.ts";
 import { STATS_TIERS, type StatsTier } from "./settings.ts";
@@ -281,6 +281,7 @@ export class Engine {
     mod.__pfOnLaunchNotice = (text) => {
       this.launchNotice = { text, at: performance.now() };
     };
+    mod.__pfOnRumble = (pad, low, high, lt, rt, ms) => playRumble(navigator.getGamepads(), pad, low, high, lt, rt, ms);
     requestAnimationFrame(() => this.frame());
   }
 

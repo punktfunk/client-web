@@ -479,7 +479,7 @@ dependencies = [
 [[package]]
 name = "cros-codecs"
 version = "0.0.5"
-source = "git+https://git.unom.io/unom/punktfunk?rev=0a4aad079#0a4aad079b295276dacabc075d46a9699d0f2148"
+source = "git+https://git.unom.io/unom/punktfunk?rev=c6691fc1f#c6691fc1ff6df303bef6536da71a0f389ec7538f"
 dependencies = [
  "log",
 ]
@@ -658,7 +658,7 @@ checksum = "da7c62ceae207dd37ea5b845da6a0696c799f85e97da1ab5b7910be3c1c80223"
 [[package]]
 name = "fec-rs"
 version = "0.1.0"
-source = "git+https://git.unom.io/unom/punktfunk?rev=0a4aad079#0a4aad079b295276dacabc075d46a9699d0f2148"
+source = "git+https://git.unom.io/unom/punktfunk?rev=c6691fc1f#c6691fc1ff6df303bef6536da71a0f389ec7538f"
 
 [[package]]
 name = "fiat-crypto"
@@ -1139,7 +1139,7 @@ dependencies = [
 [[package]]
 name = "pf-bitstream"
 version = "0.40.0"
-source = "git+https://git.unom.io/unom/punktfunk?rev=0a4aad079#0a4aad079b295276dacabc075d46a9699d0f2148"
+source = "git+https://git.unom.io/unom/punktfunk?rev=c6691fc1f#c6691fc1ff6df303bef6536da71a0f389ec7538f"
 dependencies = [
  "cros-codecs",
  "tracing",
@@ -1148,7 +1148,7 @@ dependencies = [
 [[package]]
 name = "pf-client-core"
 version = "0.40.0"
-source = "git+https://git.unom.io/unom/punktfunk?rev=0a4aad079#0a4aad079b295276dacabc075d46a9699d0f2148"
+source = "git+https://git.unom.io/unom/punktfunk?rev=c6691fc1f#c6691fc1ff6df303bef6536da71a0f389ec7538f"
 dependencies = [
  "anyhow",
  "punktfunk-core",
@@ -1162,7 +1162,7 @@ dependencies = [
 [[package]]
 name = "pf-console-ui"
 version = "0.40.0"
-source = "git+https://git.unom.io/unom/punktfunk?rev=0a4aad079#0a4aad079b295276dacabc075d46a9699d0f2148"
+source = "git+https://git.unom.io/unom/punktfunk?rev=c6691fc1f#c6691fc1ff6df303bef6536da71a0f389ec7538f"
 dependencies = [
  "anyhow",
  "pf-client-core",
@@ -1262,7 +1262,7 @@ dependencies = [
 [[package]]
 name = "punktfunk-core"
 version = "0.40.0"
-source = "git+https://git.unom.io/unom/punktfunk?rev=0a4aad079#0a4aad079b295276dacabc075d46a9699d0f2148"
+source = "git+https://git.unom.io/unom/punktfunk?rev=c6691fc1f#c6691fc1ff6df303bef6536da71a0f389ec7538f"
 dependencies = [
  "aes-gcm",
  "cbindgen",

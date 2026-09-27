@@ -1,11 +1,12 @@
 // The pad chords: each fires on its edge, and the escape chord's hold fires once, at 1.5 s.
+// Rumble plays on the pad the host names, through the actuator the browser offers.
 //
 // `InputPipe` uses constructor parameter properties, so `npm test` runs node with
 // `--experimental-transform-types` rather than plain type stripping.
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { type Chord, InputPipe } from "./input.ts";
+import { type Chord, InputPipe, playRumble } from "./input.ts";
 
 /** A standard-mapping pad with these button indices held. */
 const pad = (...held: number[]): Gamepad =>
@@ -56,4 +57,45 @@ test("the pad chords fire on their edges, and the escape hold once", () => {
   } finally {
     performance.now = realNow;
   }
+});
+
+/** A pad whose actuator records what it was asked to play. */
+const rumblePad = (effects?: string[]) => {
+  const calls: unknown[] = [];
+  const actuator = {
+    ...(effects ? { effects } : {}),
+    playEffect: (type: string, params: Record<string, number>) => (calls.push([type, params]), Promise.resolve()),
+    reset: () => (calls.push("reset"), Promise.resolve()),
+  };
+  return { pad: { vibrationActuator: actuator } as unknown as Gamepad, calls };
+};
+
+test("rumble plays on the pad the host names, strong on the low motor", () => {
+  const a = rumblePad();
+  const b = rumblePad();
+  playRumble([a.pad, b.pad], 1, 0xffff, 0, 0, 0, 800);
+  assert.deepEqual(a.calls, []);
+  assert.deepEqual(b.calls, [["dual-rumble", { duration: 800, strongMagnitude: 1, weakMagnitude: 0 }]]);
+});
+
+test("a stop resets the actuator", () => {
+  const a = rumblePad();
+  playRumble([a.pad], 0, 0, 0, 0, 0, 0);
+  assert.deepEqual(a.calls, ["reset"]);
+});
+
+test("trigger levels play only where the browser offers trigger rumble", () => {
+  const plain = rumblePad(["dual-rumble"]);
+  playRumble([plain.pad], 0, 0, 0, 0xffff, 0, 400);
+  assert.equal((plain.calls[0] as [string])[0], "dual-rumble");
+  const xbox = rumblePad(["dual-rumble", "trigger-rumble"]);
+  playRumble([xbox.pad], 0, 0, 0, 0xffff, 0, 400);
+  assert.deepEqual(xbox.calls, [
+    ["trigger-rumble", { duration: 400, strongMagnitude: 0, weakMagnitude: 0, leftTrigger: 1, rightTrigger: 0 }],
+  ]);
+});
+
+test("a pad without an actuator, or no pad at all, is left alone", () => {
+  assert.doesNotThrow(() => playRumble([{} as Gamepad, null], 0, 0xffff, 0, 0, 0, 400));
+  assert.doesNotThrow(() => playRumble([], 3, 0xffff, 0, 0, 0, 400));
 });
