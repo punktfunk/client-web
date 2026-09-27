@@ -428,6 +428,11 @@ mergeInto(LibraryManager.library, {
     Module.__pfOnAudioFrame(HEAPU8.slice(ptr, ptr + len), seq, ptsNs);
   },
 
+  pf_rumble: function (pad: number, low: number, high: number, lt: number, rt: number, ms: number): void {
+    if (!Module.__pfOnRumble) return;
+    Module.__pfOnRumble(pad, low, high, lt, rt, ms);
+  },
+
   pf_video_au: function (ptr: number, len: number, ptsUs: number, key: number, flags: number): void {
     if (!Module.__pfOnAccessUnit) return;
     // `slice`, not `subarray`: EncodedVideoChunk keeps the bytes past this call, and the Rust

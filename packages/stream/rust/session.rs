@@ -163,7 +163,7 @@ pub fn is_live() -> bool {
     CLIENT.with(|c| c.borrow().phase == Phase::Live)
 }
 
-/// Drop all session state so the next connection starts clean.
+/// Drop all session state so the next connection starts clean, stopping any pad still rumbling.
 ///
 /// The page calls this on disconnect. Without it a second connect in the same page keeps the old
 /// phase (`Live`) and session, so the client reports "streaming" against a torn-down decoder — a
@@ -190,6 +190,7 @@ pub extern "C" fn pf_session_reset() {
         c.text.clear();
     });
     crate::audio::reset();
+    crate::rumble::reset();
 }
 
 /// Ask the host to switch to `width` x `height` at `fps` without reconnecting (a window resize).
@@ -516,10 +517,12 @@ fn on_welcome(c: &mut Client, welcome: Welcome) {
     }
 }
 
-/// Drain the ring, run FEC/decrypt/reassembly, and hand each finished access unit to the page.
-/// Returns how many were delivered. Called once per `requestAnimationFrame`.
+/// Drain the ring, run FEC/decrypt/reassembly, and hand each finished access unit to the page;
+/// play whatever rumble is due. Returns how many units were delivered. Called once per
+/// `requestAnimationFrame`.
 #[unsafe(no_mangle)]
 pub extern "C" fn pf_session_pump() -> u32 {
+    crate::rumble::pump();
     CLIENT.with(|c| {
         let mut c = c.borrow_mut();
         if c.phase != Phase::Live {
