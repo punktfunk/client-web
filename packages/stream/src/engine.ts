@@ -301,6 +301,7 @@ export class Engine {
     };
     mod.__pfOnRumble = (pad, low, high, lt, rt, ms) => playRumble(navigator.getGamepads(), pad, low, high, lt, rt, ms);
     mod.__pfOnCursorShape = (serial, w, h, hx, hy, rgba) => this.cursor.shape(serial, w, h, hx, hy, rgba);
+    mod.__pfOnData = () => this.mod._pf_session_pump();
     requestAnimationFrame(() => this.frame());
   }
 

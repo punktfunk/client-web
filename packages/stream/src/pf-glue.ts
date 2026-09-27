@@ -156,6 +156,14 @@ mergeInto(LibraryManager.library, {
         unis(pfNet.wt!.incomingUnidirectionalStreams.getReader());
         if (!pfNet.reading) {
           pfNet.reading = true;
+          // The session is pumped once per burst, on a task right after it: a frame starts
+          // decoding when its last datagram lands, not at the next animation frame.
+          const tick = new MessageChannel();
+          let queued = false;
+          tick.port1.onmessage = function () {
+            queued = false;
+            if (Module.__pfOnData) Module.__pfOnData();
+          };
           const pump = function (reader: ReadableStreamDefaultReader<Uint8Array>): void {
             reader.read().then(
               function (r) {
@@ -163,10 +171,19 @@ mergeInto(LibraryManager.library, {
                   pfNet.reading = false;
                   return;
                 }
-                const slot = Module._pf_rx_claim();
+                let slot = Module._pf_rx_claim();
+                // A keyframe can outrun the ring inside one burst: drain it now instead of dropping.
+                if (slot < 0 && Module.__pfOnData) {
+                  Module.__pfOnData();
+                  slot = Module._pf_rx_claim();
+                }
                 if (slot >= 0) {
                   HEAPU8.set(r.value, Module._pf_rx_base() + slot * Module._pf_rx_stride());
                   Module._pf_rx_commit(slot, r.value.length);
+                }
+                if (!queued) {
+                  queued = true;
+                  tick.port2.postMessage(0);
                 }
                 pump(reader);
               },

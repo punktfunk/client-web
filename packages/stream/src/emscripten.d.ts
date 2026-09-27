@@ -145,6 +145,8 @@ export interface PunktfunkModule {
   __pfOnRefused?: (code: number, reason: string) => void;
   /** The host's sentence for a launch that did not give the player their game. */
   __pfOnLaunchNotice?: (text: string) => void;
+  /** Datagrams have landed in the ring: pump the session now rather than at the next frame. */
+  __pfOnData?: () => void;
   /** A host pointer bitmap: straight-alpha RGBA, copied out of wasm memory. */
   __pfOnCursorShape?: (serial: number, w: number, h: number, hotX: number, hotY: number, rgba: Uint8Array) => void;
   /** The negotiated video format, once `Welcome` has been read. */

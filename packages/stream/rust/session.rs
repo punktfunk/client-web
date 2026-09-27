@@ -607,8 +607,8 @@ fn on_welcome(c: &mut Client, welcome: Welcome) {
 }
 
 /// Drain the ring, run FEC/decrypt/reassembly, and hand each finished access unit to the page;
-/// play whatever rumble is due. Returns how many units were delivered. Called once per
-/// `requestAnimationFrame`.
+/// play whatever rumble is due. Returns how many units were delivered. Called as datagrams land,
+/// once per burst, and once per `requestAnimationFrame`.
 #[unsafe(no_mangle)]
 pub extern "C" fn pf_session_pump() -> u32 {
     crate::rumble::pump();
