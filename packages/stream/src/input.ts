@@ -93,6 +93,8 @@ export interface InputOptions {
    *  sends relative motion. Stick travel below `deadzone` is rest. */
   pointer: "absolute" | "capture";
   deadzone: number;
+  /** Scroll against the wheel's own direction. */
+  invertScroll?: boolean;
   /** A chord this page handles itself, never sent: see [`Chord`]. */
   onChord?: (chord: Chord) => void;
 }
@@ -320,7 +322,7 @@ export class InputPipe {
     e.preventDefault();
     // Pixels, lines or pages, in that order of `deltaMode`; each to notches. 100 px and 3
     // lines are what a notch is in the engines that report those units.
-    const notch = e.deltaMode === 0 ? 100 : e.deltaMode === 1 ? 3 : 1;
+    const notch = (e.deltaMode === 0 ? 100 : e.deltaMode === 1 ? 3 : 1) * (this.opts.invertScroll ? -1 : 1);
     this.wheel.y += (e.deltaY / notch) * WHEEL_NOTCH;
     this.wheel.x += (e.deltaX / notch) * WHEEL_NOTCH;
     const vy = Math.trunc(this.wheel.y);

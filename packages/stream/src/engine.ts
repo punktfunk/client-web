@@ -150,6 +150,12 @@ export interface TunableOptions {
   statsTier: StatsTier;
   /** The overlay's Advanced vocabulary instead of the figures Moonlight shows. Applies at once. */
   advancedStats: boolean;
+  /** The codec to ask the host for first. A hint: the host falls back when it cannot. */
+  codec: "auto" | "h264" | "hevc" | "av1";
+  /** Offer 10-bit HDR when this browser and display can show it. */
+  hdr: boolean;
+  /** Scroll the other way from what the wheel says. */
+  invertScroll: boolean;
 }
 
 const TUNABLE_DEFAULTS: TunableOptions = {
@@ -160,7 +166,13 @@ const TUNABLE_DEFAULTS: TunableOptions = {
   deadzone: 0.05,
   statsTier: "off",
   advancedStats: false,
+  codec: "auto",
+  hdr: true,
+  invertScroll: false,
 };
+
+/** `CODEC_*` bits, as `Hello::preferred_codec` names one. */
+const CODEC_BIT: Record<TunableOptions["codec"], number> = { auto: 0, h264: 0x01, hevc: 0x02, av1: 0x04 };
 
 export interface EngineOptions {
   /** The lower canvas: decoded video goes here and nowhere else. */
@@ -270,6 +282,7 @@ export class Engine {
     private readonly surround = 2,
   ) {
     this.tunable = {
+      ...TUNABLE_DEFAULTS,
       videoBackend: opts.videoBackend ?? TUNABLE_DEFAULTS.videoBackend,
       audio: opts.audio ?? TUNABLE_DEFAULTS.audio,
       captureInput: opts.captureInput ?? TUNABLE_DEFAULTS.captureInput,
@@ -497,8 +510,8 @@ export class Engine {
     if (!this.origin || this.state.kind !== "ready") return;
     // HDR is offered per stream: the window may have moved to another display, and the plane
     // may have been switched to WebGL2, since the last one.
-    const hdr = this.codecs.tenBit && hdrDisplay(this.tunable.videoBackend);
-    this.mod._pf_session_codecs?.(this.codecs.mask, hdr ? 1 : 0);
+    const hdr = this.tunable.hdr && this.codecs.tenBit && hdrDisplay(this.tunable.videoBackend);
+    this.mod._pf_session_codecs?.(this.codecs.mask, hdr ? 1 : 0, CODEC_BIT[this.tunable.codec]);
     this.set({ kind: "starting", origin: this.origin });
     this.pendingStream = opts;
     this.dial();
@@ -538,7 +551,7 @@ export class Engine {
   configure(next: Partial<TunableOptions>): void {
     const was = this.tunable;
     this.tunable = { ...was, ...next };
-    this.input?.tune({ pointer: this.tunable.pointer, deadzone: this.tunable.deadzone });
+    this.input?.tune({ pointer: this.tunable.pointer, deadzone: this.tunable.deadzone, invertScroll: this.tunable.invertScroll });
     // A tier picked in settings mid-stream replaces whatever the chord left.
     if (this.tunable.statsTier !== was.statsTier) this.tier = this.tunable.statsTier;
     this.hud = this.readHud();
@@ -992,6 +1005,7 @@ export class Engine {
         streamHeight: v.height,
         pointer: this.tunable.pointer,
         deadzone: this.tunable.deadzone,
+        invertScroll: this.tunable.invertScroll,
         onChord: (chord) => this.chord(chord),
       });
       this.input.attach();

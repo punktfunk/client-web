@@ -43,6 +43,14 @@ export interface Settings {
   statsTier: StatsTier;
   /** Punktfunk's pipeline view (capture to glass, p50/p95) instead of the figures Moonlight shows. */
   advancedStats: boolean;
+  /** The codec to ask the host for first; `auto` leaves the pick to the host. */
+  codec: "auto" | "h264" | "hevc" | "av1";
+  /** Offer 10-bit HDR where this browser and display can show it. */
+  hdr: boolean;
+  /** Scroll the other way from what the wheel or trackpad says. */
+  invertScroll: boolean;
+  /** Go fullscreen when a stream starts from a click, and back when it ends. */
+  fullscreen: boolean;
 }
 
 export const DEFAULTS: Settings = {
@@ -58,9 +66,14 @@ export const DEFAULTS: Settings = {
   deadzone: 0.05,
   statsTier: "off",
   advancedStats: false,
+  codec: "auto",
+  hdr: true,
+  invertScroll: false,
+  fullscreen: true,
 };
 
 const KEY = "pf.settings";
+const CODECS: ReadonlyArray<Settings["codec"]> = ["auto", "h264", "hevc", "av1"];
 
 /**
  * Stored values are merged over the defaults, never trusted to be complete: a build that adds a
@@ -110,5 +123,9 @@ function sane(s: Settings): Settings {
     deadzone: Math.min(0.5, Math.max(0, s.deadzone)),
     statsTier: STATS_TIERS.includes(s.statsTier) ? s.statsTier : DEFAULTS.statsTier,
     advancedStats: s.advancedStats === true,
+    codec: CODECS.includes(s.codec) ? s.codec : DEFAULTS.codec,
+    hdr: s.hdr !== false,
+    invertScroll: s.invertScroll === true,
+    fullscreen: s.fullscreen !== false,
   };
 }

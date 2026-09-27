@@ -283,16 +283,21 @@ thread_local! {
     /// The page's to say, not one session's, so a reset leaves them.
     static CODECS: std::cell::Cell<u8> = const { std::cell::Cell::new(punktfunk_core::quic::CODEC_H264) };
     static HDR: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// The codec bit the person picked, or `0` for the host's own order.
+    static PREFERRED: std::cell::Cell<u8> = const { std::cell::Cell::new(0) };
 }
 
 /// The codecs this browser decodes (`CODEC_*` bits), from the page's `isConfigSupported` probe,
-/// and whether it presents BT.2020 PQ. H.264 is always kept: a GPU-less host has nothing else.
+/// whether it presents BT.2020 PQ, and the one codec bit to ask for first (`0`: the host's
+/// order). H.264 is always kept: a GPU-less host has nothing else. A preference this browser
+/// cannot decode is dropped rather than sent.
 #[unsafe(no_mangle)]
-pub extern "C" fn pf_session_codecs(mask: u32, hdr: u32) {
+pub extern "C" fn pf_session_codecs(mask: u32, hdr: u32, preferred: u32) {
     let supported = punktfunk_core::quic::CODEC_HEVC | punktfunk_core::quic::CODEC_AV1;
     let offered = (mask as u8 & supported) | punktfunk_core::quic::CODEC_H264;
     CODECS.with(|c| c.set(offered));
     HDR.with(|h| h.set(hdr != 0));
+    PREFERRED.with(|p| p.set(preferred as u8 & offered));
 }
 
 unsafe extern "C" {
@@ -399,8 +404,8 @@ pub unsafe extern "C" fn pf_session_hello(
             audio_channels: crate::audio::requested_channels(),
             // What `VideoDecoder` said it takes; H.264 always.
             video_codecs: CODECS.with(std::cell::Cell::get),
-            // No preference: the host picks the best codec both sides have.
-            preferred_codec: 0,
+            // A hint: the host honours it when both sides have that codec.
+            preferred_codec: PREFERRED.with(std::cell::Cell::get),
             display_hdr: None,
             // The page wears the host's pointer as its own cursor, so the host leaves it out of
             // the picture until pointer lock hands drawing back (`pf_cursor_render`).
