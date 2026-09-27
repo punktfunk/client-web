@@ -39,8 +39,8 @@ export function SettingsDialog({ screen, actions }: { screen: Extract<Screen, { 
         <DialogHeader>
           <DialogTitle>Settings</DialogTitle>
           <DialogDescription>
-            These apply to every host. Size, frame rate and bitrate take effect on the next
-            stream; the rest apply straight away.
+            These apply to every host. Size, frame rate, bitrate, video plane, audio and input
+            take effect on the next stream; the rest apply straight away.
           </DialogDescription>
         </DialogHeader>
 

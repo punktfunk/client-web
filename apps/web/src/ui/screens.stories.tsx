@@ -30,6 +30,7 @@ export const Accept = of(SCREENS["accept"]);
 export const Pair = of(SCREENS["pair"]);
 export const PairAgain = of(SCREENS["pair-again"]);
 export const PairRefused = of(SCREENS["pair-refused"]);
+export const Waiting = of(SCREENS.waiting);
 export const Trust = of(SCREENS["trust"]);
 export const Library = of(SCREENS["library"]);
 export const LibraryEmpty = of(SCREENS["library-empty"]);
@@ -37,6 +38,7 @@ export const LibraryLoading = of(SCREENS["library-loading"]);
 export const Streaming = of(SCREENS["streaming"]);
 export const StreamingDiagnostics = of(SCREENS["streaming-diagnostics"]);
 export const StreamingCaptured = of(SCREENS["streaming-captured"]);
+export const StreamingMenu = of(SCREENS["streaming-menu"]);
 export const ErrorCard = of(SCREENS["error"]);
 
 /** The one screen with controls that must visibly respond, so it keeps a copy of its values. */

@@ -93,9 +93,31 @@ export interface InputOptions {
    *  sends relative motion. Stick travel below `deadzone` is rest. */
   pointer: "absolute" | "capture";
   deadzone: number;
-  /** Ctrl+Alt+Shift+S, the stats-overlay chord every client shares. Handled here, never sent. */
-  onStatsChord?: () => void;
+  /** A chord this page handles itself, never sent: see [`Chord`]. */
+  onChord?: (chord: Chord) => void;
 }
+
+/**
+ * The shortcuts every punktfunk client shares. On the keyboard: Ctrl+Alt+Shift with S (stats),
+ * O (quick menu), Q (release input), D (end the stream), M (mouse model), and F11 or Alt+Enter
+ * (fullscreen). On a pad: Back+A (quick menu), and LB+RB+Start+Back, which releases input and
+ * leaves fullscreen when pressed and ends the stream when held.
+ */
+export type Chord = "stats" | "menu" | "release" | "end" | "mouse" | "fullscreen" | "escape" | "escape-hold";
+
+const KEY_CHORDS: Record<string, Chord> = {
+  KeyS: "stats",
+  KeyO: "menu",
+  KeyQ: "release",
+  KeyD: "end",
+  KeyM: "mouse",
+};
+
+/** How long the pad's escape chord must be held to end the stream, as on the native clients. */
+const ESCAPE_HOLD_MS = 1500;
+
+/** Standard-mapping indices: A, LB, RB, Back, Start. */
+const PAD = { A: 0, LB: 4, RB: 5, BACK: 8, START: 9 } as const;
 
 /**
  * Every listener the session needs, on one canvas. `attach` starts them, `detach` removes
@@ -107,6 +129,9 @@ export class InputPipe {
   /** Fractional wheel travel carried to the next event, so slow scrolls still arrive. */
   private wheel = { x: 0, y: 0 };
   private touches = new Map<number, number>();
+  /** Per pad: when the escape chord went down (`0` up), whether its hold fired, and whether
+   *  the menu chord is down — each chord fires on its edge, not every frame it is held. */
+  private chords = new Map<number, { escapeSince: number; held: boolean; menu: boolean }>();
 
   constructor(
     private readonly mod: PunktfunkModule,
@@ -162,9 +187,9 @@ export class InputPipe {
     this.on(c, "wheel", (e: WheelEvent) => this.scroll(e), { passive: false });
     this.on(c, "contextmenu", (e: Event) => e.preventDefault());
     // The pad set is polled; these only keep the arrival and removal events honest.
-    this.on(window, "gamepadconnected", (e: GamepadEvent) => this.arrive(e.gamepad.index));
+    this.on(window, "gamepadconnected", (e: GamepadEvent) => this.arrive(e.gamepad));
     this.on(window, "gamepaddisconnected", (e: GamepadEvent) => this.leave(e.gamepad.index));
-    for (const g of navigator.getGamepads()) if (g) this.arrive(g.index);
+    for (const g of navigator.getGamepads()) if (g) this.arrive(g);
     c.focus();
   }
 
@@ -179,6 +204,7 @@ export class InputPipe {
   poll(): void {
     for (const g of navigator.getGamepads()) {
       if (!g || !this.pads.has(g.index)) continue;
+      if (g.mapping === "standard") this.padChords(g);
       let buttons = 0;
       g.buttons.forEach((b, i) => {
         if (b.pressed && STANDARD_BUTTONS[i]) buttons |= STANDARD_BUTTONS[i]!;
@@ -203,9 +229,17 @@ export class InputPipe {
     // A field elsewhere on the page keeps its keys: the HUD has none, but a consumer's might.
     const t = e.target as HTMLElement | null;
     if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable)) return;
-    if (e.code === "KeyS" && e.ctrlKey && e.altKey && e.shiftKey) {
+    // The page's own menu, while it has focus, keeps its keys too.
+    if (t?.closest?.("[data-pf-keys=local]")) return;
+    const chord =
+      e.ctrlKey && e.altKey && e.shiftKey
+        ? KEY_CHORDS[e.code]
+        : e.code === "F11" || (e.code === "Enter" && e.altKey && !e.ctrlKey && !e.shiftKey)
+          ? "fullscreen"
+          : undefined;
+    if (chord) {
       e.preventDefault();
-      if (down && !e.repeat) this.opts.onStatsChord?.();
+      if (down && !e.repeat) this.opts.onChord?.(chord);
       return;
     }
     const vk = VK[e.code];
@@ -312,10 +346,32 @@ export class InputPipe {
   }
 
   // --- gamepads --------------------------------------------------------------------------
-  private arrive(index: number): void {
-    if (this.pads.has(index)) return;
-    this.pads.add(index);
-    this.mod._pf_gamepad_arrival(index);
+  private padChords(g: Gamepad): void {
+    const on = (i: number) => g.buttons[i]?.pressed ?? false;
+    const st = this.chords.get(g.index) ?? { escapeSince: 0, held: false, menu: false };
+    const escape = on(PAD.LB) && on(PAD.RB) && on(PAD.START) && on(PAD.BACK);
+    if (escape && !st.escapeSince) {
+      st.escapeSince = performance.now();
+      st.held = false;
+      this.opts.onChord?.("escape");
+    } else if (escape && !st.held && performance.now() - st.escapeSince >= ESCAPE_HOLD_MS) {
+      st.held = true;
+      this.opts.onChord?.("escape-hold");
+    } else if (!escape) {
+      st.escapeSince = 0;
+    }
+    const menu = on(PAD.BACK) && on(PAD.A);
+    if (menu && !st.menu) this.opts.onChord?.("menu");
+    st.menu = menu;
+    this.chords.set(g.index, st);
+  }
+
+  /** Only a standard-mapping pad is forwarded: its button indices are the only ones this reads,
+   *  and any other layout would press the wrong buttons on the host. */
+  private arrive(g: Gamepad): void {
+    if (this.pads.has(g.index) || g.mapping !== "standard") return;
+    this.pads.add(g.index);
+    this.mod._pf_gamepad_arrival(g.index, padKind(g.id));
   }
 
   private leave(index: number): void {
@@ -340,3 +396,37 @@ export class InputPipe {
     this.off.push(() => target.removeEventListener(type, fn as EventListener, opts));
   }
 }
+
+/**
+ * The `GamepadPref` wire byte for a pad, by the rules the native clients use: the vendor and
+ * product where the browser gives them (Chromium and Firefox put them in the id), else the name
+ * (Safari gives only that). Unknown pads get Xbox 360, which every game reads.
+ */
+export function padKind(id: string): number {
+  const ids = /Vendor: ([0-9a-f]{4}) Product: ([0-9a-f]{4})/i.exec(id) ?? /^([0-9a-f]{1,4})-([0-9a-f]{1,4})-/i.exec(id);
+  const vid = ids ? parseInt(ids[1]!, 16) : -1;
+  const pid = ids ? parseInt(ids[2]!, 16) : -1;
+  const name = id.toLowerCase();
+  if ((vid === 0x054c && pid === 0x0df2) || name.includes("dualsense edge")) return PAD_KIND.DUALSENSE_EDGE;
+  if ((vid === 0x054c && pid === 0x0ce6) || name.includes("dualsense")) return PAD_KIND.DUALSENSE;
+  if ((vid === 0x054c && [0x05c4, 0x09cc, 0x0ba0].includes(pid)) || name.includes("dualshock")) return PAD_KIND.DUALSHOCK4;
+  if (vid === 0x28de && pid === 0x1205) return PAD_KIND.STEAM_DECK;
+  if (vid === 0x28de && [0x1102, 0x1142].includes(pid)) return PAD_KIND.STEAM_CONTROLLER;
+  if ((vid === 0x057e && [0x2009, 0x200e].includes(pid)) || name.includes("pro controller")) return PAD_KIND.SWITCH_PRO;
+  if (vid === 0x045e ? ![0x028e, 0x028f, 0x0719].includes(pid) : name.includes("xbox") && !name.includes("360")) {
+    return PAD_KIND.XBOX_ONE;
+  }
+  return PAD_KIND.XBOX_360;
+}
+
+/** `punktfunk_core::config::GamepadPref::to_u8`. */
+const PAD_KIND = {
+  XBOX_360: 1,
+  DUALSENSE: 2,
+  XBOX_ONE: 3,
+  DUALSHOCK4: 4,
+  STEAM_CONTROLLER: 5,
+  STEAM_DECK: 6,
+  DUALSENSE_EDGE: 7,
+  SWITCH_PRO: 8,
+} as const;
