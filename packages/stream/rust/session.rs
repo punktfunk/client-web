@@ -394,8 +394,11 @@ pub unsafe extern "C" fn pf_session_hello(
             // `STREAMED_AU` is deliberately absent: slice-progressive delivery hands over pieces
             // of an access unit, and `VideoDecoder` wants whole ones.
             // `HOST_TIMING`: the host's own share of each frame, which the overlay reports.
+            // `CHACHA20`: wasm has no AES instructions, and ChaCha20 runs about three times as
+            // fast in software on the thread that also draws.
             video_caps: punktfunk_core::quic::VIDEO_CAP_PROBE_SEQ
                 | punktfunk_core::quic::VIDEO_CAP_HOST_TIMING
+                | punktfunk_core::quic::VIDEO_CAP_CHACHA20
                 | if HDR.with(std::cell::Cell::get) {
                     punktfunk_core::quic::VIDEO_CAP_10BIT | punktfunk_core::quic::VIDEO_CAP_HDR
                 } else {
