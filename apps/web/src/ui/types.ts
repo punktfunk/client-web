@@ -51,6 +51,10 @@ export interface SessionStats {
 export interface HostCard extends KnownHost {
   origin: string;
   reach?: Reach;
+  /** Where the page's server takes a wake request for this host; absent when it cannot wake it. */
+  wake?: string;
+  /** A wake went out and the host has not answered yet. */
+  waking?: boolean;
 }
 
 /**
@@ -123,6 +127,8 @@ export interface Actions {
    *  to the management API, so this is the first screen with anything to choose. */
   play(entry?: LibraryEntry): void;
   forget(origin: string): void;
+  /** Send a host the magic packet, through the page's server. */
+  wake(origin: string): void;
   /** Name a host something this browser will remember. An empty label drops the name. */
   rename(origin: string, label: string): void;
   /** Leave the host. `quit` ends the title too; without it the game keeps running. */

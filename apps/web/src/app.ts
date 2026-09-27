@@ -64,6 +64,8 @@ class App {
   private adding = false;
   /** What a probe last said about each known host, and when. */
   private readonly reachCache = new Map<string, { reach: Reach; at: number }>();
+  /** Hosts a wake went to that have not answered yet. */
+  private readonly waking = new Set<string>();
   private probing = false;
   /** The settings sheet renders over whatever is showing, so it is a flag rather than a state. */
   private settingsOpen = false;
@@ -99,6 +101,7 @@ class App {
       back: () => engine.disconnect(),
       play: (entry) => this.play(entry),
       forget: (origin) => this.forget(origin),
+      wake: (origin) => void this.wake(origin),
       disconnect: (quit) => {
         this.menuOpen = false;
         engine.disconnect(quit);
@@ -255,7 +258,13 @@ class App {
     // The server's hosts first, under the name it gives them; then the ones typed here.
     const known = new Map(this.engine.knownHosts().map((h) => [h.origin, h]));
     const listed: HostCard[] = [
-      ...[...this.configured].map(([origin, c]) => ({ ...known.get(origin), origin, name: c.name, plane: c.plane })),
+      ...[...this.configured].map(([origin, c]) => ({
+        ...known.get(origin),
+        origin,
+        name: c.name,
+        plane: c.plane,
+        ...(c.wake ? { wake: c.wake, waking: this.waking.has(origin) } : {}),
+      })),
       ...[...known.values()].filter((h) => !this.configured.has(h.origin)),
     ];
     const hosts: HostCard[] = listed.map((h) => {
@@ -319,6 +328,38 @@ class App {
     } finally {
       this.probing = false;
     }
+  }
+
+  /**
+   * Wake a host through the page's server, which sits on its network where a browser cannot send
+   * a magic packet. Then ask after it every few seconds, as it boots, until it answers or a minute
+   * has gone.
+   */
+  private async wake(origin: string): Promise<void> {
+    const url = this.configured.get(origin)?.wake;
+    if (!url || this.waking.has(origin)) return;
+    this.waking.add(origin);
+    this.redrawHome();
+    try {
+      const r = await fetch(url, { method: "POST" });
+      if (!r.ok) throw new Error(`wake refused (${r.status})`);
+      for (let tries = 0; tries < 20; tries++) {
+        await new Promise((done) => setTimeout(done, 3000));
+        const now = await reach(origin);
+        this.reachCache.set(origin, { reach: now, at: Date.now() });
+        if (now === "ok") break;
+      }
+    } catch (e) {
+      console.warn("punktfunk: wake", e);
+    } finally {
+      this.waking.delete(origin);
+      this.redrawHome();
+    }
+  }
+
+  /** Redraw the host list if it is what is showing. */
+  private redrawHome(): void {
+    if (this.engine.current.kind === "idle" && !this.settingsOpen) this.home();
   }
 
   /** Forget a host. From the trust screen this is "forget and pair again", so the reconnect
@@ -554,9 +595,10 @@ function routeOf(address: string): HostTarget | null {
   return plane ? { api: address.replace(/\/+$/, ""), plane } : null;
 }
 
-/** A host from the page server's `config.json`. */
+/** A host from the page server's `config.json`. `wake` is its wake URL when the server can. */
 interface Configured extends HostTarget {
   name: string;
+  wake?: string;
 }
 
 /**
@@ -568,13 +610,14 @@ async function configuredHosts(): Promise<{ listed: Map<string, Configured>; via
   try {
     const r = await fetch("./config.json", { cache: "no-store" });
     const c = (await r.json()) as {
-      hosts?: Array<{ name: string; api: string; plane: string }>;
+      hosts?: Array<{ name: string; api: string; plane: string; wake?: string }>;
       add?: boolean;
     };
     const listed = new Map(
       (c.hosts ?? []).map((h): [string, Configured] => {
         const api = new URL(h.api, location.href).href.replace(/\/+$/, "");
-        return [api, { api, plane: h.plane, name: h.name }];
+        const wake = h.wake ? new URL(h.wake, location.href).href : undefined;
+        return [api, { api, plane: h.plane, name: h.name, ...(wake ? { wake } : {}) }];
       }),
     );
     return { listed, viaServer: c.add === true };
@@ -603,7 +646,7 @@ try {
   const shell = new WebShell(document.body);
   shell.mount({
     connect() {}, pair() {}, requestAccess() {}, cancelRequest() {}, retry() {}, back() {}, play() {},
-    forget() {}, disconnect() {},
+    forget() {}, wake() {}, disconnect() {},
     setAdding() {}, rename() {}, openSettings() {}, setSettings() {}, toggleCapture() {},
     showDiagnostics() {}, openMenu() {}, fullscreen() {}, cycleStats() {}, toggleMic() {},
   });
