@@ -23,6 +23,7 @@ import { type Chord, InputPipe, playRumble } from "./input.ts";
 import { AudioPipe, type AudioSnapshot, opusHead, playableChannels } from "./audio.ts";
 import { MicPipe, type MicState } from "./mic.ts";
 import { STATS_TIERS, type StatsTier } from "./settings.ts";
+import type { ConsoleEvent } from "./console-bridge.ts";
 
 export type { AudioSnapshot, AudioState } from "./audio.ts";
 export type { MicState } from "./mic.ts";
@@ -663,17 +664,57 @@ export class Engine {
 
   /**
    * The gamepad console — `pf-console-ui` on the upper canvas, the shell every other punktfunk
-   * client draws. Only meaningful when `uiCanvas` was given; a consumer with its own interface
-   * never calls it. The canvas must be sized before `start`.
+   * client draws, with the page as its host. It speaks `pf_console_ui::bridge`'s JSON both ways:
+   * `push` hands it the model, and what it raises arrives through `onEvent`. Only meaningful when
+   * `uiCanvas` was given; a consumer with its own interface never calls it. The canvas must be
+   * sized before `start`.
    */
   readonly console = {
-    /** Bring the console up. `false` when the browser gave the canvas no WebGL2. */
-    start: (width: number, height: number): boolean => this.mod._pf_start(width, height) === 1,
+    /** Bring the console up from the bridge's `CreateOptions`. `false` when the browser gave the
+     *  canvas no WebGL2, or the options did not parse. */
+    start: (options: unknown): boolean =>
+      withStr(this.mod, [JSON.stringify(options)], (p, n) => this.mod._pf_start(p, n)) === 1,
     /** Draw one frame. The console has its own loop; the engine's is for the session. */
     frame: (width: number, height: number): void => this.mod._pf_frame(width, height),
-    /** A key by its index in the console's table — see `KEYS` in `apps/web/src/ui/console.ts`. */
-    key: (index: number, shift: boolean, repeat: boolean): void =>
-      this.mod._pf_key(index, shift ? 1 : 0, repeat ? 1 : 0),
+    /** A key by its index in the console's table — see `KEYS` in `apps/web/src/ui/console.ts`.
+     *  `true` when the console used it. */
+    key: (index: number, shift: boolean, repeat: boolean): boolean =>
+      this.mod._pf_key(index, shift ? 1 : 0, repeat ? 1 : 0) === 1,
+    /** Typed text while the console edits a field. */
+    text: (text: string): void => withStr(this.mod, [text], (p, n) => this.mod._pf_console_text(p, n)),
+    /** A pointer event in canvas pixels; see `pf_console_pointer` for the kinds. */
+    pointer: (kind: number, x: number, y: number, dy = 0): boolean => this.mod._pf_console_pointer(kind, x, y, dy) === 1,
+    /** Every pad merged into one sample, once a frame: buttons as bits, the left stick +y down. */
+    pad: (buttons: number, lx: number, ly: number): void => this.mod._pf_console_pad(buttons, lx, ly),
+    /** Where the session the console asked for stands: 0 connecting, 1 streaming, 2 failed,
+     *  3 ended, 4 reconnecting. */
+    phase: (phase: number, message = ""): void =>
+      withStr(this.mod, [message], (p, n) => this.mod._pf_console_phase(phase, p, n)),
+    /** What the console shows; see `CONSOLE_STATE`. */
+    state: (): number => this.mod._pf_console_state(),
+    /** One model update; `kind` is a `CONSOLE_PUSH` value. */
+    push: (kind: number, value: unknown): void =>
+      withStr(this.mod, [JSON.stringify(value ?? null)], (p, n) => this.mod._pf_console_push(kind, p, n)),
+    /** One title's cover, encoded. */
+    art: (id: string, bytes: Uint8Array): void => {
+      const p = this.mod._malloc(bytes.length);
+      try {
+        this.mod.HEAPU8.set(bytes, p);
+        withStr(this.mod, [id], (ip, il) => this.mod._pf_console_art(ip, il, p, bytes.length));
+      } finally {
+        this.mod._free(p);
+      }
+    },
+    /** What the console raised: a bridge event or `{cmd}`, parsed. One listener. */
+    onEvent: (fn: (event: ConsoleEvent) => void): void => {
+      this.mod.__pfOnConsole = (json) => {
+        try {
+          fn(JSON.parse(json) as ConsoleEvent);
+        } catch (e) {
+          console.error("punktfunk: console event", e);
+        }
+      };
+    },
   };
 
   /** Stop the frame loop. The module stays loaded; a page that wants it gone reloads. */

@@ -14,11 +14,18 @@
 export interface PunktfunkModule {
   // --- the console -----------------------------------------------------------------------
   /** Bring up GL, Skia and the shell on a canvas already sized in device pixels. `0` on failure. */
-  _pf_start(width: number, height: number): number;
+  _pf_start(optionsPtr: number, optionsLen: number): number;
   /** Draw one frame at this size. */
   _pf_frame(width: number, height: number): void;
   /** Index into the console's key table (`KEYS` in `src/host.rs`). */
-  _pf_key(key: number, shift: number, repeat: number): void;
+  _pf_key(key: number, shift: number, repeat: number): number;
+  _pf_console_text(ptr: number, len: number): void;
+  _pf_console_pointer(kind: number, x: number, y: number, dy: number): number;
+  _pf_console_pad(buttons: number, lx: number, ly: number): void;
+  _pf_console_phase(phase: number, ptr: number, len: number): void;
+  _pf_console_state(): number;
+  _pf_console_push(kind: number, ptr: number, len: number): void;
+  _pf_console_art(idPtr: number, idLen: number, bytesPtr: number, len: number): void;
 
   // --- the transport ---------------------------------------------------------------------
   _pf_wt_connect(urlPtr: number, hashPtr: number): number;
@@ -138,6 +145,8 @@ export interface PunktfunkModule {
   __pfOnVideoConfig?: (codec: number, width: number, height: number, depth: number, hdr: boolean) => void;
   /** One access unit. The bytes are copied out of wasm memory before this is called. */
   __pfOnAccessUnit?: (data: Uint8Array, ptsUs: number, key: boolean, flags: number) => void;
+  /** One thing the console raised, as JSON: a bridge event or `{"cmd": ConsoleCmd}`. */
+  __pfOnConsole?: (json: string) => void;
   /** One Opus frame, in order, for the page's decoder. */
   __pfOnAudioFrame?: (data: Uint8Array, seq: number, ptsNs: number) => void;
   /** One rumble command from core's policy: four motor levels (0–65535) for `ms`, `0` a stop. */

@@ -112,6 +112,8 @@ export type Screen =
   | { kind: "settings"; values: Settings; streaming: boolean }
   /** A connect link, waiting for a yes: any site can build one, so none connects by itself. */
   | { kind: "link"; name: string; address: string; launch?: string }
+  /** The gamepad console draws this one; the web shell stays out of its way. */
+  | { kind: "console" }
   /** `retry` marks an error worth trying again from, which most network ones are. */
   | { kind: "error"; head: string; text: string; retry?: boolean };
 
@@ -166,6 +168,8 @@ export interface Actions {
   toggleCapture(): void;
   /** Show the numbers behind the connection-quality dot. */
   showDiagnostics(on: boolean): void;
+  /** Wear the gamepad console, or go back to this interface. The page reloads into it. */
+  consoleMode(on: boolean): void;
   /** Show or hide the address field on the home screen. Pure presentation, but the home screen
    *  is rebuilt from `app.ts` on every state change, so the flag cannot live in the renderer. */
   setAdding(on: boolean): void;

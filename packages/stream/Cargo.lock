@@ -1255,6 +1255,8 @@ dependencies = [
  "pf-client-core",
  "pf-console-ui",
  "punktfunk-core",
+ "serde",
+ "serde_json",
  "sha2 0.11.0",
  "skia-safe",
 ]
