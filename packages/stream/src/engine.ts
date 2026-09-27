@@ -18,12 +18,13 @@ import { chipText, updateNotice } from "./access.ts";
 import type { PunktfunkModule } from "./emscripten.ts";
 import { DeviceRefused, Host, type LibraryEntry, VersionSkew } from "./host.ts";
 import * as pf from "./pf-connect.ts";
-import { type Decodable, decodableCodecs, decodeSupported, hdrDisplay, VideoPipe } from "./video.ts";
+import { type Decodable, decodableCodecs, decodeSupported, hdrDisplay, VideoPipe, webgpuUsable } from "./video.ts";
 import { type Chord, InputPipe, playRumble } from "./input.ts";
 import { AudioPipe, type AudioSnapshot, opusHead, playableChannels } from "./audio.ts";
 import { MicPipe, type MicState } from "./mic.ts";
 import { STATS_TIERS, type StatsTier } from "./settings.ts";
 import type { ConsoleEvent } from "./console-bridge.ts";
+import { HostCursor } from "./cursor.ts";
 
 export type { AudioSnapshot, AudioState } from "./audio.ts";
 export type { MicState } from "./mic.ts";
@@ -149,6 +150,12 @@ export interface TunableOptions {
   statsTier: StatsTier;
   /** The overlay's Advanced vocabulary instead of the figures Moonlight shows. Applies at once. */
   advancedStats: boolean;
+  /** The codec to ask the host for first. A hint: the host falls back when it cannot. */
+  codec: "auto" | "h264" | "hevc" | "av1";
+  /** Offer 10-bit HDR when this browser and display can show it. */
+  hdr: boolean;
+  /** Scroll the other way from what the wheel says. */
+  invertScroll: boolean;
 }
 
 const TUNABLE_DEFAULTS: TunableOptions = {
@@ -159,7 +166,13 @@ const TUNABLE_DEFAULTS: TunableOptions = {
   deadzone: 0.05,
   statsTier: "off",
   advancedStats: false,
+  codec: "auto",
+  hdr: true,
+  invertScroll: false,
 };
+
+/** `CODEC_*` bits, as `Hello::preferred_codec` names one. */
+const CODEC_BIT: Record<TunableOptions["codec"], number> = { auto: 0, h264: 0x01, hevc: 0x02, av1: 0x04 };
 
 export interface EngineOptions {
   /** The lower canvas: decoded video goes here and nowhere else. */
@@ -226,6 +239,7 @@ export class Engine {
   private input: InputPipe | null = null;
   private audio: AudioPipe | null = null;
   private mic: MicPipe | null = null;
+  private readonly cursor = new HostCursor();
   private host: Host | null = null;
   private pairing = false;
   private settled = false;
@@ -239,6 +253,8 @@ export class Engine {
   /** This session's overlay tier and its last lines; `dropped` as of the last window. */
   private tier: StatsTier = TUNABLE_DEFAULTS.statsTier;
   private hud: HudLine[] = [];
+  /** What the last `streaming` notification showed, so an unchanged frame notifies no one. */
+  private shown = "";
   private lastDropped = 0;
   /** The last launch notice and when it arrived (`performance.now()`). */
   private launchNotice: { text: string; at: number } | null = null;
@@ -251,6 +267,10 @@ export class Engine {
   private pendingPin: string | null = null;
   /** A stream asked for from `ready`, sent as `Hello` when the dial it started opens. */
   private pendingStream: StreamOptions | null = null;
+  /** The last stream asked for, which an SDR restart asks for again. */
+  private streamed: StreamOptions | null = null;
+  /** The stream is an SDR restart, which the next session says once. */
+  private sdrNotice = false;
   /** A request for access, sent as `Hello` when the next control stream opens. Survives `reset`,
    *  as `pendingPin` does, for the reconnect that clears a stale pairing first. */
   private pendingKnock: StreamOptions | null = null;
@@ -264,8 +284,11 @@ export class Engine {
     private readonly codecs: Decodable = { mask: 1, tenBit: false },
     /** How many channels this page can play: 2, 6 or 8, probed once at `create`. */
     private readonly surround = 2,
+    /** Whether WebGPU gives this page an adapter, probed once at `create`: HDR needs one. */
+    private readonly gpu = false,
   ) {
     this.tunable = {
+      ...TUNABLE_DEFAULTS,
       videoBackend: opts.videoBackend ?? TUNABLE_DEFAULTS.videoBackend,
       audio: opts.audio ?? TUNABLE_DEFAULTS.audio,
       captureInput: opts.captureInput ?? TUNABLE_DEFAULTS.captureInput,
@@ -283,6 +306,8 @@ export class Engine {
       this.launchNotice = { text, at: performance.now() };
     };
     mod.__pfOnRumble = (pad, low, high, lt, rt, ms) => playRumble(navigator.getGamepads(), pad, low, high, lt, rt, ms);
+    mod.__pfOnCursorShape = (serial, w, h, hx, hy, rgba) => this.cursor.shape(serial, w, h, hx, hy, rgba);
+    mod.__pfOnData = () => this.mod._pf_session_pump();
     requestAnimationFrame(() => this.frame());
   }
 
@@ -294,8 +319,8 @@ export class Engine {
     if (!decodeSupported()) {
       throw new Error("this browser cannot decode video (no WebCodecs)");
     }
-    const [mod, codecs, channels] = await Promise.all([loadModule(), decodableCodecs(), playableChannels()]);
-    return new Engine(mod, opts, codecs, channels);
+    const [mod, codecs, channels, gpu] = await Promise.all([loadModule(), decodableCodecs(), playableChannels(), webgpuUsable()]);
+    return new Engine(mod, opts, codecs, channels, gpu);
   }
 
   // --- observation ---------------------------------------------------------------------
@@ -492,21 +517,45 @@ export class Engine {
     if (!this.origin || this.state.kind !== "ready") return;
     // HDR is offered per stream: the window may have moved to another display, and the plane
     // may have been switched to WebGL2, since the last one.
-    const hdr = this.codecs.tenBit && hdrDisplay(this.tunable.videoBackend);
-    this.mod._pf_session_codecs?.(this.codecs.mask, hdr ? 1 : 0);
+    const hdr = this.tunable.hdr && this.codecs.tenBit && hdrDisplay(this.tunable.videoBackend, this.gpu);
+    this.mod._pf_session_codecs?.(this.codecs.mask, hdr ? 1 : 0, CODEC_BIT[this.tunable.codec]);
     this.set({ kind: "starting", origin: this.origin });
+    this.streamed = opts;
+    this.pendingStream = opts;
+    this.dial();
+  }
+
+  /**
+   * The browser converted an HDR frame itself, which nothing here can undo: the same stream again
+   * in SDR, on a fresh connection. The title keeps running on the host; `hdrDisplay` now says no
+   * for this browser build, so this happens once.
+   */
+  private restartInSdr(): void {
+    const origin = this.origin;
+    const opts = this.streamed;
+    if (!origin || !opts || (this.state.kind !== "streaming" && this.state.kind !== "starting")) return;
+    this.stopSession();
+    this.mod._pf_session_codecs?.(this.codecs.mask, 0, CODEC_BIT[this.tunable.codec]);
+    this.sdrNotice = true;
+    this.set({ kind: "starting", origin });
     this.pendingStream = opts;
     this.dial();
   }
 
   /** Send `Hello`, with the video plane up to take what answers it. */
   private hello(opts: StreamOptions): void {
-    this.video ??= new VideoPipe(this.mod, this.opts.videoCanvas, this.tunable.videoBackend);
+    // Off the decoder's own callback: the restart closes that decoder.
+    this.video ??= new VideoPipe(this.mod, this.opts.videoCanvas, this.tunable.videoBackend, () =>
+      setTimeout(() => this.restartInSdr(), 0),
+    );
     this.video.attach();
     this.tier = this.tunable.statsTier;
     this.hud = [];
     this.lastDropped = 0;
-    this.launchNotice = null;
+    this.launchNotice = this.sdrNotice
+      ? { text: "This browser can't show HDR video, so the stream is in SDR.", at: performance.now() }
+      : null;
+    this.sdrNotice = false;
     this.access = { seq: 0, grants: 0, deadline: null };
     this.accessNotice = null;
     this.mod._pf_session_audio?.(this.tunable.audio ? this.surround : 2);
@@ -533,7 +582,7 @@ export class Engine {
   configure(next: Partial<TunableOptions>): void {
     const was = this.tunable;
     this.tunable = { ...was, ...next };
-    this.input?.tune({ pointer: this.tunable.pointer, deadzone: this.tunable.deadzone });
+    this.input?.tune({ pointer: this.tunable.pointer, deadzone: this.tunable.deadzone, invertScroll: this.tunable.invertScroll });
     // A tier picked in settings mid-stream replaces whatever the chord left.
     if (this.tunable.statsTier !== was.statsTier) this.tier = this.tunable.statsTier;
     this.hud = this.readHud();
@@ -628,7 +677,7 @@ export class Engine {
         return this.fullscreen(false);
       case "end":
       case "escape-hold":
-        return this.disconnect(true);
+        return this.leave(true);
     }
   }
 
@@ -648,13 +697,31 @@ export class Engine {
 
   /**
    * Leave the host. `quit` ends the title too (End); without it the host keeps the game running
-   * for this device to come back to (Leave).
+   * for this device to come back to (Leave). A PIN or a request for access still waiting on a
+   * reconnect goes with it.
    */
   disconnect(quit = false): void {
     this.stopSession();
     this.mod._pf_wt_close?.(quit ? CLOSE.QUIT : 0);
+    this.pendingPin = null;
+    this.pendingKnock = null;
     this.reset();
     this.set({ kind: "idle" });
+  }
+
+  /**
+   * End the stream and stay with its host: `ready` again, so its library is a click away rather
+   * than a reconnect. `quit` ends the title too. A stream that never had the management API — an
+   * approved request for access — has nothing to stay with, and disconnects.
+   */
+  leave(quit = false): void {
+    const { origin, host } = this;
+    if (!origin || !host) return this.disconnect(quit);
+    this.stopSession();
+    this.pendingStream = null;
+    // `ready` before the close, so the close it answers with finds nothing left to report.
+    this.set({ kind: "ready", origin, host });
+    this.mod._pf_wt_close?.(quit ? CLOSE.QUIT : 0);
   }
 
   /** The hosts this browser knows, most recent first. */
@@ -839,8 +906,9 @@ export class Engine {
         this.knockSince = 0;
         this.stopSession();
         return this.set({ kind: "pair-refused", origin, ...(said ? { reason: said } : {}) });
-      // No connection is open here: a close is the one `cancelRequest` just made.
+      // No connection is open here: a close is the one `cancelRequest` or `leave` just made.
       case "needs-pairing":
+      case "ready":
         return;
       case "pairing":
         // The ceremony's own verdict (`PairResult`) is authoritative; a close with a reason and
@@ -881,6 +949,7 @@ export class Engine {
     this.mic = null;
     this.input?.detach();
     this.input = null;
+    this.cursor.reset(this.opts.videoCanvas);
     this.inputSize = { width: 0, height: 0 };
     this.audio?.close();
     this.audio = null;
@@ -967,6 +1036,7 @@ export class Engine {
         streamHeight: v.height,
         pointer: this.tunable.pointer,
         deadzone: this.tunable.deadzone,
+        invertScroll: this.tunable.invertScroll,
         onChord: (chord) => this.chord(chord),
       });
       this.input.attach();
@@ -978,6 +1048,10 @@ export class Engine {
       this.input.tune({ streamWidth: v.width, streamHeight: v.height });
     }
     this.input?.poll();
+    if (v?.width) {
+      const input = this.input !== null;
+      this.cursor.tick(this.mod, this.opts.videoCanvas, input, this.tunable.pointer === "absolute", this.input?.captured ?? false, v.width);
+    }
     // Audio from the first live frame too: the channel count is `Welcome`'s.
     if (!this.audio && this.tunable.audio) {
       const channels = this.mod._pf_session_audio_channels();
@@ -990,7 +1064,9 @@ export class Engine {
     const now = performance.now();
     this.readAccess(now);
     const frames = this.mod._pf_session_frames();
+    let second = false;
     if (now - this.lastSecond >= 1000) {
+      second = true;
       this.fps = Math.round(((frames - this.lastFrames) * 1000) / (now - this.lastSecond));
       this.lastFrames = frames;
       this.lastSecond = now;
@@ -1000,7 +1076,7 @@ export class Engine {
       this.lastDropped = dropped;
       this.hud = this.readHud();
     }
-    this.set({
+    const state: EngineState = {
       kind: "streaming",
       origin,
       stats: {
@@ -1022,7 +1098,17 @@ export class Engine {
         ...this.accessStats(now),
         mic: this.mic?.state ?? (MicPipe.supported() ? "off" : "unsupported"),
       },
-    });
+    };
+    // A screen redraws on what it shows: every frame here would re-render the page 60–240 times
+    // a second on the thread that also feeds the decoder. The counters move once a second.
+    const s = state.stats;
+    const shown = `${s.width}x${s.height}|${s.pointerCaptured}|${s.mic}|${s.launchNotice}|${s.access}|${s.accessNotice}|${s.backend}|${this.tier}`;
+    if (second || shown !== this.shown || this.state.kind !== "streaming") {
+      this.shown = shown;
+      this.set(state);
+    } else {
+      this.state = state;
+    }
   }
 
   /** The `OpusHead` for the surround the host encodes, or nothing for stereo. */

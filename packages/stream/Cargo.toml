@@ -59,9 +59,36 @@ match_same_arms = "warn"
 
 [profile.release]
 # The payload is the constraint here, not throughput: every byte is downloaded before the console
-# draws. `z` over `3` and one codegen unit; the hot loops are all in punktfunk-core anyway.
+# draws. `z` over `3` and one codegen unit, except for the per-packet path below.
 opt-level = "z"
 lto = "fat"
 codegen-units = 1
 panic = "abort"
 strip = true
+
+# Every video datagram is decrypted and FEC-checked on the page's main thread, in software. At
+# `z` AES-GCM ran 46 MB/s and ChaCha20-Poly1305 168 MB/s; at `3`, 235 and 630 (wasm, V8).
+[profile.release.package.punktfunk-core]
+opt-level = 3
+[profile.release.package.aes]
+opt-level = 3
+[profile.release.package.aes-gcm]
+opt-level = 3
+[profile.release.package.ghash]
+opt-level = 3
+[profile.release.package.polyval]
+opt-level = 3
+[profile.release.package.ctr]
+opt-level = 3
+[profile.release.package.chacha20]
+opt-level = 3
+[profile.release.package.poly1305]
+opt-level = 3
+[profile.release.package.chacha20poly1305]
+opt-level = 3
+[profile.release.package.universal-hash]
+opt-level = 3
+[profile.release.package.reed-solomon-simd]
+opt-level = 3
+[profile.release.package.fec-rs]
+opt-level = 3

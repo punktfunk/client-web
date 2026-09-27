@@ -5,7 +5,7 @@
 // same address, so a fixture is the only way to look at them on demand.
 
 import { DEFAULTS, type LibraryEntry } from "@punktfunk/stream";
-import type { Actions, Screen } from "./types.ts";
+import type { HostCard, Screen } from "./types.ts";
 
 /** A poster, as a data URI. Real art is a fetch through the credential; the grid only needs
  *  something with the right aspect and enough colour to show the tile treatment. */
@@ -46,17 +46,18 @@ const stats = {
   ],
 };
 
+const hosts: HostCard[] = [
+  { origin: "https://192.168.1.25:47990", name: "living-room-pc", fingerprint: "ab", seen: Date.now() - 4 * 60_000, reach: "ok" },
+  { origin: "https://192.168.1.31:47990", name: "deck", fingerprint: "cd", seen: Date.now() - 26 * 3600_000, reach: "unreachable", wake: "wake/deck" },
+  { origin: "https://192.168.1.44:47990", name: "studio", seen: Date.now() - 3 * 60_000, reach: "ok" },
+  { origin: "https://10.0.0.9:47990", seen: Date.now() - 9 * 24 * 3600_000, reach: "blocked" },
+];
+const shelves = hosts.filter((h) => h.fingerprint);
+const origin = "https://192.168.1.25:47990";
+
 export const SCREENS = {
-  "home": {
-    kind: "home",
-    adding: false,
-    hosts: [
-      { origin: "https://192.168.1.25:47990", name: "living-room-pc", fingerprint: "ab", seen: Date.now() - 4 * 60_000, reach: "ok" },
-      { origin: "https://192.168.1.31:47990", name: "deck", fingerprint: "cd", seen: Date.now() - 26 * 3600_000, reach: "unreachable" },
-      { origin: "https://192.168.1.44:47990", name: "studio", seen: Date.now() - 3 * 60_000, reach: "ok" },
-      { origin: "https://10.0.0.9:47990", seen: Date.now() - 9 * 24 * 3600_000, reach: "blocked" },
-    ],
-  },
+  "home": { kind: "home", adding: false, hosts },
+  "home-add": { kind: "home", adding: true, hosts },
   "home-first-run": { kind: "home", hosts: [], adding: true },
   "home-error": { kind: "home", hosts: [], adding: true, error: `"nope" is not an address — try something like 192.168.1.25` },
   "connecting": { kind: "connecting", origin: "https://192.168.1.25:47990", phase: "reaching" },
@@ -72,9 +73,11 @@ export const SCREENS = {
     origin: "https://192.168.1.25:47990",
     reason: "this is not the host that was paired with",
   },
-  "library": { kind: "library", origin: "https://192.168.1.25:47990", host: "living-room-pc", entries, art, running: "Hades" },
-  "library-empty": { kind: "library", origin: "https://192.168.1.25:47990", host: "living-room-pc", entries: [], art: new Map() },
-  "library-loading": { kind: "library", origin: "https://192.168.1.25:47990", host: "living-room-pc", entries: [], art: new Map(), busy: true },
+  "library": { kind: "library", origin, shelves, host: "living-room-pc", entries, art, running: "Hades", resume: entries[1]! },
+  "library-empty": { kind: "library", origin, shelves, host: "living-room-pc", entries: [], art: new Map() },
+  "library-loading": { kind: "library", origin, shelves, host: "living-room-pc", entries: [], art: new Map(), busy: true },
+  "library-offline": { kind: "library", origin, shelves, host: "living-room-pc", entries: [], art: new Map(), offline: true },
+  "library-none": { kind: "library", origin: null, shelves: [], entries: [], art: new Map(), offline: true },
   "streaming": { kind: "streaming", stats, diagnostics: false, menu: false },
   "streaming-diagnostics": { kind: "streaming", stats, diagnostics: true, menu: false },
   "streaming-menu": { kind: "streaming", stats, diagnostics: false, menu: true },
@@ -85,6 +88,7 @@ export const SCREENS = {
     menu: false,
   },
   "settings": { kind: "settings", values: DEFAULTS, streaming: false },
+  "settings-streaming": { kind: "settings", values: DEFAULTS, streaming: true },
   "error": {
     kind: "error",
     head: "No answer",
@@ -95,12 +99,4 @@ export const SCREENS = {
 
 export type ScreenName = keyof typeof SCREENS;
 
-export const noop: Actions = {
-  connect() {}, pair() {}, requestAccess() {}, cancelRequest() {}, retry() {}, back() {}, play() {},
-  forget() {}, wake() {}, disconnect() {},
-  openTools() {}, hostAction() {}, sendLog() {},
-  followLink() {}, copyLink() {},
-  setAdding() {}, rename() {}, openSettings() {}, setSettings() {}, toggleCapture() {},
-  showDiagnostics() {}, openMenu() {}, fullscreen() {}, cycleStats() {}, toggleMic() {},
-  consoleMode() {},
-};
+export { noop } from "./shell.tsx";

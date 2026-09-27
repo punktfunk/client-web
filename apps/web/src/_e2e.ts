@@ -62,6 +62,9 @@ try {
   });
 
   // A PIN means a fresh pairing: whatever this browser remembers of the host is stale.
+  // `?codec=h264`: the preference `Hello` carries. The software test source encodes H.264 only.
+  const CODEC = q.get("codec");
+  if (CODEC) engine.configure({ codec: CODEC as "h264" | "hevc" | "av1" });
   if (PIN) engine.forget(key);
   await engine.connect(target);
   const until = async (kinds: string[], ms: number) => {
@@ -189,6 +192,16 @@ try {
       log(final.decoded > 30 ? "ok   frames flowed through the real pipeline" : "FAIL too few frames decoded");
     } else {
       log("FAIL never reached streaming; last " + last().kind);
+    }
+    // `?leave=1`: end the stream the way the page does, and start another from where it lands.
+    if (q.get("leave") && last().kind === "streaming") {
+      engine.leave();
+      log(last().kind === "ready" ? "ok   leave() is back at ready" : "FAIL leave() landed in " + last().kind);
+      final = null;
+      engine.startStream({ width: 1280, height: 720, fps: 60, bitrateKbps: 8000 });
+      const t1 = performance.now();
+      while (performance.now() - t1 < 6000 && !(final && final.decoded > 30)) await sleep(250);
+      log(final && final.decoded > 30 ? `ok   second stream from ready: decoded=${final.decoded}` : "FAIL second stream: " + last().kind);
     }
     engine.disconnect();
   } else {

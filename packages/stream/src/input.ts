@@ -93,6 +93,8 @@ export interface InputOptions {
    *  sends relative motion. Stick travel below `deadzone` is rest. */
   pointer: "absolute" | "capture";
   deadzone: number;
+  /** Scroll against the wheel's own direction. */
+  invertScroll?: boolean;
   /** A chord this page handles itself, never sent: see [`Chord`]. */
   onChord?: (chord: Chord) => void;
 }
@@ -192,7 +194,18 @@ export class InputPipe {
     this.on(window, "keydown", (e: KeyboardEvent) => this.key(e, true));
     this.on(window, "keyup", (e: KeyboardEvent) => this.key(e, false));
     this.on(c, "pointerdown", (e: PointerEvent) => this.pointer(e, "down"));
-    this.on(c, "pointermove", (e: PointerEvent) => this.pointer(e, "move"));
+    // Mouse motion raw where the browser has it (Chromium): `pointermove` arrives once a frame,
+    // which holds every move back by up to a refresh. Touch keeps `pointermove`.
+    if ("onpointerrawupdate" in c) {
+      this.on(c, "pointerrawupdate" as "pointermove", (e: PointerEvent) => {
+        if (e.pointerType !== "touch") this.pointer(e, "move");
+      });
+      this.on(c, "pointermove", (e: PointerEvent) => {
+        if (e.pointerType === "touch") this.pointer(e, "move");
+      });
+    } else {
+      this.on(c, "pointermove", (e: PointerEvent) => this.pointer(e, "move"));
+    }
     this.on(c, "pointerup", (e: PointerEvent) => this.pointer(e, "up"));
     this.on(c, "pointercancel", (e: PointerEvent) => this.pointer(e, "up"));
     this.on(c, "wheel", (e: WheelEvent) => this.scroll(e), { passive: false });
@@ -320,7 +333,7 @@ export class InputPipe {
     e.preventDefault();
     // Pixels, lines or pages, in that order of `deltaMode`; each to notches. 100 px and 3
     // lines are what a notch is in the engines that report those units.
-    const notch = e.deltaMode === 0 ? 100 : e.deltaMode === 1 ? 3 : 1;
+    const notch = (e.deltaMode === 0 ? 100 : e.deltaMode === 1 ? 3 : 1) * (this.opts.invertScroll ? -1 : 1);
     this.wheel.y += (e.deltaY / notch) * WHEEL_NOTCH;
     this.wheel.x += (e.deltaX / notch) * WHEEL_NOTCH;
     const vy = Math.trunc(this.wheel.y);

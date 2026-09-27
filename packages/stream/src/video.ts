@@ -76,17 +76,60 @@ export async function decodableCodecs(): Promise<Decodable> {
   return { mask, tenBit: tenBit && mask !== CODEC_H264 };
 }
 
-/** Can this page show an HDR stream now: a display in high dynamic range and a WebGPU plane,
- *  the only route to one that ships. */
-export function hdrDisplay(backend: "auto" | "webgl2" | "webgpu"): boolean {
+/** Whether WebGPU gives this page an adapter: the plane HDR needs, not merely the API. */
+export async function webgpuUsable(): Promise<boolean> {
+  try {
+    return !!(await navigator.gpu?.requestAdapter());
+  } catch {
+    return false;
+  }
+}
+
+/** This browser build converted a PQ frame itself despite being told not to (`PQ_PASSTHROUGH`).
+ *  Kept per user agent, so an update is tried again. */
+const HDR_REFUSED_KEY = "pf.hdr-refused";
+
+function hdrRefused(): boolean {
+  try {
+    return localStorage.getItem(HDR_REFUSED_KEY) === navigator.userAgent;
+  } catch {
+    return false;
+  }
+}
+
+function refuseHdr(): void {
+  try {
+    localStorage.setItem(HDR_REFUSED_KEY, navigator.userAgent);
+  } catch {
+    // Storage blocked: the next stream tries HDR once more and falls back again.
+  }
+}
+
+/** Can this page show an HDR stream now: a display in high dynamic range, a WebGPU plane — the
+ *  only route to one that ships — and a browser not already seen converting PQ itself. */
+export function hdrDisplay(backend: "auto" | "webgl2" | "webgpu", gpu: boolean): boolean {
   return (
     backend !== "webgl2" &&
-    typeof navigator !== "undefined" &&
-    "gpu" in navigator &&
+    gpu &&
+    !hdrRefused() &&
     typeof matchMedia === "function" &&
     matchMedia("(dynamic-range: high)").matches
   );
 }
+
+/**
+ * What an HDR decoder is told the picture is: BT.2020's matrix, but BT.709 primaries and the sRGB
+ * transfer. The browser then converts YCbCr to RGB and nothing else, and the plane receives the
+ * PQ signal as sent, which `fs_pq` decodes. Left to itself, each engine ran PQ through an SDR
+ * conversion, and the picture came out grey.
+ */
+const PQ_PASSTHROUGH: VideoColorSpaceInit = {
+  primaries: "bt709",
+  transfer: "iec61966-2-1",
+  // In the WebCodecs registry, not yet in TypeScript's DOM types.
+  matrix: "bt2020-ncl" as VideoMatrixCoefficients,
+  fullRange: false,
+};
 
 export interface VideoStats {
   /** Access units handed to the decoder. */
@@ -146,6 +189,8 @@ export class VideoPipe {
   /** `Welcome`'s bit depth and whether it is HDR, for the decoder string and the plane. */
   private depth = 8;
   private hdr = false;
+  /** The first frame of an HDR configure has been checked for `PQ_PASSTHROUGH`. */
+  private hdrChecked = false;
   private lastRebuildMs = 0;
   /** When `pending` left the decoder, for the overlay's display stage. */
   private pendingDecodedMs = 0;
@@ -165,6 +210,8 @@ export class VideoPipe {
     private readonly mod: PunktfunkModule,
     private readonly canvas: HTMLCanvasElement,
     private readonly prefer: "auto" | "webgl2" | "webgpu" = "auto",
+    /** The browser converted an HDR frame itself: this stream cannot be shown right. */
+    private readonly onHdrRefused?: () => void,
   ) {}
 
   /** Install the callbacks the glue calls. Idempotent, so a reconnect can call it again. */
@@ -209,10 +256,14 @@ export class VideoPipe {
       codedHeight: height,
       optimizeForLatency: true,
       hardwareAcceleration: "prefer-hardware",
+      ...(this.hdr ? { colorSpace: PQ_PASSTHROUGH } : {}),
     });
+    this.hdrChecked = false;
     this.decoder = decoder;
   }
 
+  // Called from inside `pf_session_pump`, which holds the session while it hands each access unit
+  // over: a call back into the session from here aborts the module, so it goes on a microtask.
   private submit(data: Uint8Array, ptsUs: number, key: boolean, flags: number): void {
     const decoder = this.decoder;
     if (!decoder || decoder.state !== "configured") return;
@@ -236,7 +287,7 @@ export class VideoPipe {
     } catch (e) {
       this.stats.errors++;
       console.error("punktfunk: decode", e);
-      this.mod._pf_gate_no_output();
+      queueMicrotask(() => this.mod._pf_gate_no_output());
     }
   }
 
@@ -256,6 +307,15 @@ export class VideoPipe {
   // than queued. Presenting happens on the page's own rAF, which is where pacing belongs.
   private onFrame(frame: VideoFrame): void {
     this.stats.decoded++;
+    // An engine that ignores the override hands over light it has already converted, which no
+    // shader here can undo. Said once; the engine streams SDR instead.
+    if (this.hdr && !this.hdrChecked) {
+      this.hdrChecked = true;
+      if (frame.colorSpace.transfer !== PQ_PASSTHROUGH.transfer) {
+        refuseHdr();
+        this.onHdrRefused?.();
+      }
+    }
     const at = unixMs();
     this.mod._pf_hud_decoded(frame.timestamp, at);
     const meta = this.meta.get(frame.timestamp);

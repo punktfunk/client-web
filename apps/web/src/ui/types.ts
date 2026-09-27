@@ -63,7 +63,12 @@ export interface HostCard extends KnownHost {
  * `busy` exists so a renderer can disable its own controls without tracking a second flag: every
  * screen that can be waited on carries it.
  */
-export type Screen =
+export type Screen = ScreenBody & {
+  /** The sidebar entry to mark. A flow on the way to a host marks the tab it started from. */
+  tab?: Tab;
+};
+
+type ScreenBody =
   /** The way in. Known hosts as cards, and a field for one this browser has not seen —
    *  `adding` is what puts that field in front, and is forced on when there are no cards. */
   | { kind: "home"; hosts: HostCard[]; adding: boolean; error?: string; busy?: boolean }
@@ -88,9 +93,15 @@ export type Screen =
   | { kind: "trust"; origin: string; reason: string }
   | {
       kind: "library";
-      origin: string;
-      /** The host's own name, once it has been read. */
+      /** The shelf: whose titles these are. `null` until some host is paired. */
+      origin: string | null;
+      /** Every paired host — the shelf switcher, and the Desktops row. */
+      shelves: HostCard[];
+      /** The host's name as the rest of the page shows it. */
       host?: string;
+      /** Not connected to the shelf's host: its titles are the last ones read, and the host
+       *  sheet and the running title wait for a connection. */
+      offline?: boolean;
       entries: LibraryEntry[];
       /** Object URLs by entry id, filled in as art arrives. */
       art: Map<string, string>;
@@ -117,6 +128,18 @@ export type Screen =
   /** `retry` marks an error worth trying again from, which most network ones are. */
   | { kind: "error"; head: string; text: string; retry?: boolean };
 
+/** The sidebar's destinations. Flows on the way to a host (pairing, trust, errors) sit under
+ *  Hosts; the stream has no frame at all. */
+export type Tab = "hosts" | "library" | "settings";
+
+/** Which sidebar entry a screen belongs to: the one it names, else its own. */
+export function tabOf(screen: Screen): Tab {
+  if (screen.tab) return screen.tab;
+  if (screen.kind === "library") return "library";
+  if (screen.kind === "settings") return "settings";
+  return "hosts";
+}
+
 /** The host sheet: power actions as this device sees them, and what the last step said. */
 export interface HostTools {
   actions: Array<{ id: string; title: string; danger: boolean; enabled: boolean; reason?: string }>;
@@ -127,7 +150,12 @@ export interface HostTools {
 /** What a renderer may ask the client to do. Nothing here returns a result: the answer arrives
  *  as the next `render`, which is what keeps a renderer stateless. */
 export interface Actions {
+  /** Reach a host — typed or known — and open its library, pairing on the way if it must. */
   connect(address: string): void;
+  /** Stream a known host's desktop: a host card's click, as on every other client. */
+  streamDesktop(origin: string): void;
+  /** Show a paired host's library. */
+  browse(origin: string): void;
   pair(pin: string): void;
   /** Ask for access instead of typing a PIN; approval starts the desktop stream. */
   requestAccess(): void;
@@ -136,8 +164,8 @@ export interface Actions {
   /** Re-check a host after its certificate has been accepted. */
   retry(): void;
   back(): void;
-  /** Start streaming. The library is what a browser could not see before it could authenticate
-   *  to the management API, so this is the first screen with anything to choose. */
+  /** Stream a title from the open shelf, or its host's desktop. Connects first when the shelf's
+   *  host is not connected. */
   play(entry?: LibraryEntry): void;
   forget(origin: string): void;
   /** Answer the link on screen: connect as it asks, or drop it. */
@@ -152,7 +180,8 @@ export interface Actions {
   wake(origin: string): void;
   /** Name a host something this browser will remember. An empty label drops the name. */
   rename(origin: string, label: string): void;
-  /** Leave the host. `quit` ends the title too; without it the game keeps running. */
+  /** Leave the stream for the page it started from. `quit` ends the title too; without it the
+   *  game keeps running. */
   disconnect(quit?: boolean): void;
   openMenu(on: boolean): void;
   /** Fullscreen on or off. Only from a gesture: the browser refuses it otherwise. */
@@ -162,6 +191,8 @@ export interface Actions {
   /** Turn the microphone on or off. From a gesture: the browser asks for permission. */
   toggleMic(): void;
   openSettings(on: boolean): void;
+  /** A sidebar entry. Leaving a flow half-way through (pairing, a certificate) cancels it. */
+  navigate(tab: Tab): void;
   setSettings(patch: Partial<Settings>): void;
   /** Take or release the pointer. Taking it needs a gesture, so this is only ever called from
    *  a click — the engine cannot arm pointer lock on its own. */

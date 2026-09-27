@@ -192,8 +192,10 @@ export class ConsoleUi implements Ui {
     }
     const showing = this.showing();
     // The canvas takes the pointer only while the console is on it; over a stream the pointer
-    // is the game's.
+    // is the game's, and the empty canvas leaves the compositor too, so each video frame is not
+    // blended under a transparent full-window layer.
     this.canvas.style.pointerEvents = showing ? "auto" : "none";
+    this.canvas.style.visibility = showing ? "" : "hidden";
     this.leave.hidden = !showing;
   }
 
@@ -294,6 +296,11 @@ export class ConsoleUi implements Ui {
         return;
       }
       case "library":
+        // A stream left with `leave` comes back to its host's library rather than home.
+        if (was?.kind === "streaming") {
+          this.dialled = false;
+          c.phase(3);
+        }
         this.library(s);
         return;
       case "streaming":
@@ -319,23 +326,26 @@ export class ConsoleUi implements Ui {
 
   /** The library for the host the engine is on: its titles, their covers, what is running. */
   private library(s: Extract<Screen, { kind: "library" }>): void {
+    // The console reaches a library only through a host it connected to, so it has a shelf.
+    if (s.origin === null) return;
+    const origin = s.origin;
     const c = this.engine.console;
-    if (this.fetching === s.origin) this.fetching = null;
-    if (this.shelf !== s.origin) {
-      this.shelf = s.origin;
+    if (this.fetching === origin) this.fetching = null;
+    if (this.shelf !== origin) {
+      this.shelf = origin;
       const now = this.engine.current;
-      if (now.kind === "ready" && now.origin === s.origin) this.hostApi = { origin: s.origin, host: now.host };
+      if (now.kind === "ready" && now.origin === origin) this.hostApi = { origin: origin, host: now.host };
       this.gamesSent = "";
       this.artSent.clear();
       // A pairing that just finished: the console's Pair screen waits for this.
-      const fp = this.fingerprint(s.origin);
+      const fp = this.fingerprint(origin);
       if (fp) c.push(CONSOLE_PUSH.PAIR, { Paired: { key: fp } });
       this.pushHosts();
-      c.push(CONSOLE_PUSH.NAVIGATE, { library: this.row(s.origin) });
+      c.push(CONSOLE_PUSH.NAVIGATE, { library: this.row(origin) });
       c.push(CONSOLE_PUSH.LIBRARY_BEGIN, null);
     }
     const play = this.pendingPlay;
-    if (play && play.origin === s.origin) {
+    if (play && play.origin === origin) {
       this.pendingPlay = null;
       this.actions?.play(play.id ? ({ id: play.id, title: play.title } as LibraryEntry) : undefined);
       return;
@@ -360,7 +370,7 @@ export class ConsoleUi implements Ui {
       void fetch(url)
         .then((r) => r.arrayBuffer())
         .then((b) => {
-          if (this.shelf === s.origin) c.art(id, new Uint8Array(b));
+          if (this.shelf === origin) c.art(id, new Uint8Array(b));
         })
         .catch(() => this.artSent.delete(id));
     }

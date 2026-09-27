@@ -1,32 +1,167 @@
-// A launcher: cover art, a search that filters as it is typed, and arrow keys between tiles —
-// a grid someone can only tab through one tile at a time is not really a grid.
+// The Library tab: one host's titles at a time — a shelf — as the macOS client lays them out.
+// A row of every paired host's desktop first, then the shelf's posters with a search that filters
+// as it is typed, and arrow keys between tiles: a grid someone can only tab through one tile at a
+// time is not really a grid. The shelf's titles as last read stay up while its host reconnects.
 
 import type { LibraryEntry } from "@punktfunk/stream";
 import { cn } from "@unom/ui/lib/utils";
-import { Gamepad2, LogOut, Play, Server, Settings } from "lucide-react";
+import { Monitor, Play, Search, Server } from "lucide-react";
 import { type JSX, type KeyboardEvent, useRef, useState } from "react";
-import { Stagger } from "@/components/stagger";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Spinner } from "@/components/ui/spinner";
-import { bare, Empty, ErrorLine, Frame, Loading, Page, TopBar } from "./pieces.tsx";
-import type { Actions, Screen } from "./types.ts";
+import { Body, PageHead } from "./frame.tsx";
+import { Empty, ErrorLine, labelOf, Loading, status } from "./pieces.tsx";
+import type { Actions, HostCard, Screen } from "./types.ts";
 
 type LibraryScreen = Extract<Screen, { kind: "library" }>;
 
-/** Tiles past this many arrive together: a 500-title library must not take seconds to land. */
-const STAGGERED_TILES = 24;
-const TILE_GAP = 0.03;
-
 export function Library({ screen, actions }: { screen: LibraryScreen; actions: Actions }): JSX.Element {
-  const grid = useRef<HTMLDivElement>(null);
   const [query, setQuery] = useState("");
-  const host = screen.host ?? bare(screen.origin);
+  if (screen.origin === null) {
+    return (
+      <Body>
+        <PageHead title="Library" />
+        <Empty title="No library yet">
+          <p>Pair a host, and its games show up here.</p>
+          <Button size="sm" onClick={() => actions.navigate("hosts")}>Show hosts</Button>
+        </Empty>
+      </Body>
+    );
+  }
+  const origin = screen.origin;
   const q = query.trim().toLowerCase();
   const shown = q ? screen.entries.filter((e) => e.title.toLowerCase().includes(q)) : screen.entries;
+  const sub = screen.running
+    ? `Running now: ${screen.running}`
+    : screen.entries.length
+      ? `${screen.entries.length} titles`
+      : undefined;
+  return (
+    <Body>
+      {screen.tools && <HostSheet host={screen.host ?? ""} tools={screen.tools} actions={actions} />}
+      <PageHead
+        title={
+          <span className="flex items-center gap-3">
+            {screen.host ?? "Library"}
+            {screen.busy && screen.entries.length > 0 && <Spinner className="size-4" />}
+          </span>
+        }
+        sub={sub}
+      >
+        {screen.resume && (
+          <Button size="sm" onClick={() => actions.play(screen.resume)}>
+            <Play className="size-4" />
+            Resume {screen.resume.title}
+          </Button>
+        )}
+        {!screen.offline && (
+          <Button size="icon" variant="ghost" aria-label="Host actions" title="Host actions" onClick={() => actions.openTools(true)}>
+            <Server className="size-4" />
+          </Button>
+        )}
+      </PageHead>
+
+      {screen.shelves.length > 1 && <ShelfSwitcher shelves={screen.shelves} current={origin} actions={actions} />}
+
+      <section aria-label="Desktops" className="flex flex-col gap-3">
+        <h2 className="text-xs font-medium tracking-wide text-muted-foreground uppercase">Desktops</h2>
+        <div className="-mx-1 flex gap-3 overflow-x-auto px-1 pb-1">
+          {screen.shelves.map((h) => (
+            <DesktopTile key={h.origin} host={h} onPlay={() => actions.streamDesktop(h.origin)} />
+          ))}
+        </div>
+      </section>
+
+      <section aria-label="Games" className="flex flex-col gap-4">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <h2 className="text-xs font-medium tracking-wide text-muted-foreground uppercase">Games</h2>
+          {screen.entries.length > 0 && (
+            <label className="relative w-full max-w-xs">
+              <Search className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted-foreground" aria-hidden="true" />
+              <Input
+                type="search"
+                placeholder="Search titles"
+                aria-label="Search the library"
+                className="pl-9"
+                value={query}
+                onChange={(e) => setQuery(e.currentTarget.value)}
+              />
+            </label>
+          )}
+        </div>
+        {screen.error && <ErrorLine text={screen.error} />}
+        {screen.entries.length === 0 ? (
+          screen.busy ? (
+            <Loading label="Loading the library" />
+          ) : screen.offline ? (
+            <Empty title={`Not connected to ${screen.host ?? "this host"}`}>
+              <Button size="sm" onClick={() => actions.browse(origin)}>Connect</Button>
+            </Empty>
+          ) : (
+            <Empty>This host's library is empty, or nothing has been added to it yet.</Empty>
+          )
+        ) : shown.length === 0 ? (
+          <Empty>Nothing here matches “{query}”.</Empty>
+        ) : (
+          <Grid entries={shown} screen={screen} actions={actions} />
+        )}
+      </section>
+    </Body>
+  );
+}
+
+/** Which paired host's titles to show. Chips, as the macOS client's shelf filter. */
+function ShelfSwitcher({ shelves, current, actions }: { shelves: HostCard[]; current: string; actions: Actions }): JSX.Element {
+  return (
+    <div role="tablist" aria-label="Host" className="flex flex-wrap gap-2">
+      {shelves.map((h) => {
+        const on = h.origin === current;
+        return (
+          <button
+            key={h.origin}
+            type="button"
+            role="tab"
+            aria-selected={on}
+            className={cn(
+              "flex items-center gap-2 rounded-full border px-3.5 py-1.5 text-sm transition-colors focus-visible:outline-2 focus-visible:outline-ring",
+              on ? "border-primary/60 bg-primary/15 font-medium text-foreground" : "border-border text-muted-foreground hover:bg-primary/10 hover:text-foreground",
+            )}
+            onClick={() => !on && actions.browse(h.origin)}
+          >
+            <span className={cn("size-2 rounded-full", status(h).dot)} aria-hidden="true" />
+            {labelOf(h)}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+/** One host's desktop, streamed in a click. */
+function DesktopTile({ host, onPlay }: { host: HostCard; onPlay: () => void }): JSX.Element {
+  const state = status(host);
+  return (
+    <Card asChild interactive className="w-48! shrink-0 gap-3 p-4 text-left">
+      <button type="button" onClick={onPlay} aria-label={`Stream the desktop of ${labelOf(host)}`}>
+        <span className="flex items-center justify-between">
+          <Monitor className="size-5 text-primary" aria-hidden="true" />
+          <span className={cn("size-2 rounded-full", state.dot)} title={state.text} />
+        </span>
+        <span className="min-w-0">
+          <span className="block truncate text-sm font-semibold">{labelOf(host)}</span>
+          <span className="block text-xs text-muted-foreground">Desktop</span>
+        </span>
+      </button>
+    </Card>
+  );
+}
+
+function Grid({ entries, screen, actions }: { entries: LibraryEntry[]; screen: LibraryScreen; actions: Actions }): JSX.Element {
+  const grid = useRef<HTMLDivElement>(null);
   const onKey = (e: KeyboardEvent<HTMLDivElement>) => {
     const el = grid.current;
     if (!el) return;
@@ -40,91 +175,63 @@ export function Library({ screen, actions }: { screen: LibraryScreen; actions: A
     tiles[next].focus();
   };
   return (
-    <Frame
-      bar={
-        <TopBar title={host}>
-          <Button size="icon" variant="ghost" aria-label="Console mode" title="Console mode — the controller interface" onClick={() => actions.consoleMode(true)}>
-            <Gamepad2 className="size-4" />
-          </Button>
-          <Button size="icon" variant="ghost" aria-label="Host" title="Host" onClick={() => actions.openTools(true)}>
-            <Server className="size-4" />
-          </Button>
-          <Button size="icon" variant="ghost" aria-label="Settings" title="Settings" onClick={() => actions.openSettings(true)}>
-            <Settings className="size-4" />
-          </Button>
-          <Button size="sm" variant="ghost" onClick={() => actions.disconnect()}>
-            <LogOut className="size-4" />
-            <span className="hidden sm:inline">Disconnect</span>
-          </Button>
-        </TopBar>
-      }
+    <div
+      ref={grid}
+      role="grid"
+      aria-label="Library"
+      className="grid grid-cols-[repeat(auto-fill,minmax(8.5rem,1fr))] gap-x-5 gap-y-6"
+      onKeyDown={onKey}
     >
-      {screen.tools && <HostSheet host={host} tools={screen.tools} actions={actions} />}
-      <Page
-        title="Library"
-        sub={screen.running ? `Running now: ${screen.running}` : screen.entries.length ? `${screen.entries.length} titles on ${host}` : undefined}
-        actions={
-          <>
-            {screen.resume && (
-              <Button autoFocus size="sm" onClick={() => actions.play(screen.resume)}>
-                <Play className="size-4" />
-                Resume {screen.resume.title}
-              </Button>
+      {entries.map((entry) => (
+        <Tile
+          key={entry.id}
+          entry={entry}
+          art={screen.art.get(entry.id)}
+          running={screen.running === entry.title}
+          onPlay={() => actions.play(entry)}
+        />
+      ))}
+    </div>
+  );
+}
+
+/** A poster: 2:3 art, the title under it. Until its cover arrives the title stands in the frame;
+ *  the cover then fades in over it rather than popping. */
+function Tile({ entry, art, running, onPlay }: { entry: LibraryEntry; art: string | undefined; running: boolean; onPlay: () => void }): JSX.Element {
+  const [loaded, setLoaded] = useState(false);
+  return (
+    <button
+      type="button"
+      role="gridcell"
+      aria-label={entry.title}
+      onClick={onPlay}
+      className="group flex flex-col gap-2 rounded-[10px] text-left outline-none focus-visible:ring-2 focus-visible:ring-ring"
+    >
+      <span className="relative block aspect-2/3 overflow-hidden rounded-[10px] bg-muted ring-1 ring-border transition-shadow group-hover:ring-accent group-hover:shadow-[0_8px_28px_var(--pf-glow)]">
+        <span className="absolute inset-0 grid place-items-center p-3 text-center text-sm font-medium text-muted-foreground" aria-hidden="true">
+          {entry.title}
+        </span>
+        {art && (
+          <img
+            src={art}
+            alt=""
+            loading="lazy"
+            decoding="async"
+            // A cover already in the cache can finish before React sees `load`.
+            ref={(img) => { if (img?.complete) setLoaded(true); }}
+            onLoad={() => setLoaded(true)}
+            className={cn(
+              "relative size-full object-cover transition-[opacity,transform] duration-300 group-hover:scale-[1.03]",
+              loaded ? "opacity-100" : "opacity-0",
             )}
-            <Button
-              autoFocus={!screen.resume}
-              size="sm"
-              variant={screen.resume ? "secondary" : "default"}
-              onClick={() => actions.play()}
-            >
-              Stream the desktop
-            </Button>
-          </>
-        }
-      >
-        {screen.error && <ErrorLine text={screen.error} />}
-        {screen.entries.length > 0 && (
-          <Input
-            type="search"
-            placeholder="Search"
-            aria-label="Search the library"
-            className="max-w-sm"
-            value={query}
-            onChange={(e) => setQuery(e.currentTarget.value)}
           />
         )}
-        {screen.busy && screen.entries.length === 0 ? (
-          <Loading label="Loading the library" />
-        ) : screen.entries.length === 0 ? (
-          <Empty>This host's library is empty, or nothing has been added to it yet.</Empty>
-        ) : shown.length === 0 ? (
-          <Empty>Nothing here matches “{query}”.</Empty>
-        ) : (
-          <div className="@container">
-            {/* `root`: the grid mounts once the entries arrive, after the page's own entrance. */}
-            <Stagger
-              root
-              ref={grid}
-              role="grid"
-              aria-label="Library"
-              className="grid grid-cols-2 gap-card @lg:grid-cols-3 @2xl:grid-cols-4 @4xl:grid-cols-5 @6xl:grid-cols-6"
-              transition={{ delayChildren: (i: number) => Math.min(i, STAGGERED_TILES) * TILE_GAP }}
-              onKeyDown={onKey}
-            >
-              {shown.map((entry) => (
-                <Tile
-                  key={entry.id}
-                  entry={entry}
-                  art={screen.art.get(entry.id)}
-                  running={screen.running === entry.title}
-                  onPlay={() => actions.play(entry)}
-                />
-              ))}
-            </Stagger>
-          </div>
-        )}
-      </Page>
-    </Frame>
+        {running && <Badge variant="success" className="absolute top-2 right-2 shadow-sm">Running</Badge>}
+      </span>
+      <span className="line-clamp-2 text-xs text-muted-foreground group-hover:text-foreground" title={entry.title}>
+        {entry.title}
+      </span>
+    </button>
   );
 }
 
@@ -163,47 +270,5 @@ function HostSheet({ host, tools, actions }: { host: string; tools: NonNullable<
         {tools.note && <p className="text-sm text-muted-foreground">{tools.note}</p>}
       </DialogContent>
     </Dialog>
-  );
-}
-
-/** A poster tile, as the console's library draws one. Until its cover arrives the title stands
- *  in the frame; the cover then fades in over it rather than popping. */
-function Tile({ entry, art, running, onPlay }: { entry: LibraryEntry; art: string | undefined; running: boolean; onPlay: () => void }): JSX.Element {
-  const [loaded, setLoaded] = useState(false);
-  return (
-    <Card className="group relative overflow-hidden transition-shadow hover:ring-accent focus-within:ring-accent">
-      <button
-        type="button"
-        role="gridcell"
-        aria-label={entry.title}
-        onClick={onPlay}
-        className="block w-full rounded-[inherit] text-left outline-none focus-visible:ring-2 focus-visible:ring-ring"
-      >
-        <span className="relative block aspect-[2/3] overflow-hidden bg-muted">
-          <span className="absolute inset-0 grid place-items-center p-3 text-center text-sm font-medium text-muted-foreground" aria-hidden="true">
-            {entry.title}
-          </span>
-          {art && (
-            <img
-              src={art}
-              alt=""
-              loading="lazy"
-              // A cover already in the cache can finish before React sees `load`.
-              ref={(img) => { if (img?.complete) setLoaded(true); }}
-              onLoad={() => setLoaded(true)}
-              className={cn(
-                "relative size-full object-cover transition-[opacity,transform] duration-500 group-hover:scale-[1.03]",
-                loaded ? "opacity-100" : "opacity-0",
-              )}
-            />
-          )}
-          {/* The title the host is running now, marked on its own tile rather than only above. */}
-          {running && <Badge className="absolute top-2 left-2 shadow-sm">Running</Badge>}
-        </span>
-        <span className="block truncate px-card pt-4 pb-card text-sm font-medium" title={entry.title}>
-          {entry.title}
-        </span>
-      </button>
-    </Card>
   );
 }

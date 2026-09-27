@@ -34,13 +34,17 @@ export interface PunktfunkModule {
   _pf_ctl_recv(ptr: number, len: number): void;
 
   // --- the session -----------------------------------------------------------------------
-  _pf_session_codecs?(mask: number, hdr: number): void;
+  _pf_session_codecs?(mask: number, hdr: number, preferred: number): void;
   _pf_session_audio?(channels: number): void;
   _pf_session_audio_layout?(out: number): number;
   _pf_mic_send?(ptr: number, len: number, seq: number, ptsNs: number): void;
   _pf_session_access_seq?(): number;
   _pf_session_access_grants?(): number;
   _pf_session_access_secs?(): number;
+  _pf_session_host_caps?(): number;
+  _pf_cursor_render?(clientDraws: number): void;
+  _pf_cursor_serial?(): number;
+  _pf_cursor_flags?(): number;
   _pf_session_hello(
     width: number,
     height: number,
@@ -141,6 +145,10 @@ export interface PunktfunkModule {
   __pfOnRefused?: (code: number, reason: string) => void;
   /** The host's sentence for a launch that did not give the player their game. */
   __pfOnLaunchNotice?: (text: string) => void;
+  /** Datagrams have landed in the ring: pump the session now rather than at the next frame. */
+  __pfOnData?: () => void;
+  /** A host pointer bitmap: straight-alpha RGBA, copied out of wasm memory. */
+  __pfOnCursorShape?: (serial: number, w: number, h: number, hotX: number, hotY: number, rgba: Uint8Array) => void;
   /** The negotiated video format, once `Welcome` has been read. */
   __pfOnVideoConfig?: (codec: number, width: number, height: number, depth: number, hdr: boolean) => void;
   /** One access unit. The bytes are copied out of wasm memory before this is called. */

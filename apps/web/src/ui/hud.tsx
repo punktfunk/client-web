@@ -59,7 +59,7 @@ export function Hud({ screen, actions }: { screen: Extract<Screen, { kind: "stre
         role="toolbar"
         aria-label="Stream"
         className={cn(
-          "pointer-events-auto m-3 flex max-w-[calc(100vw-1.5rem)] items-center gap-2 rounded-full border border-border bg-card/85 py-1.5 pr-2 pl-3 shadow-lg backdrop-blur-xl transition-[opacity,transform] duration-400 *:shrink-0",
+          "pointer-events-auto m-3 flex max-w-[calc(100vw-1.5rem)] items-center gap-2 rounded-full border border-border bg-card/95 py-1.5 pr-2 pl-3 shadow-lg transition-[opacity,transform] duration-400 *:shrink-0",
           idle && !screen.diagnostics && "pointer-events-none -translate-y-2 opacity-0",
         )}
       >
@@ -105,7 +105,7 @@ export function Hud({ screen, actions }: { screen: Extract<Screen, { kind: "stre
           device's access changing or about to end. */}
       {(stats.launchNotice ?? stats.accessNotice) && (
         <div role="status" className="pointer-events-none fixed inset-x-0 bottom-[20%] flex justify-center px-inset animate-in fade-in slide-in-from-bottom-2">
-          <span className="max-w-[40rem] rounded-full bg-card/85 px-4 py-2 text-center text-sm backdrop-blur-xl">
+          <span className="max-w-[40rem] rounded-full bg-card/95 px-4 py-2 text-center text-sm">
             {stats.launchNotice ?? stats.accessNotice}
           </span>
         </div>
@@ -114,7 +114,7 @@ export function Hud({ screen, actions }: { screen: Extract<Screen, { kind: "stre
           releases on Escape itself; this only says so. */}
       {stats.pointerCaptured && (
         <div className="pointer-events-none fixed inset-x-0 bottom-[12%] flex justify-center animate-in fade-in slide-in-from-bottom-2">
-          <span className="rounded-full bg-card/85 px-4 py-2 text-sm backdrop-blur-xl">
+          <span className="rounded-full bg-card/95 px-4 py-2 text-sm">
             Mouse captured — press <kbd className="rounded bg-white/10 px-1.5 py-0.5 font-mono text-xs">Esc</kbd> to release
           </span>
         </div>
@@ -143,7 +143,7 @@ function QuickMenu({ screen, actions }: { screen: Extract<Screen, { kind: "strea
       role="menu"
       aria-label="Quick actions"
       data-pf-keys="local"
-      className="pointer-events-auto fixed top-[calc(3.5rem+var(--pf-inset))] left-1/2 flex w-[min(22rem,calc(100vw-2*var(--pf-inset)))] -translate-x-1/2 flex-col gap-1 p-2 animate-in fade-in slide-in-from-top-2"
+      className="pointer-events-auto fixed top-[calc(3.5rem+var(--pf-inset))] left-1/2 flex bg-card/95 backdrop-blur-none w-[min(22rem,calc(100vw-2*var(--pf-inset)))] -translate-x-1/2 flex-col gap-1 p-2 animate-in fade-in slide-in-from-top-2"
     >
       <Button
         role="menuitem"
@@ -216,7 +216,7 @@ function Diagnostics({ stats: s }: { stats: SessionStats }): JSX.Element {
   return (
     <Card
       aria-label="Statistics"
-      className="pointer-events-auto fixed top-[calc(3.5rem+var(--pf-inset))] right-inset max-h-[60dvh] w-[min(34rem,calc(100vw-2*var(--pf-inset)))] overflow-y-auto px-5 py-4 font-mono text-sm leading-relaxed"
+      className="pointer-events-auto fixed top-[calc(3.5rem+var(--pf-inset))] right-inset bg-card/95 backdrop-blur-none max-h-[60dvh] w-[min(34rem,calc(100vw-2*var(--pf-inset)))] overflow-y-auto px-5 py-4 font-mono text-sm leading-relaxed"
     >
       {lines.map((l, i) => (
         // Lines have no identity beyond their place in the list.

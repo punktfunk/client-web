@@ -156,6 +156,14 @@ mergeInto(LibraryManager.library, {
         unis(pfNet.wt!.incomingUnidirectionalStreams.getReader());
         if (!pfNet.reading) {
           pfNet.reading = true;
+          // The session is pumped once per burst, on a task right after it: a frame starts
+          // decoding when its last datagram lands, not at the next animation frame.
+          const tick = new MessageChannel();
+          let queued = false;
+          tick.port1.onmessage = function () {
+            queued = false;
+            if (Module.__pfOnData) Module.__pfOnData();
+          };
           const pump = function (reader: ReadableStreamDefaultReader<Uint8Array>): void {
             reader.read().then(
               function (r) {
@@ -163,10 +171,19 @@ mergeInto(LibraryManager.library, {
                   pfNet.reading = false;
                   return;
                 }
-                const slot = Module._pf_rx_claim();
+                let slot = Module._pf_rx_claim();
+                // A keyframe can outrun the ring inside one burst: drain it now instead of dropping.
+                if (slot < 0 && Module.__pfOnData) {
+                  Module.__pfOnData();
+                  slot = Module._pf_rx_claim();
+                }
                 if (slot >= 0) {
                   HEAPU8.set(r.value, Module._pf_rx_base() + slot * Module._pf_rx_stride());
                   Module._pf_rx_commit(slot, r.value.length);
+                }
+                if (!queued) {
+                  queued = true;
+                  tick.port2.postMessage(0);
                 }
                 pump(reader);
               },
@@ -409,12 +426,22 @@ mergeInto(LibraryManager.library, {
   // straight into the video plane's texture and never enters the wasm heap.
   pf_refused__deps: ["$UTF8ToString"],
   pf_refused: function (code: number, ptr: number, len: number): void {
-    if (Module.__pfOnRefused) Module.__pfOnRefused(code, UTF8ToString(ptr, len));
+    // After `pf_ctl_recv` returns: the engine tears the session down in answer, and doing that
+    // from inside the call that holds it aborts the module.
+    const reason = UTF8ToString(ptr, len);
+    queueMicrotask(function () {
+      if (Module.__pfOnRefused) Module.__pfOnRefused(code, reason);
+    });
   },
 
   pf_launch_notice__deps: ["$UTF8ToString"],
   pf_launch_notice: function (ptr: number, len: number): void {
     if (Module.__pfOnLaunchNotice) Module.__pfOnLaunchNotice(UTF8ToString(ptr, len));
+  },
+
+  // `slice`: the bitmap is cached past this call, and Rust frees it on return.
+  pf_cursor_shape: function (serial: number, w: number, h: number, hx: number, hy: number, ptr: number, len: number): void {
+    if (Module.__pfOnCursorShape) Module.__pfOnCursorShape(serial >>> 0, w, h, hx, hy, HEAPU8.slice(ptr, ptr + len));
   },
 
   pf_video_config: function (codec: number, width: number, height: number, depth: number, hdr: number): void {
@@ -441,8 +468,8 @@ mergeInto(LibraryManager.library, {
 
   pf_video_au: function (ptr: number, len: number, ptsUs: number, key: number, flags: number): void {
     if (!Module.__pfOnAccessUnit) return;
-    // `slice`, not `subarray`: EncodedVideoChunk keeps the bytes past this call, and the Rust
-    // buffer is freed the moment we return. `flags` crosses as i32; `>>> 0` makes it the u32.
-    Module.__pfOnAccessUnit(HEAPU8.slice(ptr, ptr + len), ptsUs, key !== 0, flags >>> 0);
+    // A view, not a copy: `EncodedVideoChunk` copies its data as it is built, which `submit` does
+    // before this returns and Rust frees the buffer. `flags` crosses as i32; `>>> 0` makes it u32.
+    Module.__pfOnAccessUnit(HEAPU8.subarray(ptr, ptr + len), ptsUs, key !== 0, flags >>> 0);
   },
 });
