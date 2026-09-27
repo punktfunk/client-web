@@ -12,7 +12,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { verify, hostFingerprint, type Plane } from "./pf-connect.ts";
+import { verify, hostFingerprint, reach, type Plane } from "./pf-connect.ts";
 
 // A full `Plane`, as the route publishes one; the two attestation fields are the ones under
 // test. Narrowed to `Required` so the test can read them without a null check on every line.
@@ -70,4 +70,16 @@ test("originOf takes https anywhere and http only on loopback", async () => {
   assert.equal(originOf("http://localhost:5173"), "http://localhost:5173");
   assert.equal(originOf("http://127.0.0.1:5173"), "http://127.0.0.1:5173");
   assert.throws(() => originOf("http://192.168.1.25:47990"), /https/);
+});
+
+test("a gateway that cannot reach the host reads as unreachable, not a certificate", async () => {
+  const real = globalThis.fetch;
+  try {
+    for (const [status, want] of [[502, "unreachable"], [504, "unreachable"], [200, "ok"], [404, "blocked"]] as const) {
+      globalThis.fetch = async () => new Response(null, { status });
+      assert.equal(await reach("https://pf.lan/h/desk"), want, `status ${status}`);
+    }
+  } finally {
+    globalThis.fetch = real;
+  }
 });

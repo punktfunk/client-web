@@ -6,7 +6,11 @@
 // Pairs when a PIN is given (forgetting what the browser knew of the host first), reconnects,
 // streams for `seconds`, and prints every state it passed through. Lines also go to `/report`,
 // which the dev proxy forwards to a collector on 127.0.0.1:8099 when one is listening.
-import { Engine, type EngineState } from "@punktfunk/stream";
+//
+// Behind punktfunk-client-web-server: `?api=h/<host>&plane=<host address>` reaches a host the
+// server proxies, and `?report=<url>` posts the lines to a collector the server does not serve.
+// `?idle=<s>` sits on `ready` that long first, as a person browsing the library does.
+import { Engine, type EngineState, type HostTarget } from "@punktfunk/stream";
 
 declare const __PF_TRANSPORT_HOST__: string | undefined;
 
@@ -20,7 +24,8 @@ for (const k of ["log", "warn", "error"] as const) {
   const orig = console[k].bind(console);
   console[k] = (...a: unknown[]) => { lines.push(k + ": " + a.map((x) => (x instanceof Error ? x.message : String(x))).join(" ")); orig(...a); };
 }
-const report = () => fetch("/report", { method: "POST", body: JSON.stringify({ lines }) });
+const report = () =>
+  fetch(q.get("report") ?? "/report", { method: "POST", mode: "no-cors", body: JSON.stringify({ lines }) });
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 let rafTicks = 0;
@@ -28,6 +33,11 @@ const tick = () => { rafTicks++; requestAnimationFrame(tick); };
 requestAnimationFrame(tick);
 const q = new URLSearchParams(location.search);
 const PIN = q.get("pin") ?? "";
+const API = q.get("api");
+const target: string | HostTarget = API
+  ? { api: new URL(API, location.href).href.replace(/\/+$/, ""), plane: q.get("plane") ?? location.hostname }
+  : location.origin;
+const key = typeof target === "string" ? target : target.api;
 const SECONDS = Number(q.get("seconds") ?? "8");
 const LAUNCH = q.get("launch") ?? "";
 
@@ -52,8 +62,8 @@ try {
   });
 
   // A PIN means a fresh pairing: whatever this browser remembers of the host is stale.
-  if (PIN) engine.forget(location.origin);
-  await engine.connect(location.origin);
+  if (PIN) engine.forget(key);
+  await engine.connect(target);
   const until = async (kinds: string[], ms: number) => {
     const t0 = performance.now();
     while (performance.now() - t0 < ms) {
@@ -75,7 +85,7 @@ try {
       log(last().kind === "paired" ? "ok   paired" : "FAIL " + last().kind + " " + raw());
       // The host closes after the ceremony; dial again to stream.
       await sleep(500);
-      await engine.connect(location.origin);
+      await engine.connect(target);
       await until(["ready", "error", "forgotten"], 15000);
     }
   }
@@ -87,8 +97,51 @@ try {
     try {
       const lib = await l.host.library();
       log(`ok   library: ${lib.length} entries`);
+      // Covers as the grid asks for them: an object URL, a CDN URL, nothing, or a throw.
+      const tally = { shown: 0, none: 0, missing: 0, failed: 0 };
+      for (const entry of lib.slice(0, 8)) {
+        const art = entry.art.portrait ?? entry.art.header;
+        if (!art) { tally.missing++; continue; }
+        try { (await l.host.art(art)) ? tally.shown++ : tally.none++; }
+        catch (e: any) { tally.failed++; log("art failed: " + art + ": " + (e?.message ?? e)); }
+      }
+      log(`${tally.shown && !tally.failed ? "ok  " : "FAIL"} art: ${JSON.stringify(tally)}`);
+      // `?art=all`: every cover at once, as the grid asks, with each answer's status and time.
+      if (q.get("art") === "all") {
+        const conn = (l.host as any).conn;
+        const t0 = performance.now();
+        const results = await Promise.all(
+          lib.map(async (entry) => {
+            const art = entry.art.portrait ?? entry.art.header;
+            if (!art || /^https?:/.test(art)) return { id: entry.id, status: art ? "cdn" : "none", ms: 0 };
+            const t = performance.now();
+            try {
+              const fetchFn = conn.fetch;
+              const r = await fetchFn(`${l.host.origin}${art}`, { cache: "no-store", headers: { authorization: await conn.credential.header() } });
+              const body = r.ok ? "" : (await r.text()).slice(0, 60);
+              return { id: entry.id, status: String(r.status), ms: Math.round(performance.now() - t), body };
+            } catch (e: any) {
+              return { id: entry.id, status: "threw", ms: Math.round(performance.now() - t), body: String(e?.message ?? e) };
+            }
+          }),
+        );
+        const by: Record<string, number> = {};
+        for (const r of results) by[r.status] = (by[r.status] ?? 0) + 1;
+        log(`art=all: ${results.length} titles in ${Math.round(performance.now() - t0)} ms: ${JSON.stringify(by)}`);
+        for (const r of results.filter((r) => r.status !== "200" && r.status !== "none" && r.status !== "cdn")) {
+          log(`  ${r.status} ${r.ms}ms ${r.id} ${"body" in r ? r.body : ""}`);
+        }
+        const slow = results.filter((r) => r.ms > 3000).length;
+        log(`  answers slower than 3 s: ${slow}; slowest ${Math.max(...results.map((r) => r.ms))} ms`);
+      }
     } catch (e: any) {
       log("FAIL library: " + (e?.message ?? e));
+    }
+    // Sit on the library the way a person does; the host gives a silent session ten seconds.
+    const IDLE = Number(q.get("idle") ?? "0");
+    if (IDLE) {
+      await sleep(IDLE * 1000);
+      log(last().kind === "ready" ? `ok   still ready after ${IDLE}s idle` : `FAIL left ready while idle: ${last().kind}`);
     }
     engine.startStream({ width: 1280, height: 720, fps: 60, bitrateKbps: 8000, ...(LAUNCH ? { launch: { id: LAUNCH, title: LAUNCH, store: "e2e", art: {} } as any } : {}) });
     if (LAUNCH) log("requested launch id: " + LAUNCH);

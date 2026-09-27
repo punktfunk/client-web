@@ -1,0 +1,19 @@
+# Behind a reverse proxy that already does TLS (Caddy, Traefik, nginx): the page gets that
+# proxy's certificate, so no browser warns. Point the proxy at http://<this machine>:8080.
+#
+# The page's origin is your proxy's domain: add it to each host's Browser origins (console,
+# Streaming, advanced), or leave that list empty to allow any page.
+services:
+  punktfunk-web:
+    image: git.unom.io/unom/punktfunk-client-web:latest
+    restart: unless-stopped
+    network_mode: host
+    environment:
+      TLS: "off"
+      LISTEN: 0.0.0.0:8080
+      # PUNKTFUNK_HOSTS: desk=192.168.1.21
+    volumes:
+      - punktfunk-web:/data
+
+volumes:
+  punktfunk-web:

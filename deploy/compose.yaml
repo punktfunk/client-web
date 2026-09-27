@@ -1,0 +1,25 @@
+# The punktfunk browser client, served from any Linux box on your network.
+#
+#   docker compose up -d
+#   open https://<this machine>:8443 and accept its certificate once
+#
+# Each host also needs Browser streaming on (its console, Streaming settings) and UDP 9778 open:
+# video goes from the host to the browser directly, never through this container.
+services:
+  punktfunk-web:
+    image: git.unom.io/unom/punktfunk-client-web:latest
+    restart: unless-stopped
+    # The host's network, so the server finds hosts over mDNS by itself. On Docker Desktop, or to
+    # keep the container off it: drop this, publish the port (ports: ["8443:8443"]) and list the
+    # hosts below.
+    network_mode: host
+    environment:
+      # Every name or address you open the page at, so the certificate is issued for them.
+      TLS_NAMES: 192.168.1.10
+      # Hosts mDNS cannot find: name=address[:port][#fingerprint], comma-separated.
+      # PUNKTFUNK_HOSTS: desk=192.168.1.21, couch=192.168.1.30
+    volumes:
+      - punktfunk-web:/data
+
+volumes:
+  punktfunk-web:

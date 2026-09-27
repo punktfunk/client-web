@@ -179,7 +179,9 @@ mergeInto(LibraryManager.library, {
         }
       },
       function (e) {
-        console.error("punktfunk: WebTransport session failed", e);
+        console.error("punktfunk: WebTransport session failed:", (e as { message?: string })?.message, e);
+        // A session that never opened leaves `closed` pending in WebKit, so this is the engine's only word.
+        if (pfNet.wt === wt && Module.__pfOnClosed) Module.__pfOnClosed(-2, "");
       },
     );
     return 1;

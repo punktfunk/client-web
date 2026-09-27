@@ -3,21 +3,8 @@
 import { cn } from "@unom/ui/lib/utils";
 import type { JSX, ReactNode } from "react";
 import { Card } from "@/components/ui/card";
+import { Logo } from "./brand.tsx";
 import type { HostCard } from "./types.ts";
-
-/** The punktfunk mark. The file carries its own dark-scheme colours, so it is an `<img>`
- *  rather than inlined SVG — nothing here needs to restyle it. The wordmark occupies only the
- *  bottom third of the lockup's box, so the mark is taller than it looks to leave "funk"
- *  legible; `aspect-ratio` because the file carries no intrinsic size. */
-export function Mark({ className }: { className?: string }): JSX.Element {
-  return (
-    <img
-      src="/punktfunk-logo.svg"
-      alt="punktfunk"
-      className={cn("h-12 w-auto aspect-[579/298]", className)}
-    />
-  );
-}
 
 /** The screens that are a question rather than a list centre one sheet against the viewport.
  *  `min-h-dvh` rather than `100%`: the shell is a grid whose track is content-sized on the
@@ -42,7 +29,7 @@ export function Sheet({
 }): JSX.Element {
   return (
     <Card className={cn("w-full max-w-lg p-8", className)} aria-labelledby="pf-sheet-title">
-      {mark && <Mark className="mb-5 h-14 self-center" />}
+      {mark && <Logo size="lg" animate className="mb-6 self-center" />}
       <h1 id="pf-sheet-title" className="mb-2 text-xl font-semibold tracking-tight">{title}</h1>
       {children}
     </Card>

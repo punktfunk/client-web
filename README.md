@@ -35,6 +35,7 @@ host's own OpenAPI spec.
 |---|---|
 | [`packages/stream`](packages/stream) — **`@punktfunk/stream`** | The engine, as a library: WebTransport session, device-key pairing, WebCodecs video and audio, input, the management API through `@punktfunk/host`. No DOM, no framework. Rust (`rust/`) compiled to wasm underneath, TypeScript (`src/`) on top. |
 | [`apps/web`](apps/web) | The web client on it — the flagship consumer. The page, two interfaces, the wording. |
+| [`server`](server) | `punktfunk-client-web-server`: serves the page and proxies each host's management API on its origin. Ships as the container. |
 
 ## What works
 
@@ -56,7 +57,42 @@ host's own OpenAPI spec.
 Needs a browser with WebTransport and WebCodecs; verified against a real host on Safari 27 and
 Firefox 156.
 
+## Run it
+
+The container serves the client and reaches your hosts for it. On any Linux machine on your
+network:
+
+```sh
+curl -O https://raw.githubusercontent.com/punktfunk/client-web/main/deploy/compose.yaml
+docker compose up -d
+```
+
+Open `https://<that machine>:8443`, accept its certificate once, and pick a host: the server finds
+them over mDNS, and one typed by its IP address goes through the server too. On each host, turn on **Browser streaming** in its console and open UDP 9778. The
+video goes from the host to the browser directly; only the host's management API passes through
+the container, on the page's own origin, which is what Safari needs.
+
+Two other shapes, in [`deploy/`](deploy): behind a reverse proxy that already has a certificate
+(`compose.proxy.yaml`), and on a tailnet with Tailscale's certificate, which also lets you play
+away from home (`compose.tailscale.yaml`).
+
+| Setting | Default | |
+|---|---|---|
+| `LISTEN` | `0.0.0.0:8443` | |
+| `TLS` | `self-signed` | `self-signed`, `off` behind a proxy, or `cert.pem,key.pem` |
+| `TLS_NAMES` | | Names and addresses the page is opened at, for the self-signed certificate |
+| `PUNKTFUNK_HOSTS` | | Hosts mDNS cannot find: `name=address[:port][#fingerprint]`, comma-separated |
+| `DISCOVER` | on | `0` turns the mDNS browse off |
+| `ADD_HOSTS` | on | `0` stops the page reaching a host typed by address. Set it when the page is reachable from outside your network |
+
+The server pins every host before trusting it, as the native clients do: by the fingerprint it
+was listed with, the one it announces, or the one it presented first (`/data/pins.json`). It adds
+no credential of its own; the browser's device key stays the only one.
+
 ## Trust, and the one step it costs you
+
+Served by the container, a page reaches its hosts on its own origin and none of this section's
+certificate step applies. It does for a host typed by address.
 
 A punktfunk host signs its own certificate. No browser will let a page `fetch` such a host — not
 with CORS relaxed, not with `no-cors`, which fails the same way because the connection never
@@ -168,6 +204,9 @@ Rust owns the protocol; TypeScript owns the browser. The library owns everything
 | `src/pf-glue.ts` | Emscripten `--js-library`. **The only file that names a browser or GL object.** |
 | `src/emscripten.d.ts` | The wasm exports and the `--js-library` scope, typed once. |
 | `build.rs` | Names the glue to cargo, which does not track a `--js-library` input. |
+
+**`server`** — `punktfunk-client-web-server`: the built client, `/config.json`, and `/h/<host>/…`
+proxied to each host's management API, pinned. `Dockerfile` and `deploy/` package it.
 
 **`apps/web`**
 

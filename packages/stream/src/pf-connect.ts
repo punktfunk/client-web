@@ -74,6 +74,12 @@ export function originOf(input: string | null | undefined): string {
 // so it is made from timing instead: a TLS refusal comes back immediately, where an unroutable
 // address hangs until the timeout. Imperfect, and it only decides which sentence the user reads.
 export async function reach(origin: string, timeoutMs = 4000): Promise<Reach> {
+  return (await reachWhy(origin, timeoutMs)).reach;
+}
+
+/** `reach`, plus the page's own server's sentence when it refused a host (a 502), such as a
+ *  certificate that no longer matches its pin. A 503/504 from it is nothing answering. */
+export async function reachWhy(origin: string, timeoutMs = 4000): Promise<{ reach: Reach; said?: string }> {
   const started = performance.now();
   const abort = new AbortController();
   const timer = setTimeout(() => abort.abort(), timeoutMs);
@@ -82,9 +88,16 @@ export async function reach(origin: string, timeoutMs = 4000): Promise<Reach> {
       cache: "no-store",
       signal: abort.signal,
     });
-    return r.ok ? "ok" : "blocked";
+    if (r.status === 502) {
+      // Plain text is the page's server speaking; anything else (a proxy's HTML page) says nothing.
+      const plain = r.headers.get("content-type")?.startsWith("text/plain") ?? false;
+      const said = plain ? (await r.text().catch(() => "")).trim() : "";
+      return said ? { reach: "unreachable", said } : { reach: "unreachable" };
+    }
+    if (r.status === 503 || r.status === 504) return { reach: "unreachable" };
+    return { reach: r.ok ? "ok" : "blocked" };
   } catch {
-    return performance.now() - started < timeoutMs * 0.75 ? "blocked" : "unreachable";
+    return { reach: performance.now() - started < timeoutMs * 0.75 ? "blocked" : "unreachable" };
   } finally {
     clearTimeout(timer);
   }
@@ -164,6 +177,8 @@ export interface KnownHost {
   /** What someone here decided to call it. Outranks `name`: two machines on a network can
    *  report the same hostname, and only the person looking at them can tell them apart. */
   label?: string;
+  /** Where the plane is dialled when the API is reached through the page's server. */
+  plane?: string;
   seen?: number;
 }
 

@@ -77,7 +77,9 @@ export class Host {
    */
   async art(url: string): Promise<string | null> {
     if (/^https?:\/\//.test(url)) return url;
-    const res = await this.conn.fetch(`${this.origin}${url.startsWith("/") ? "" : "/"}${url}`, {
+    // Unbound: `window.fetch` called as a method of anything but `window` throws "Illegal invocation".
+    const fetch = this.conn.fetch;
+    const res = await fetch(`${this.origin}${url.startsWith("/") ? "" : "/"}${url}`, {
       cache: "no-store",
       headers: { authorization: await this.conn.credential.header() },
     });

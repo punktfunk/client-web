@@ -6,7 +6,8 @@ import { type JSX, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
-import { ago, bare, Centre, ErrorLine, Mark, Row, Sheet, status, Sub } from "./pieces.tsx";
+import { Logo } from "./brand.tsx";
+import { ago, bare, Centre, ErrorLine, Row, Sheet, status, Sub } from "./pieces.tsx";
 import type { Actions, HostCard, Screen } from "./types.ts";
 
 type HomeScreen = Extract<Screen, { kind: "home" }>;
@@ -16,7 +17,7 @@ export function Home({ screen, actions }: { screen: HomeScreen; actions: Actions
   return (
     <div className="mx-auto w-full max-w-5xl px-inset pb-inset">
       <header className="flex items-center gap-4 pt-inset">
-        <Mark />
+        <Logo animate />
         <span className="flex-1" />
         <Button size="sm" variant="secondary" onClick={() => actions.setAdding(true)}>Add a host</Button>
         <Button size="sm" variant="ghost" aria-label="Settings" onClick={() => actions.openSettings(true)}>
@@ -88,7 +89,7 @@ function HostTile({ host, actions, busy }: { host: HostCard; actions: Actions; b
               <Badge variant={state.tint} size="sm" dot>{state.text}</Badge>
               <span className="flex-1 truncate text-base font-semibold">{label}</span>
             </span>
-            <span className="font-mono text-sm text-muted-foreground">{bare(host.origin)}</span>
+            <span className="font-mono text-sm text-muted-foreground">{host.plane ?? bare(host.origin)}</span>
             <span className="mt-auto pt-2 text-xs text-muted-foreground/70">{ago(host.seen)}</span>
             {/* The pinned identity, short. What someone compares against the host's own screen
                 when they want to be sure this is the machine they think it is. */}

@@ -10,8 +10,9 @@
 // imports this library to show a host picker must not pay for it until someone connects.
 //
 // The order of the trust steps is the whole point and does not vary: reach the host, check its
-// attestation against what pairing stored, load the device key, *then* dial. Each step can only
-// fail in one direction, and a browser that has never paired simply has nothing to check.
+// attestation against what pairing stored, load the device key, *then* dial — and dial only to
+// pair or to stream. Each step can only fail in one direction, and a browser that has never paired
+// simply has nothing to check.
 
 import type { PunktfunkModule } from "./emscripten.ts";
 import { DeviceRefused, Host, type LibraryEntry, VersionSkew } from "./host.ts";
@@ -31,6 +32,8 @@ const CRED = { EMPTY: 0, READY: 1, NEEDS_SIGNATURE: 2, PAIRING: 3, PAIRED: 4, FA
 const SESSION = { IDLE: 0, OFFERED: 1, LIVE: 2, FAILED: 3 } as const;
 /** The host's application close codes this engine reads (`punktfunk_core::reject`). */
 const CLOSE = { PAIR_DENIED: 0x64, ACCESS_EXPIRED: 0x69, HOST_POWER: 0x6b } as const;
+/** pf-glue's code for a session that never opened: no host was heard at all. */
+const NEVER_OPENED = -2;
 
 /** How long `Offered` may last before the host is taken to have refused the credential. It
  *  closes the session without a message, so nothing else says so. */
@@ -171,6 +174,16 @@ export interface EngineOptions {
   readonly transportHost?: string;
 }
 
+/**
+ * A host reached through the page's own server (`punktfunk-client-web-server`), which proxies
+ * its management API: the API answers at `api`, and the browser still dials the plane at `plane`,
+ * a URL host (an IPv6 address in brackets).
+ */
+export interface HostTarget {
+  readonly api: string;
+  readonly plane: string;
+}
+
 export interface StreamOptions {
   width: number;
   height: number;
@@ -184,6 +197,10 @@ export class Engine {
   private state: EngineState = { kind: "idle" };
   private readonly listeners = new Set<(s: EngineState) => void>();
   private origin: string | null = null;
+  /** What `connect` was last given, so the engine's own reconnects reach the host the same way. */
+  private target: string | HostTarget | null = null;
+  /** Where the plane is dialled for the current connection. */
+  private planeHost: string | null = null;
   private plane: pf.Plane | null = null;
   private video: VideoPipe | null = null;
   private input: InputPipe | null = null;
@@ -207,6 +224,8 @@ export class Engine {
   private running = true;
   /** A PIN given while the connection was down, sent when the next control stream opens. */
   private pendingPin: string | null = null;
+  /** A stream asked for from `ready`, sent as `Hello` when the dial it started opens. */
+  private pendingStream: StreamOptions | null = null;
 
   private constructor(
     private readonly mod: PunktfunkModule,
@@ -222,7 +241,7 @@ export class Engine {
       advancedStats: opts.advancedStats ?? TUNABLE_DEFAULTS.advancedStats,
     };
     if (opts.uiCanvas) mod.__pfUiCanvas = opts.uiCanvas;
-    mod.__pfOnDeviceReady = () => this.dial();
+    mod.__pfOnDeviceReady = () => this.onDeviceReady();
     mod.__pfOnCtlReady = () => this.onControlStream();
     mod.__pfOnClosed = (code, reason) => this.onClosed(code, reason);
     mod.__pfOnRefused = (code, reason) => this.onClosed(code, reason);
@@ -263,25 +282,37 @@ export class Engine {
 
   // --- verbs ---------------------------------------------------------------------------
   /**
-   * Reach a host, check it, load the device key and dial. Every failure is a state, not a
+   * Reach a host, check it and load the device key; `ready` or `needs-pairing` follows without a
+   * dial. Every failure is a state, not a
    * throw: the consumer renders `blocked`, `unreachable`, `untrusted` or `error`, and each
    * says what a person can do about it.
    */
-  async connect(address: string): Promise<void> {
+  async connect(address: string | HostTarget): Promise<void> {
     let origin: string;
-    try {
-      origin = pf.originOf(address);
-    } catch (e) {
-      return this.set({ kind: "bad-address", input: address, message: message(e) });
+    if (typeof address === "string") {
+      try {
+        origin = pf.originOf(address);
+      } catch (e) {
+        return this.set({ kind: "bad-address", input: address, message: message(e) });
+      }
+    } else {
+      origin = address.api.replace(/\/+$/, "");
     }
     this.reset();
     this.origin = origin;
+    this.target = address;
+    this.planeHost =
+      typeof address === "string"
+        ? (this.opts.transportHost ?? new URL(origin).hostname)
+        : address.plane;
     this.set({ kind: "reaching", origin });
 
     // Tell "certificate not accepted" apart from "nothing there" before saying anything: the two
     // are the same opaque error, and only one of them has a fix a person can follow.
-    const state = await pf.reach(origin);
-    if (state === "unreachable") return this.set({ kind: "unreachable", origin });
+    const { reach: state, said } = await pf.reachWhy(origin);
+    if (state === "unreachable") {
+      return said ? this.set({ kind: "error", origin, message: said }) : this.set({ kind: "unreachable", origin });
+    }
     if (state === "blocked") {
       return this.set({ kind: "blocked", origin, acceptUrl: pf.acceptUrl(origin) });
     }
@@ -290,6 +321,15 @@ export class Engine {
       this.plane = await pf.fetchPlane(origin);
     } catch (e) {
       return this.set({ kind: "error", origin, message: message(e) });
+    }
+    // Pairing keeps the identity the attestation names. Without one, every pairing is lost at once.
+    if (!this.plane.cert_hash_sig || !this.plane.host_cert_der) {
+      return this.set({
+        kind: "error",
+        origin,
+        message:
+          "this host still has its older identity, which a browser can't pair with. Moving it to the new one means unpairing its other devices, restarting it and pairing them again",
+      });
     }
 
     const known = pf.hosts.fingerprint(origin);
@@ -302,7 +342,7 @@ export class Engine {
         return this.set({ kind: "untrusted", origin, reason: message(e) });
       }
     }
-    pf.hosts.remember(origin, {});
+    pf.hosts.remember(origin, typeof this.target === "object" && this.target ? { plane: this.target.plane } : {});
     this.set({ kind: "connecting", origin });
     // The key BEFORE the connection: the host may ask for a signature the moment the control
     // stream opens, and a key still coming out of IndexedDB would miss it.
@@ -322,7 +362,10 @@ export class Engine {
     if (!origin) return;
     switch (this.state.kind) {
       case "needs-pairing":
-        this.sendPairRequest(pin);
+        // Nothing is dialled while the PIN is typed; the request goes as the control stream opens.
+        this.pendingPin = pin;
+        this.set({ kind: "pairing", origin });
+        this.dial();
         return;
       case "forgotten":
       case "pair-refused": {
@@ -331,7 +374,7 @@ export class Engine {
         // reconnect back through the credential the host just refused.
         pf.hosts.unpair(origin);
         this.mod._pf_wt_close?.();
-        void this.connect(origin);
+        void this.connect(this.target ?? origin);
         return;
       }
       default:
@@ -349,7 +392,7 @@ export class Engine {
   }
 
   /**
-   * Start streaming. Valid from `ready`.
+   * Start streaming. Valid from `ready`. Dials the plane; `Hello` goes as its control stream opens.
    *
    * `launch` names a library title to open (its `id`); the host resolves it on the real-display
    * source and streams the desktop otherwise. Left unset, the desktop streams.
@@ -363,6 +406,11 @@ export class Engine {
     this.lastDropped = 0;
     this.launchNotice = null;
     this.set({ kind: "starting", origin: this.origin });
+    this.pendingStream = opts;
+    this.dial();
+  }
+
+  private hello(opts: StreamOptions): void {
     const id = opts.launch?.id ?? "";
     withStr(this.mod, [id], (p, len) =>
       this.mod._pf_session_hello(opts.width, opts.height, opts.fps ?? 60, opts.bitrateKbps ?? 20000, id ? p : 0, id ? len : 0),
@@ -485,14 +533,29 @@ export class Engine {
     this.pairing = false;
     this.settled = false;
     this.offeredSince = 0;
+    this.pendingStream = null;
     // `pendingPin` survives: it is set right before the reconnect that calls this.
   }
 
-  /** The device key is loaded and the wasm side holds its SPKI. Dial now, not before. */
+  /**
+   * The device key is loaded. The plane is dialled only to pair or to stream: the host gives a
+   * session ten seconds to speak, so a browser looking at the library holds none, and `ready`
+   * comes from pairing records here plus the management API.
+   */
+  private onDeviceReady(): void {
+    const origin = this.origin;
+    if (!origin) return;
+    if (this.pendingPin || this.pendingStream) return this.dial();
+    const fingerprint = pf.hosts.fingerprint(origin);
+    const device = this.mod.__pfDevice;
+    if (!fingerprint || !device) return this.set({ kind: "needs-pairing", origin });
+    this.checkHost(origin, fingerprint, device);
+  }
+
+  /** Open the plane. Only after `onDeviceReady`: the wasm side must already hold the key's SPKI. */
   private dial(): void {
     if (!this.origin || !this.plane) return;
-    const hostname = this.opts.transportHost ?? new URL(this.origin).hostname;
-    const url = `https://${hostname}:${this.plane.port}/stream`;
+    const url = `https://${this.planeHost}:${this.plane.port}/stream`;
     const ok = withStr(this.mod, [url, this.plane.cert_hash_sha256], (u, _ul, h) =>
       this.mod._pf_wt_connect(u, h),
     );
@@ -501,22 +564,25 @@ export class Engine {
     }
   }
 
+  /** The control stream is open: say at once what this dial was for. */
   private onControlStream(): void {
     const origin = this.origin;
     if (!origin) return;
-    const fingerprint = pf.hosts.fingerprint(origin);
-    const device = this.mod.__pfDevice;
-    if (!fingerprint || !device) {
-      // Never paired with this host. The stream would be refused unless the host was started
-      // with `serve --open`, so say so rather than let it fail silently.
-      this.set({ kind: "needs-pairing", origin });
-      const pin = this.pendingPin;
-      this.pendingPin = null;
-      if (pin) this.sendPairRequest(pin);
-      return;
-    }
-    // The management API is what knows whether the host still accepts this device, so `ready`
-    // waits for it. Refused: unpaired there. Any other failure leaves streaming possible.
+    const stream = this.pendingStream;
+    this.pendingStream = null;
+    if (stream) return this.hello(stream);
+    const pin = this.pendingPin;
+    this.pendingPin = null;
+    if (pin) return this.sendPairRequest(pin);
+    // A dial with nothing to say would be closed by the host within ten seconds anyway.
+    this.mod._pf_wt_close?.();
+  }
+
+  /**
+   * The management API is what knows whether the host still accepts this device, so `ready`
+   * waits for it. Refused: unpaired there. Any other failure leaves streaming possible.
+   */
+  private checkHost(origin: string, fingerprint: string, device: NonNullable<PunktfunkModule["__pfDevice"]>): void {
     const host = new Host(origin, fingerprint, device);
     this.host = host;
     void host.info().then(
@@ -541,12 +607,21 @@ export class Engine {
    * plane first, then the transport's own close — and the first one settles the state: the
    * second finds it already in a terminal kind and leaves it. The host closes after every pairing
    * ceremony (nothing to say), refuses with a reason (say it), or drops a live session (say
-   * that). A close in `idle` is this engine's own `disconnect`.
+   * that). A dial that never opened names the port to check. A close in `idle` is this engine's
+   * own `disconnect`.
    */
   private onClosed(code: number, reason: string): void {
     const origin = this.origin;
     if (!origin || this.state.kind === "idle") return;
     const said = reason.trim();
+    if (code === NEVER_OPENED) {
+      this.stopSession();
+      return this.set({
+        kind: "error",
+        origin,
+        message: `couldn't reach the host on UDP ${this.plane?.port}, its browser streaming port. Check that nothing between this device and the host blocks it`,
+      });
+    }
     switch (this.state.kind) {
       case "pairing":
         // The ceremony's own verdict (`PairResult`) is authoritative; a close with a reason and
