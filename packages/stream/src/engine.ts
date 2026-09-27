@@ -17,7 +17,7 @@
 import type { PunktfunkModule } from "./emscripten.ts";
 import { DeviceRefused, Host, type LibraryEntry, VersionSkew } from "./host.ts";
 import * as pf from "./pf-connect.ts";
-import { decodableCodecs, decodeSupported, VideoPipe } from "./video.ts";
+import { type Decodable, decodableCodecs, decodeSupported, hdrDisplay, VideoPipe } from "./video.ts";
 import { InputPipe } from "./input.ts";
 import { AudioPipe, type AudioSnapshot } from "./audio.ts";
 import { STATS_TIERS, type StatsTier } from "./settings.ts";
@@ -230,6 +230,8 @@ export class Engine {
   private constructor(
     private readonly mod: PunktfunkModule,
     private readonly opts: EngineOptions,
+    /** What this browser decodes, probed once at `create`. */
+    private readonly codecs: Decodable = { mask: 1, tenBit: false },
   ) {
     this.tunable = {
       videoBackend: opts.videoBackend ?? TUNABLE_DEFAULTS.videoBackend,
@@ -260,8 +262,7 @@ export class Engine {
       throw new Error("this browser cannot decode video (no WebCodecs)");
     }
     const [mod, codecs] = await Promise.all([loadModule(), decodableCodecs()]);
-    mod._pf_session_codecs?.(codecs);
-    return new Engine(mod, opts);
+    return new Engine(mod, opts, codecs);
   }
 
   // --- observation ---------------------------------------------------------------------
@@ -400,6 +401,10 @@ export class Engine {
    */
   startStream(opts: StreamOptions): void {
     if (!this.origin || this.state.kind !== "ready") return;
+    // HDR is offered per stream: the window may have moved to another display, and the plane
+    // may have been switched to WebGL2, since the last one.
+    const hdr = this.codecs.tenBit && hdrDisplay(this.tunable.videoBackend);
+    this.mod._pf_session_codecs?.(this.codecs.mask, hdr ? 1 : 0);
     this.video ??= new VideoPipe(this.mod, this.opts.videoCanvas, this.tunable.videoBackend);
     this.video.attach();
     this.tier = this.tunable.statsTier;

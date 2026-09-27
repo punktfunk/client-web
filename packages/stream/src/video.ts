@@ -30,27 +30,62 @@ const CODEC_STRING: Record<number, string> = {
   [CODEC_AV1]: "av01.0.13M.08",
 };
 
+/** The same at 10 bits (HEVC Main 10, AV1 Main 10-bit), which an HDR stream is. */
+const CODEC_STRING_10: Record<number, string> = {
+  [CODEC_HEVC]: "hev1.2.4.L153.B0",
+  [CODEC_AV1]: "av01.0.13M.10",
+};
+
+const codecString = (codec: number, depth: number): string =>
+  (depth > 8 ? CODEC_STRING_10[codec] : undefined) ?? CODEC_STRING[codec] ?? CODEC_STRING[CODEC_H264]!;
+
+/** What this browser decodes: `CODEC_*` bits, and whether every one of them past H.264 also
+ *  decodes at 10 bits, which is what an HDR stream needs. */
+export interface Decodable {
+  mask: number;
+  tenBit: boolean;
+}
+
 /**
- * The codecs this browser decodes in hardware, as `CODEC_*` bits: H.264 always, HEVC and AV1
- * when `isConfigSupported` says so. Hardware only, because a software HEVC or AV1 decode of a
- * game stream falls behind where H.264 would not.
+ * The codecs this browser decodes in hardware: H.264 always, HEVC and AV1 when
+ * `isConfigSupported` says so. Hardware only, because a software HEVC or AV1 decode of a game
+ * stream falls behind where H.264 would not.
  */
-export async function decodableCodecs(): Promise<number> {
-  let mask = CODEC_H264;
-  for (const codec of [CODEC_HEVC, CODEC_AV1]) {
+export async function decodableCodecs(): Promise<Decodable> {
+  const ok = async (codec: string): Promise<boolean> => {
     try {
       const { supported } = await VideoDecoder.isConfigSupported({
-        codec: CODEC_STRING[codec]!,
+        codec,
         codedWidth: 1920,
         codedHeight: 1080,
         hardwareAcceleration: "prefer-hardware",
       });
-      if (supported) mask |= codec;
+      return supported === true;
     } catch {
       // An engine that throws on a codec string it does not know simply does not decode it.
+      return false;
     }
+  };
+  let mask = CODEC_H264;
+  let tenBit = true;
+  for (const codec of [CODEC_HEVC, CODEC_AV1]) {
+    if (!(await ok(CODEC_STRING[codec]!))) continue;
+    mask |= codec;
+    tenBit &&= await ok(CODEC_STRING_10[codec]!);
   }
-  return mask;
+  return { mask, tenBit: tenBit && mask !== CODEC_H264 };
+}
+
+/** Can this page show an HDR stream now: a display in high dynamic range and a WebGPU plane,
+ *  the only route to one that ships. */
+export function hdrDisplay(backend: "auto" | "webgl2" | "webgpu"): boolean {
+  return (
+    backend !== "webgl2" &&
+    typeof navigator !== "undefined" &&
+    "gpu" in navigator &&
+    typeof matchMedia === "function" &&
+    matchMedia("(dynamic-range: high)").matches
+  );
 }
 
 export interface VideoStats {
@@ -108,6 +143,9 @@ export class VideoPipe {
   /** A fresh decoder takes a key frame first; deltas before one are refused. */
   private needKey = true;
   private codec = 0;
+  /** `Welcome`'s bit depth and whether it is HDR, for the decoder string and the plane. */
+  private depth = 8;
+  private hdr = false;
   private lastRebuildMs = 0;
   /** When `pending` left the decoder, for the overlay's display stage. */
   private pendingDecodedMs = 0;
@@ -131,7 +169,9 @@ export class VideoPipe {
 
   /** Install the callbacks the glue calls. Idempotent, so a reconnect can call it again. */
   attach(): void {
-    this.mod.__pfOnVideoConfig = (codec, width, height) => {
+    this.mod.__pfOnVideoConfig = (codec, width, height, depth, hdr) => {
+      this.depth = depth;
+      this.hdr = hdr;
       void this.configure(codec, width, height);
     };
     this.mod.__pfOnAccessUnit = (data, ptsUs, key, flags) => this.submit(data, ptsUs, key, flags);
@@ -147,6 +187,7 @@ export class VideoPipe {
       this.stats.backend = made.backend;
     }
     this.plane.configure(width, height);
+    this.plane.setDynamicRange(this.hdr ? "high" : "standard");
 
     this.codec = codec;
     this.decoder?.close();
@@ -163,7 +204,7 @@ export class VideoPipe {
     // No `description`: the host sends parameter sets inline with every key frame, which is what
     // lets a browser join a stream already in progress.
     decoder.configure({
-      codec: CODEC_STRING[codec] ?? CODEC_STRING[CODEC_H264]!,
+      codec: codecString(codec, this.depth),
       codedWidth: width,
       codedHeight: height,
       optimizeForLatency: true,

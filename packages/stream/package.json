@@ -29,7 +29,7 @@
     "build:lib": "tsdown && cp wasm/punktfunk_client_web.wasm dist/",
     "build": "npm run build:wasm && npm run build:lib",
     "check": "tsc --noEmit",
-    "test": "node --test src/*.test.ts"
+    "test": "node --experimental-transform-types --disable-warning=ExperimentalWarning --test src/*.test.ts"
   },
   "dependencies": {
     "@punktfunk/host": "^0.3.1",

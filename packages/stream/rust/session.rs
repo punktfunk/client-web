@@ -67,6 +67,10 @@ struct Client {
     /// `Welcome::audio_channels`: what the Opus frames carry. The page's decoder is configured
     /// from it.
     audio_channels: u8,
+    /// `Welcome`'s bit depth and whether its colour is HDR: the decoder string and the plane's
+    /// dynamic range follow them.
+    depth: u8,
+    hdr: bool,
     /// Access units delivered, so the page can tell "connected" from "streaming".
     frames: u64,
     /// The stats overlay's window. No clock handshake runs in a browser, so its offset stays
@@ -105,6 +109,8 @@ impl Client {
             height: 0,
             host_caps: 0,
             audio_channels: 0,
+            depth: 8,
+            hdr: false,
             frames: 0,
             hud: new_hud(),
             receipts: VecDeque::with_capacity(RECEIPTS),
@@ -186,18 +192,20 @@ pub fn host_caps() -> u8 {
 
 thread_local! {
     static CLIENT: RefCell<Client> = RefCell::new(Client::new());
-    /// What this browser decodes, as `Hello` offers it. A capability of the page, not of one
-    /// session, so a reset leaves it.
+    /// What this browser decodes, and whether it can show HDR10, as the next `Hello` offers them.
+    /// The page's to say, not one session's, so a reset leaves them.
     static CODECS: std::cell::Cell<u8> = const { std::cell::Cell::new(punktfunk_core::quic::CODEC_H264) };
+    static HDR: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
-/// The codecs this browser decodes (`CODEC_*` bits), from the page's `isConfigSupported` probe.
-/// H.264 is always kept: a GPU-less host has nothing else.
+/// The codecs this browser decodes (`CODEC_*` bits), from the page's `isConfigSupported` probe,
+/// and whether it presents BT.2020 PQ. H.264 is always kept: a GPU-less host has nothing else.
 #[unsafe(no_mangle)]
-pub extern "C" fn pf_session_codecs(mask: u32) {
+pub extern "C" fn pf_session_codecs(mask: u32, hdr: u32) {
     let supported = punktfunk_core::quic::CODEC_HEVC | punktfunk_core::quic::CODEC_AV1;
     let offered = (mask as u8 & supported) | punktfunk_core::quic::CODEC_H264;
     CODECS.with(|c| c.set(offered));
+    HDR.with(|h| h.set(hdr != 0));
 }
 
 unsafe extern "C" {
@@ -207,7 +215,7 @@ unsafe extern "C" {
     /// page copies what it needs before returning, and no pixel comes back.
     fn pf_video_au(ptr: *const u8, len: u32, pts_us: f64, key: i32, flags: u32);
     /// The negotiated format, once `Welcome` has been read.
-    fn pf_video_config(codec: u32, width: u32, height: u32);
+    fn pf_video_config(codec: u32, width: u32, height: u32, depth: u32, hdr: u32);
     /// The host said why it is closing. `reason` is UTF-8, borrowed for the call.
     fn pf_refused(code: u32, reason: *const u8, len: u32);
     /// The host's sentence for a launch that did not give the player their game. UTF-8,
@@ -284,7 +292,12 @@ pub unsafe extern "C" fn pf_session_hello(
             // of an access unit, and `VideoDecoder` wants whole ones.
             // `HOST_TIMING`: the host's own share of each frame, which the overlay reports.
             video_caps: punktfunk_core::quic::VIDEO_CAP_PROBE_SEQ
-                | punktfunk_core::quic::VIDEO_CAP_HOST_TIMING,
+                | punktfunk_core::quic::VIDEO_CAP_HOST_TIMING
+                | if HDR.with(std::cell::Cell::get) {
+                    punktfunk_core::quic::VIDEO_CAP_10BIT | punktfunk_core::quic::VIDEO_CAP_HDR
+                } else {
+                    0
+                },
             audio_channels: 2,
             // H.264 only for now: it is what a GPU-less host can encode, and what every engine
             // decodes. HEVC and AV1 wait until there is a stream to test them against.
@@ -404,7 +417,7 @@ pub unsafe extern "C" fn pf_ctl_recv(ptr: *const u8, len: u32) {
                     c.width = r.mode.width;
                     c.height = r.mode.height;
                     // SAFETY: plain integers to a JavaScript function that returns before this does.
-                    unsafe { pf_video_config(u32::from(c.codec), c.width, c.height) };
+                    unsafe { video_config(&c) };
                 }
             } else if let Ok(r) = Refused::decode(&body) {
                 // SAFETY: the string is borrowed for a call into JavaScript that copies it.
@@ -425,6 +438,8 @@ fn on_welcome(c: &mut Client, welcome: Welcome) {
     c.width = welcome.mode.width;
     c.height = welcome.mode.height;
     c.host_caps = welcome.host_caps;
+    c.depth = welcome.bit_depth;
+    c.hdr = welcome.color.is_hdr();
     c.audio_channels = welcome.audio_channels;
     c.gate = ReanchorGate::new(0);
     c.next_index = None;
@@ -437,7 +452,7 @@ fn on_welcome(c: &mut Client, welcome: Welcome) {
             // to name — `Start` still marks "begin streaming".
             write_msg(&Start { client_udp_port: 0 }.encode());
             // SAFETY: plain integers to a JavaScript function that returns before this does.
-            unsafe { pf_video_config(u32::from(c.codec), c.width, c.height) };
+            unsafe { video_config(c) };
             println!(
                 "punktfunk-web: session live, codec {} at {}x{}",
                 c.codec, c.width, c.height
@@ -758,6 +773,23 @@ fn av1_is_keyframe(tu: &[u8]) -> bool {
         i = i.saturating_add(size);
     }
     false
+}
+
+/// Point the page's decoder and plane at what the host now sends.
+///
+/// # Safety
+/// Calls into JavaScript with plain integers; nothing is borrowed across the call.
+unsafe fn video_config(c: &Client) {
+    // SAFETY: plain integers to a JavaScript function that returns before this does.
+    unsafe {
+        pf_video_config(
+            u32::from(c.codec),
+            c.width,
+            c.height,
+            u32::from(c.depth),
+            u32::from(c.hdr),
+        )
+    };
 }
 
 /// An OBU size: the value and how many bytes it took. `None` past eight bytes, as the spec caps it.

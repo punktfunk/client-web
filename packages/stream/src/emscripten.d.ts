@@ -27,7 +27,7 @@ export interface PunktfunkModule {
   _pf_ctl_recv(ptr: number, len: number): void;
 
   // --- the session -----------------------------------------------------------------------
-  _pf_session_codecs?(mask: number): void;
+  _pf_session_codecs?(mask: number, hdr: number): void;
   _pf_session_hello(width: number, height: number, fps: number, bitrateKbps: number, launchPtr: number, launchLen: number): number;
   /** Drain the ring and hand each finished access unit to the page. Returns how many. */
   _pf_session_pump(): number;
@@ -120,7 +120,7 @@ export interface PunktfunkModule {
   /** The host's sentence for a launch that did not give the player their game. */
   __pfOnLaunchNotice?: (text: string) => void;
   /** The negotiated video format, once `Welcome` has been read. */
-  __pfOnVideoConfig?: (codec: number, width: number, height: number) => void;
+  __pfOnVideoConfig?: (codec: number, width: number, height: number, depth: number, hdr: boolean) => void;
   /** One access unit. The bytes are copied out of wasm memory before this is called. */
   __pfOnAccessUnit?: (data: Uint8Array, ptsUs: number, key: boolean, flags: number) => void;
   /** One Opus frame, in order, for the page's decoder. */
