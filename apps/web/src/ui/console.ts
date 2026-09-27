@@ -192,8 +192,10 @@ export class ConsoleUi implements Ui {
     }
     const showing = this.showing();
     // The canvas takes the pointer only while the console is on it; over a stream the pointer
-    // is the game's.
+    // is the game's, and the empty canvas leaves the compositor too, so each video frame is not
+    // blended under a transparent full-window layer.
     this.canvas.style.pointerEvents = showing ? "auto" : "none";
+    this.canvas.style.visibility = showing ? "" : "hidden";
     this.leave.hidden = !showing;
   }
 
