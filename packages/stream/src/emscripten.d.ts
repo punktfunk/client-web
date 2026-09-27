@@ -27,6 +27,9 @@ export interface PunktfunkModule {
   _pf_ctl_recv(ptr: number, len: number): void;
 
   // --- the session -----------------------------------------------------------------------
+  _pf_session_access_seq?(): number;
+  _pf_session_access_grants?(): number;
+  _pf_session_access_secs?(): number;
   _pf_session_hello(width: number, height: number, fps: number, bitrateKbps: number, launchPtr: number, launchLen: number): number;
   /** Drain the ring and hand each finished access unit to the page. Returns how many. */
   _pf_session_pump(): number;

@@ -14,6 +14,7 @@
 // pair or to stream. Each step can only fail in one direction, and a browser that has never paired
 // simply has nothing to check.
 
+import { chipText, updateNotice } from "./access.ts";
 import type { PunktfunkModule } from "./emscripten.ts";
 import { DeviceRefused, Host, type LibraryEntry, VersionSkew } from "./host.ts";
 import * as pf from "./pf-connect.ts";
@@ -68,6 +69,10 @@ export interface SessionStats {
   /** The host's sentence for a launch that did not give the player their game, for
    *  `LAUNCH_NOTICE_MS` after it arrives. */
   launchNotice?: string;
+  /** This device's access when it is limited or ends (`Controller only · ends in 12 m`). */
+  access?: string;
+  /** A change to that access, or the host's warning before it ends, while it shows. */
+  accessNotice?: string;
 }
 
 /** Long enough to read a sentence with its cause. */
@@ -222,6 +227,10 @@ export class Engine {
   private lastDropped = 0;
   /** The last launch notice and when it arrived (`performance.now()`). */
   private launchNotice: { text: string; at: number } | null = null;
+  /** The session's last access advert, read when its counter moves, with its deadline on
+   *  `performance.now()` (`null` permanent); and the last notice one made. */
+  private access: { seq: number; grants: number; deadline: number | null } = { seq: 0, grants: 0, deadline: null };
+  private accessNotice: { text: string; at: number } | null = null;
   private running = true;
   /** A PIN given while the connection was down, sent when the next control stream opens. */
   private pendingPin: string | null = null;
@@ -413,6 +422,8 @@ export class Engine {
     this.hud = [];
     this.lastDropped = 0;
     this.launchNotice = null;
+    this.access = { seq: 0, grants: 0, deadline: null };
+    this.accessNotice = null;
     this.set({ kind: "starting", origin: this.origin });
     this.pendingStream = opts;
     this.dial();
@@ -798,6 +809,7 @@ export class Engine {
     }
 
     const now = performance.now();
+    this.readAccess(now);
     const frames = this.mod._pf_session_frames();
     if (now - this.lastSecond >= 1000) {
       this.fps = Math.round(((frames - this.lastFrames) * 1000) / (now - this.lastSecond));
@@ -828,8 +840,29 @@ export class Engine {
         ...(this.launchNotice && now - this.launchNotice.at < LAUNCH_NOTICE_MS
           ? { launchNotice: this.launchNotice.text }
           : {}),
+        ...this.accessStats(now),
       },
     });
+  }
+
+  /** Take a new access advert. The first is `Welcome`'s: it sets the chip and says nothing. */
+  private readAccess(now: number): void {
+    const seq = this.mod._pf_session_access_seq?.() ?? 0;
+    if (seq === this.access.seq) return;
+    const grants = this.mod._pf_session_access_grants?.() ?? 0;
+    const secs = this.mod._pf_session_access_secs?.() ?? 0;
+    if (this.access.seq) {
+      const text = updateNotice(this.access.grants, grants, secs || null);
+      if (text) this.accessNotice = { text, at: now };
+    }
+    this.access = { seq, grants, deadline: secs ? now + secs * 1000 : null };
+  }
+
+  private accessStats(now: number): Pick<SessionStats, "access" | "accessNotice"> {
+    const { seq, grants, deadline } = this.access;
+    const chip = seq ? chipText(grants, deadline === null ? null : (deadline - now) / 1000) : undefined;
+    const notice = this.accessNotice && now - this.accessNotice.at < LAUNCH_NOTICE_MS ? this.accessNotice.text : undefined;
+    return { ...(chip ? { access: chip } : {}), ...(notice ? { accessNotice: notice } : {}) };
   }
 }
 

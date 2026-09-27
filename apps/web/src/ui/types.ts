@@ -33,6 +33,10 @@ export interface SessionStats {
   hud?: HudLine[];
   /** The host's sentence for a launch that did not give the player their game, while it shows. */
   launchNotice?: string;
+  /** This device's access when it is limited or ends. */
+  access?: string;
+  /** A change to that access, or the warning before it ends, while it shows. */
+  accessNotice?: string;
 }
 
 /**

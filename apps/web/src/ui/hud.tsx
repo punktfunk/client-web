@@ -73,6 +73,7 @@ export function Hud({ screen, actions }: { screen: Extract<Screen, { kind: "stre
           <Badge variant={q.tint} size="sm" dot>{q.text}</Badge>
         </button>
         <span className="font-semibold">{bare(stats.origin)}</span>
+        {stats.access && <Badge variant="outline" size="sm">{stats.access}</Badge>}
         <span className="hidden text-muted-foreground tabular-nums sm:inline">{line}</span>
         <span className="h-4 w-px bg-border" aria-hidden="true" />
         <Button size="sm" variant="ghost" aria-pressed={stats.pointerCaptured} onClick={() => actions.toggleCapture()}>
@@ -86,11 +87,12 @@ export function Hud({ screen, actions }: { screen: Extract<Screen, { kind: "stre
       </div>
       {screen.menu && <QuickMenu screen={screen} actions={actions} />}
       {screen.diagnostics && <Diagnostics stats={stats} />}
-      {/* The host's word on a launch that did not give the player their game. */}
-      {stats.launchNotice && (
+      {/* The host's word on a launch that did not give the player their game, or on this
+          device's access changing or about to end. */}
+      {(stats.launchNotice ?? stats.accessNotice) && (
         <div role="status" className="pointer-events-none fixed inset-x-0 bottom-[20%] flex justify-center px-inset animate-in fade-in slide-in-from-bottom-2">
           <span className="max-w-[40rem] rounded-full bg-card/85 px-4 py-2 text-center text-sm backdrop-blur-xl">
-            {stats.launchNotice}
+            {stats.launchNotice ?? stats.accessNotice}
           </span>
         </div>
       )}
