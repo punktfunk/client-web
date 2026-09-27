@@ -96,6 +96,8 @@ export type Screen =
       art: Map<string, string>;
       /** What the host is running right now, when something is. */
       running?: string;
+      /** The host sheet, while it is open: the actions this device may run, and the send-log line. */
+      tools?: HostTools;
       /** That title's library entry, when it has one: streaming it picks the game back up. */
       resume?: LibraryEntry;
       error?: string;
@@ -110,6 +112,13 @@ export type Screen =
   | { kind: "settings"; values: Settings; streaming: boolean }
   /** `retry` marks an error worth trying again from, which most network ones are. */
   | { kind: "error"; head: string; text: string; retry?: boolean };
+
+/** The host sheet: power actions as this device sees them, and what the last step said. */
+export interface HostTools {
+  actions: Array<{ id: string; title: string; danger: boolean; enabled: boolean; reason?: string }>;
+  busy: boolean;
+  note?: string;
+}
 
 /** What a renderer may ask the client to do. Nothing here returns a result: the answer arrives
  *  as the next `render`, which is what keeps a renderer stateless. */
@@ -127,6 +136,10 @@ export interface Actions {
    *  to the management API, so this is the first screen with anything to choose. */
   play(entry?: LibraryEntry): void;
   forget(origin: string): void;
+  /** The host sheet on the library: its power actions, and sending this page's log. */
+  openTools(on: boolean): void;
+  hostAction(id: string): void;
+  sendLog(): void;
   /** Send a host the magic packet, through the page's server. */
   wake(origin: string): void;
   /** Name a host something this browser will remember. An empty label drops the name. */

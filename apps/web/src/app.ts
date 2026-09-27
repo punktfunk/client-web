@@ -10,12 +10,15 @@
 // this file.
 
 import {
+  captureLog,
   Engine,
+  type Host,
   type EngineState,
   type HostTarget,
   hosts,
   originOf,
   type LibraryEntry,
+  pageLog,
   type Reach,
   reach,
   type Settings,
@@ -24,7 +27,7 @@ import {
 } from "@punktfunk/stream";
 import { ConsoleUi } from "./ui/console.ts";
 import { WebShell } from "./ui/shell.tsx";
-import type { HostCard, Screen, Ui } from "./ui/types.ts";
+import type { HostCard, HostTools, Screen, Ui } from "./ui/types.ts";
 
 /** How long a reachability probe is believed. Long enough that returning to the home screen
  *  does not re-probe every host, short enough that a machine woken in the meantime shows up. */
@@ -50,6 +53,9 @@ class App {
    *  that host spinning for ever instead of saying so. */
   private libraryLoaded = false;
   private hostName: string | undefined;
+  /** The management API of the host the library is open for, and the host sheet when open. */
+  private hostApi: Host | null = null;
+  private tools: HostTools | null = null;
   private running: string | undefined;
   /** The running title's library id, which is what `Resume` launches. */
   private runningId: string | undefined;
@@ -101,6 +107,9 @@ class App {
       back: () => engine.disconnect(),
       play: (entry) => this.play(entry),
       forget: (origin) => this.forget(origin),
+      openTools: (on) => void this.openTools(on),
+      hostAction: (id) => void this.hostAction(id),
+      sendLog: () => void this.sendLog(),
       wake: (origin) => void this.wake(origin),
       disconnect: (quit) => {
         this.menuOpen = false;
@@ -374,6 +383,7 @@ class App {
   // --- the library ---------------------------------------------------------------------
   private async openLibrary(s: Extract<EngineState, { kind: "ready" }>): Promise<void> {
     this.libraryFor = s.origin;
+    this.hostApi = s.host;
     this.libraryLoaded = false;
     this.entries = [];
     try {
@@ -441,9 +451,72 @@ class App {
       busy: this.libraryFor === s.origin && !this.libraryLoaded,
       ...(this.hostName ? { host: this.hostName } : {}),
       ...(this.running ? { running: this.running } : {}),
+      ...(this.tools ? { tools: this.tools } : {}),
       ...this.resumable(),
       ...(error ? { error: `${sentence(error)} You can still stream the desktop.` } : {}),
     });
+  }
+
+  // --- the host sheet ---------------------------------------------------------------------
+  /** Open the sheet and ask the host what this device may do to it. */
+  private async openTools(on: boolean): Promise<void> {
+    this.tools = on ? { actions: [], busy: true } : null;
+    this.redrawTools();
+    const host = this.hostApi;
+    if (!on || !host) return;
+    try {
+      // `display.next` moves a live stream to another monitor: nothing to offer from the library.
+      const actions = (await host.actions()).filter((a) => a.id !== "display.next");
+      this.setTools({
+        busy: false,
+        actions: actions.map((a) => ({
+          id: a.id,
+          title: a.title,
+          danger: a.danger,
+          enabled: a.available && a.permitted,
+          ...(a.available && a.permitted
+            ? {}
+            : { reason: a.available ? "This device's access does not include it" : (a.unavailable_reason ?? "Not on this host") }),
+        })),
+      });
+    } catch (e) {
+      this.setTools({ busy: false, note: sentence(e instanceof Error ? e.message : String(e)) });
+    }
+  }
+
+  private async hostAction(id: string): Promise<void> {
+    const host = this.hostApi;
+    if (!host || !this.tools) return;
+    this.setTools({ busy: true });
+    try {
+      await host.invoke(id);
+      this.setTools({ busy: false, note: "Done. The host is doing it now, and ends every stream first." });
+    } catch (e) {
+      this.setTools({ busy: false, note: sentence(e instanceof Error ? e.message : String(e)) });
+    }
+  }
+
+  private async sendLog(): Promise<void> {
+    const host = this.hostApi;
+    if (!host || !this.tools) return;
+    this.setTools({ busy: true });
+    try {
+      const id = await host.uploadLog(pageLog());
+      this.setTools({ busy: false, note: `Sent. The host's console lists it under this device as ${id}.` });
+    } catch (e) {
+      this.setTools({ busy: false, note: sentence(e instanceof Error ? e.message : String(e)) });
+    }
+  }
+
+  private setTools(patch: Partial<HostTools>): void {
+    if (!this.tools) return;
+    this.tools = { ...this.tools, ...patch };
+    this.redrawTools();
+  }
+
+  private redrawTools(): void {
+    const now = this.engine.current;
+    if (now.kind === "ready") this.redrawLibrary(now);
   }
 
   /** The running title's entry, by library id where the host gave one, else by title. */
@@ -457,6 +530,8 @@ class App {
 
   private clearLibrary(): void {
     clearTimeout(this.statusTimer);
+    this.hostApi = null;
+    this.tools = null;
     this.libraryFor = null;
     this.libraryLoaded = false;
     this.hostName = undefined;
@@ -629,6 +704,9 @@ async function configuredHosts(): Promise<{ listed: Map<string, Configured>; via
 /** Set by `vite.config.ts` when the dev server proxies a host; absent in a build. */
 declare const __PF_TRANSPORT_HOST__: string | undefined;
 
+// Before anything logs, so a log sent to a host has the whole visit in it.
+captureLog();
+
 const uiCanvas = document.getElementById("pf-ui") as HTMLCanvasElement;
 const videoCanvas = document.getElementById("pf-video") as HTMLCanvasElement;
 
@@ -647,6 +725,7 @@ try {
   shell.mount({
     connect() {}, pair() {}, requestAccess() {}, cancelRequest() {}, retry() {}, back() {}, play() {},
     forget() {}, wake() {}, disconnect() {},
+    openTools() {}, hostAction() {}, sendLog() {},
     setAdding() {}, rename() {}, openSettings() {}, setSettings() {}, toggleCapture() {},
     showDiagnostics() {}, openMenu() {}, fullscreen() {}, cycleStats() {}, toggleMic() {},
   });
