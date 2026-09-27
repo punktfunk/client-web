@@ -51,6 +51,14 @@ class App {
   private libraryLoaded = false;
   private hostName: string | undefined;
   private running: string | undefined;
+  /** The running title's library id, which is what `Resume` launches. */
+  private runningId: string | undefined;
+  /** What the last stream played (`entry` unset: the desktop), and what to start again once the
+   *  host is ready after a stream that dropped. */
+  private lastPlay: { entry?: LibraryEntry } | null = null;
+  private resumeOnReady: { entry?: LibraryEntry } | null = null;
+  /** The stream that dropped into the error on screen, which "Try again" brings back. */
+  private dropped: { entry?: LibraryEntry } | null = null;
   private statusTimer = 0;
   /** Is the address field in front? Forced on when there is no card to click instead. */
   private adding = false;
@@ -83,6 +91,9 @@ class App {
       cancelRequest: () => engine.cancelRequest(),
       retry: () => {
         const s = engine.current;
+        // After a dropped stream, try again means that stream: the same title, not the library.
+        this.resumeOnReady = this.dropped;
+        this.dropped = null;
         if ("origin" in s && s.origin) void engine.connect(this.targetOf(s.origin));
       },
       back: () => engine.disconnect(),
@@ -149,6 +160,8 @@ class App {
     switch (s.kind) {
       case "idle":
         this.clearLibrary();
+        this.resumeOnReady = null;
+        this.dropped = null;
         return this.home();
       case "bad-address":
         // The field stays in front: what was typed is wrong and this is where it is fixed.
@@ -195,9 +208,18 @@ class App {
         });
       case "forgotten":
         return this.show({ kind: "pair", origin: s.origin, mode: "again" });
-      case "ready":
+      case "ready": {
+        const resume = this.resumeOnReady;
+        if (resume) {
+          // Not from inside this listener: starting the stream sets the engine's state again. The
+          // connecting screen stays up until it does.
+          this.resumeOnReady = null;
+          queueMicrotask(() => this.play(resume.entry));
+          return;
+        }
         if (this.libraryFor !== s.origin) void this.openLibrary(s);
         return this.redrawLibrary(s);
+      }
       case "starting":
         return this.show({ kind: "connecting", origin: s.origin, phase: "starting" });
       case "streaming":
@@ -207,15 +229,24 @@ class App {
           diagnostics: s.stats.statsTier !== "off",
           menu: this.menuOpen,
         });
-      case "error":
+      case "error": {
+        // Was a stream live, or starting, when this happened? Then trying again resumes it.
+        const was = this.screen;
+        const streamed = was.kind === "streaming" || (was.kind === "connecting" && was.phase === "starting");
+        if (streamed) this.dropped = this.lastPlay;
         return this.show({
           kind: "error",
-          head: s.skew ? "This host speaks a different version" : "Something went wrong",
+          head: s.skew
+            ? "This host speaks a different version"
+            : streamed
+              ? "The stream stopped"
+              : "Something went wrong",
           text: s.skew
             ? `${sentence(s.message)} Update the host, or this page, so the two agree.`
             : sentence(s.message),
           retry: !s.skew,
         });
+      }
     }
   }
 
@@ -330,6 +361,7 @@ class App {
         const st = await s.host.status();
         const live = st.games.find((g) => g.state === "running" || g.state === "launching");
         this.running = live?.title;
+        this.runningId = live?.app_id ?? undefined;
         this.redrawLibrary(now);
       } catch {
         // A failed poll is not news; the next one will say.
@@ -368,8 +400,18 @@ class App {
       busy: this.libraryFor === s.origin && !this.libraryLoaded,
       ...(this.hostName ? { host: this.hostName } : {}),
       ...(this.running ? { running: this.running } : {}),
+      ...this.resumable(),
       ...(error ? { error: `${sentence(error)} You can still stream the desktop.` } : {}),
     });
+  }
+
+  /** The running title's entry, by library id where the host gave one, else by title. */
+  private resumable(): { resume?: LibraryEntry } {
+    if (!this.running) return {};
+    const entry =
+      this.entries.find((e) => this.runningId !== undefined && e.id === this.runningId) ??
+      this.entries.find((e) => e.title === this.running);
+    return entry ? { resume: entry } : {};
   }
 
   private clearLibrary(): void {
@@ -378,6 +420,7 @@ class App {
     this.libraryLoaded = false;
     this.hostName = undefined;
     this.running = undefined;
+    this.runningId = undefined;
     this.entries = [];
     for (const url of this.art.values()) {
       if (url.startsWith("blob:")) URL.revokeObjectURL(url);
@@ -427,6 +470,7 @@ class App {
   }
 
   private play(entry?: LibraryEntry): void {
+    this.lastPlay = entry ? { entry } : {};
     this.engine.startStream({ ...this.streamOptions(), ...(entry ? { launch: entry } : {}) });
   }
 

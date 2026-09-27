@@ -92,6 +92,8 @@ export type Screen =
       art: Map<string, string>;
       /** What the host is running right now, when something is. */
       running?: string;
+      /** That title's library entry, when it has one: streaming it picks the game back up. */
+      resume?: LibraryEntry;
       error?: string;
       busy?: boolean;
     }
