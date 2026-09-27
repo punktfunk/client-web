@@ -33,6 +33,10 @@ export interface SessionStats {
   hud?: HudLine[];
   /** The host's sentence for a launch that did not give the player their game, while it shows. */
   launchNotice?: string;
+  /** This device's access when it is limited or ends. */
+  access?: string;
+  /** A change to that access, or the warning before it ends, while it shows. */
+  accessNotice?: string;
 }
 
 /**
@@ -89,7 +93,8 @@ export type Screen =
       error?: string;
       busy?: boolean;
     }
-  | { kind: "streaming"; stats: SessionStats; diagnostics: boolean }
+  /** `menu`: the quick menu is open over the picture. */
+  | { kind: "streaming"; stats: SessionStats; diagnostics: boolean; menu: boolean }
   /**
    * The settings sheet. It renders over whatever screen was showing — including a live one —
    * so it carries no route of its own; `openSettings(false)` puts the previous screen back.
@@ -116,7 +121,13 @@ export interface Actions {
   forget(origin: string): void;
   /** Name a host something this browser will remember. An empty label drops the name. */
   rename(origin: string, label: string): void;
-  disconnect(): void;
+  /** Leave the host. `quit` ends the title too; without it the game keeps running. */
+  disconnect(quit?: boolean): void;
+  openMenu(on: boolean): void;
+  /** Fullscreen on or off. Only from a gesture: the browser refuses it otherwise. */
+  fullscreen(): void;
+  /** Step the statistics overlay: off, compact, normal, detailed. */
+  cycleStats(): void;
   openSettings(on: boolean): void;
   setSettings(patch: Partial<Settings>): void;
   /** Take or release the pointer. Taking it needs a gesture, so this is only ever called from

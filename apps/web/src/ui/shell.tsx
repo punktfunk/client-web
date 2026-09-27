@@ -65,7 +65,7 @@ const noop: Actions = {
   connect() {}, pair() {}, requestAccess() {}, cancelRequest() {}, retry() {}, back() {}, play() {},
   forget() {}, disconnect() {},
   setAdding() {}, rename() {}, openSettings() {}, setSettings() {}, toggleCapture() {},
-  showDiagnostics() {},
+  showDiagnostics() {}, openMenu() {}, fullscreen() {}, cycleStats() {},
 };
 
 // --- the root ---------------------------------------------------------------------------

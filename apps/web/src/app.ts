@@ -59,6 +59,8 @@ class App {
   private probing = false;
   /** The settings sheet renders over whatever is showing, so it is a flag rather than a state. */
   private settingsOpen = false;
+  /** The quick menu over a live picture; closed whenever the stream is not. */
+  private menuOpen = false;
   private prefs: Settings = settings.get();
   private resizeTimer = 0;
 
@@ -86,7 +88,16 @@ class App {
       back: () => engine.disconnect(),
       play: (entry) => this.play(entry),
       forget: (origin) => this.forget(origin),
-      disconnect: () => engine.disconnect(),
+      disconnect: (quit) => {
+        this.menuOpen = false;
+        engine.disconnect(quit);
+      },
+      openMenu: (on) => {
+        this.menuOpen = on;
+        this.render(engine.current);
+      },
+      fullscreen: () => engine.fullscreen(),
+      cycleStats: () => engine.cycleStats(),
       setAdding: (on) => {
         this.adding = on;
         if (engine.current.kind === "idle") this.render(engine.current);
@@ -116,6 +127,10 @@ class App {
     });
     this.applyPrefs();
     this.watchSize();
+    engine.onMenu(() => {
+      this.menuOpen = !this.menuOpen;
+      this.render(engine.current);
+    });
     engine.onState((s) => this.render(s));
   }
 
@@ -126,6 +141,7 @@ class App {
 
   /** Facts in, words out. */
   private render(s: EngineState): void {
+    if (s.kind !== "streaming") this.menuOpen = false;
     if (this.settingsOpen) {
       return this.show({ kind: "settings", values: this.prefs, streaming: s.kind === "streaming" });
     }
@@ -188,6 +204,7 @@ class App {
           kind: "streaming",
           stats: { origin: s.origin, ...s.stats },
           diagnostics: s.stats.statsTier !== "off",
+          menu: this.menuOpen,
         });
       case "error":
         return this.show({
@@ -543,7 +560,7 @@ try {
     connect() {}, pair() {}, requestAccess() {}, cancelRequest() {}, retry() {}, back() {}, play() {},
     forget() {}, disconnect() {},
     setAdding() {}, rename() {}, openSettings() {}, setSettings() {}, toggleCapture() {},
-    showDiagnostics() {},
+    showDiagnostics() {}, openMenu() {}, fullscreen() {}, cycleStats() {},
   });
   shell.render({
     kind: "error",
