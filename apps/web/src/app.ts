@@ -3,11 +3,11 @@
 //
 // The engine's state carries facts — `blocked`, `needs-pairing`, `forgotten` — and this file
 // turns each into a `Screen` with words on it. That is the whole of what the app owns: the
-// wording, the choice of interface, the library grid's art, and the two pieces of presentation
-// state no engine fact covers (whether the address field is showing, and what a reachability
-// probe last said about each known host). Everything about hosts, trust, pairing and the session
-// lives in the library, which is what lets the same engine sit under a TV app without a line of
-// this file.
+// wording, the choice of interface, the library's titles and art, and the presentation state no
+// engine fact covers — the sidebar tab, the shelf the Library tab shows, whether the add-a-host
+// sheet is open, and what a reachability probe last said about each host. Everything about
+// hosts, trust, pairing and the session lives in the library, which is what lets the same engine
+// sit under a TV app without a line of this file.
 
 import {
   captureLog,
@@ -29,8 +29,8 @@ import {
   VersionSkew,
 } from "@punktfunk/stream";
 import { ConsoleUi } from "./ui/console.ts";
-import { WebShell } from "./ui/shell.tsx";
-import type { HostCard, HostTools, Screen, Ui } from "./ui/types.ts";
+import { noop, WebShell } from "./ui/shell.tsx";
+import type { HostCard, HostTools, Screen, Tab, Ui } from "./ui/types.ts";
 
 /** How long a reachability probe is believed. Long enough that returning to the home screen
  *  does not re-probe every host, short enough that a machine woken in the meantime shows up. */
@@ -45,23 +45,48 @@ const REACH_TTL_MS = 30_000;
  */
 const RESIZE_DEBOUNCE_MS = 700;
 
+/** Where the Library tab opens: the shelf last looked at, per browser. */
+const SHELF_KEY = "pf.shelf";
+
+/** A shelf's titles are read again when the tab comes back to it after this long. */
+const LIBRARY_TTL_MS = 60_000;
+
+/** The engine's states on the way to a host. Leaving the tab they sit under cancels them. */
+const FLOWS = new Set<EngineState["kind"]>([
+  "bad-address", "reaching", "blocked", "unreachable", "untrusted", "connecting", "needs-pairing",
+  "awaiting-approval", "pairing", "paired", "pair-refused", "forgotten", "starting", "error",
+]);
+
+type Ready = Extract<EngineState, { kind: "ready" }>;
+
 class App {
   private screen: Screen = { kind: "home", hosts: [], adding: true };
-  /** The library, once `ready` has read it, with object URLs for art as it arrives. */
+  /** The sidebar's tab. Settings is `settingsOpen` instead: it also opens over a live stream. */
+  private tab: "hosts" | "library" = "hosts";
+  /** The Library tab's host, kept across visits so the tab opens where it was left. */
+  private shelf: string | null = readShelf();
+  /** The connection under way is the library loading its shelf, not a stream starting: its waits
+   *  draw as the library's own, not as a connecting sheet. */
+  private quiet = false;
+  /** A host added by address opens its library once it is ready; until then its pairing is the
+   *  Hosts tab's. */
+  private browseOnReady = false;
+  /** The shelf's titles as last read, with object URLs for art as it arrives. Kept while its host
+   *  is not connected, so the tab never opens blank on a shelf it has shown before. */
   private entries: LibraryEntry[] = [];
   private readonly art = new Map<string, string>();
   private libraryFor: string | null = null;
-  /** Has the library been read yet? Not the same as "is it empty": a host with nothing in it
-   *  answers instantly with an empty list, and deriving the spinner from the entry count left
-   *  that host spinning for ever instead of saying so. */
-  private libraryLoaded = false;
-  private hostName: string | undefined;
-  /** The management API of the host the library is open for, and the host sheet when open. */
-  private hostApi: Host | null = null;
+  private libraryLoading = false;
+  /** When the titles were last read. Not the same as "is the list empty": a host with nothing in
+   *  it answers at once with an empty list, which must not read as still loading. */
+  private libraryAt = 0;
+  private libraryError: string | undefined;
   private tools: HostTools | null = null;
   private running: string | undefined;
   /** The running title's library id, which is what `Resume` launches. */
   private runningId: string | undefined;
+  /** The origin whose running title is being polled. */
+  private pollingFor: string | null = null;
   /** What the last stream played (`entry` unset: the desktop), and what to start again once the
    *  host is ready after a stream that dropped. */
   private lastPlay: { entry?: LibraryEntry } | null = null;
@@ -69,7 +94,7 @@ class App {
   /** The stream that dropped into the error on screen, which "Try again" brings back. */
   private dropped: { entry?: LibraryEntry } | null = null;
   private statusTimer = 0;
-  /** Is the address field in front? Forced on when there is no card to click instead. */
+  /** Is the add-a-host sheet open? Forced on when there is no card to click instead. */
   private adding = false;
   /** What a probe last said about each known host, and when. */
   private readonly reachCache = new Map<string, { reach: Reach; at: number }>();
@@ -79,16 +104,20 @@ class App {
   /** A connect link the page opened with, until it is answered, and the title it asked for. */
   private link: { target: string | HostTarget; fp?: string; launch?: string } | null = null;
   private launchOnReady: string | null = null;
-  /** The settings sheet renders over whatever is showing, so it is a flag rather than a state. */
+  /** The settings page, or its dialog over a live stream. */
   private settingsOpen = false;
   /** The quick menu over a live picture; closed whenever the stream is not. */
   private menuOpen = false;
   private prefs: Settings = settings.get();
   private resizeTimer = 0;
+  /** This page went fullscreen for a stream, and goes back when the stream's page returns. */
+  private fullscreened = false;
 
   constructor(
     private readonly engine: Engine,
     private readonly ui: Ui,
+    /** The web shell, rather than the gamepad console: only it has tabs to keep. */
+    private readonly web: boolean,
     private readonly uiCanvas: HTMLCanvasElement,
     /** The hosts the page's own server proxies, by the API origin the engine keys them under. */
     private readonly configured: Map<string, Configured>,
@@ -98,15 +127,22 @@ class App {
     ui.mount({
       connect: (address) => {
         this.adding = false;
+        this.quiet = false;
+        this.browseOnReady = true;
+        this.settingsOpen = false;
         void engine.connect(this.targetOf(address));
       },
+      streamDesktop: (origin) => this.play(undefined, origin),
+      browse: (origin) => this.openShelf(origin),
+      navigate: (tab) => this.navigate(tab),
       pair: (pin) => engine.pair(pin),
       requestAccess: () => engine.requestAccess(this.streamOptions()),
       cancelRequest: () => engine.cancelRequest(),
       retry: () => {
         const s = engine.current;
         // After a dropped stream, try again means that stream: the same title, not the library.
-        this.resumeOnReady = this.dropped;
+        // Otherwise a stream a card asked for is still what the retry is for.
+        if (this.dropped) this.resumeOnReady = this.dropped;
         this.dropped = null;
         if ("origin" in s && s.origin) void engine.connect(this.targetOf(s.origin));
       },
@@ -121,7 +157,7 @@ class App {
       wake: (origin) => void this.wake(origin),
       disconnect: (quit) => {
         this.menuOpen = false;
-        engine.disconnect(quit);
+        engine.leave(quit);
       },
       openMenu: (on) => {
         this.menuOpen = on;
@@ -138,7 +174,7 @@ class App {
       },
       setAdding: (on) => {
         this.adding = on;
-        if (engine.current.kind === "idle") this.render(engine.current);
+        if (this.screen.kind === "home") this.home();
       },
       rename: (origin, label) => {
         hosts.rename(origin, label);
@@ -174,8 +210,8 @@ class App {
   }
 
   private show(screen: Screen): void {
-    this.screen = screen;
-    this.ui.render(screen);
+    this.screen = { ...screen, tab: this.settingsOpen ? "settings" : screen.kind === "library" ? "library" : this.tab };
+    this.ui.render(this.screen);
   }
 
   /** Facts in, words out. */
@@ -184,16 +220,22 @@ class App {
     if (this.settingsOpen) {
       return this.show({ kind: "settings", values: this.prefs, streaming: s.kind === "streaming" });
     }
+    // The library reaching its shelf's host is the library loading, not a sheet in its way.
+    if (this.quiet && (s.kind === "reaching" || s.kind === "connecting")) return this.showLibrary();
+    this.quiet = false;
     switch (s.kind) {
       case "idle":
-        this.clearLibrary();
+        this.windowed();
+        this.browseOnReady = false;
+        this.stopPolling();
         this.launchOnReady = null;
         this.resumeOnReady = null;
         this.dropped = null;
-        return this.home();
+        return this.web && this.tab === "library" ? this.showLibrary() : this.home();
       case "bad-address":
         // The field stays in front: what was typed is wrong and this is where it is fixed.
         this.adding = true;
+        this.tab = "hosts";
         return this.home(sentence(s.message));
       case "reaching":
         return this.show({ kind: "connecting", origin: s.origin, phase: "reaching" });
@@ -242,7 +284,7 @@ class App {
           // The title a link asked for. Not from inside this listener: starting a stream sets the
           // engine's state again.
           this.launchOnReady = null;
-          queueMicrotask(() => this.play({ id: launch, title: launch } as LibraryEntry));
+          queueMicrotask(() => this.start({ id: launch, title: launch } as LibraryEntry));
           return;
         }
         const resume = this.resumeOnReady;
@@ -250,11 +292,22 @@ class App {
           // Not from inside this listener: starting the stream sets the engine's state again. The
           // connecting screen stays up until it does.
           this.resumeOnReady = null;
-          queueMicrotask(() => this.play(resume.entry));
+          queueMicrotask(() => this.start(resume.entry));
           return;
         }
-        if (this.libraryFor !== s.origin) void this.openLibrary(s);
-        return this.redrawLibrary(s);
+        this.windowed();
+        if (this.browseOnReady) {
+          this.browseOnReady = false;
+          this.tab = "library";
+        }
+        // The console has no tabs: a host it reaches is a library it shows.
+        if (this.web && this.tab === "hosts") return this.home();
+        this.setShelf(s.origin);
+        if (this.libraryFor !== s.origin || (!this.libraryLoading && Date.now() - this.libraryAt > LIBRARY_TTL_MS)) {
+          void this.openLibrary(s);
+        }
+        this.watchRunning(s);
+        return this.showLibrary();
       }
       case "starting":
         return this.show({ kind: "connecting", origin: s.origin, phase: "starting" });
@@ -266,6 +319,7 @@ class App {
           menu: this.menuOpen,
         });
       case "error": {
+        this.windowed();
         // Was a stream live, or starting, when this happened? Then trying again resumes it.
         const was = this.screen;
         const streamed = was.kind === "streaming" || (was.kind === "connecting" && was.phase === "starting");
@@ -286,11 +340,74 @@ class App {
     }
   }
 
-  // --- the home screen -------------------------------------------------------------------
+  // --- the tabs --------------------------------------------------------------------------
+  /** A sidebar entry. A flow left half-way — a PIN, a certificate, an error — is cancelled; the
+   *  library's own connection is kept, since it is what the Library tab shows. */
+  private navigate(tab: Tab): void {
+    const s = this.engine.current;
+    if (tab === "settings") {
+      this.settingsOpen = true;
+      return this.render(s);
+    }
+    this.settingsOpen = false;
+    this.tab = tab;
+    this.link = null;
+    if (FLOWS.has(s.kind) && !(this.quiet && tab === "library")) {
+      this.quiet = false;
+      this.engine.disconnect();
+    }
+    if (tab === "library") return this.openShelf();
+    this.render(this.engine.current);
+  }
+
+  /** Show a shelf, connecting to its host in the background when it is not the one connected.
+   *  Its titles as last read stay on screen meanwhile. */
+  private openShelf(origin = this.currentShelf()): void {
+    this.tab = "library";
+    this.settingsOpen = false;
+    if (origin) this.setShelf(origin);
+    const s = this.engine.current;
+    if (!origin || ("origin" in s && s.origin === origin && s.kind !== "error")) {
+      return this.render(s);
+    }
+    this.quiet = true;
+    void this.engine.connect(this.targetOf(origin));
+  }
+
+  private setShelf(origin: string): void {
+    if (this.shelf === origin) return;
+    this.shelf = origin;
+    try {
+      localStorage.setItem(SHELF_KEY, origin);
+    } catch {
+      // Storage blocked: the tab opens on the first paired host next visit.
+    }
+  }
+
+  /** The shelf to show: the one last looked at while it is still paired, else the first paired. */
+  private currentShelf(): string | null {
+    const paired = this.paired();
+    return paired.find((h) => h.origin === this.shelf)?.origin ?? paired[0]?.origin ?? null;
+  }
+
+  // --- the host list ---------------------------------------------------------------------
   private home(error?: string): void {
     // A link waiting for its answer stays in front of the probes that redraw this list.
     if (this.link) return;
-    // The server's hosts first, under the name it gives them; then the ones typed here.
+    const cards = this.cards();
+    this.show({
+      kind: "home",
+      hosts: cards,
+      // Nothing to click means the field is the only way forward.
+      adding: this.adding || cards.length === 0,
+      ...(error ? { error } : {}),
+    });
+    void this.probe(cards.map((h) => h.origin));
+  }
+
+  /** Every host this page knows: the server's first, under the name it gives them; then the ones
+   *  typed here. Each with what a probe last said about it. */
+  private cards(): HostCard[] {
     const known = new Map(this.engine.knownHosts().map((h) => [h.origin, h]));
     const listed: HostCard[] = [
       ...[...this.configured].map(([origin, c]) => ({
@@ -302,18 +419,21 @@ class App {
       })),
       ...[...known.values()].filter((h) => !this.configured.has(h.origin)),
     ];
-    const hosts: HostCard[] = listed.map((h) => {
+    return listed.map((h) => {
       const seen = this.reachCache.get(h.origin);
       return seen ? { ...h, reach: seen.reach } : h;
     });
-    this.show({
-      kind: "home",
-      hosts,
-      // Nothing to click means the field is the only way forward.
-      adding: this.adding || hosts.length === 0,
-      ...(error ? { error } : {}),
-    });
-    void this.probe(hosts.map((h) => h.origin));
+  }
+
+  /** The hosts with a pairing here: the shelves. */
+  private paired(): HostCard[] {
+    return this.cards().filter((h) => h.fingerprint);
+  }
+
+  /** What a host is called on screen. */
+  private nameOf(origin: string): string {
+    const h = this.cards().find((c) => c.origin === origin);
+    return h?.label ?? h?.name ?? bare(origin);
   }
 
   /**
@@ -342,7 +462,7 @@ class App {
 
   /**
    * Ask each known host whether it is there, then redraw. Cheap and stale-tolerant: a probe is
-   * one `/health` fetch, its answer is believed for `REACH_TTL_MS`, and the grid is already on
+   * one `/health` fetch, its answer is believed for `REACH_TTL_MS`, and the page is already on
    * screen and clickable before any of them answer.
    */
   private async probe(origins: string[]): Promise<void> {
@@ -357,12 +477,18 @@ class App {
           this.reachCache.set(origin, { reach: await reach(origin), at: Date.now() });
           // Redraw per answer rather than once at the end: the first host to reply should not
           // wait on the slowest, which is the one that will take the full timeout.
-          if (this.engine.current.kind === "idle") this.home();
+          this.redrawLists();
         }),
       );
     } finally {
       this.probing = false;
     }
+  }
+
+  /** Redraw whichever list is showing: a probe or a wake changed a host's state on it. */
+  private redrawLists(): void {
+    if (this.screen.kind === "home") this.home();
+    else if (this.screen.kind === "library") this.showLibrary();
   }
 
   /**
@@ -431,7 +557,7 @@ class App {
     const url = this.configured.get(origin)?.wake;
     if (!url || this.waking.has(origin)) return;
     this.waking.add(origin);
-    this.redrawHome();
+    this.redrawLists();
     try {
       const r = await fetch(url, { method: "POST" });
       if (!r.ok) throw new Error(`wake refused (${r.status})`);
@@ -445,13 +571,8 @@ class App {
       console.warn("punktfunk: wake", e);
     } finally {
       this.waking.delete(origin);
-      this.redrawHome();
+      this.redrawLists();
     }
-  }
-
-  /** Redraw the host list if it is what is showing. */
-  private redrawHome(): void {
-    if (this.engine.current.kind === "idle" && !this.settingsOpen) this.home();
   }
 
   /** Forget a host. From the trust screen this is "forget and pair again", so the reconnect
@@ -459,55 +580,43 @@ class App {
   private forget(origin: string): void {
     const reconnect = this.screen.kind === "trust" && this.screen.origin === origin;
     this.reachCache.delete(origin);
+    if (this.libraryFor === origin) this.clearLibrary();
     this.engine.forget(origin);
     if (reconnect) void this.engine.connect(this.targetOf(origin));
+    else this.redrawLists();
   }
 
   // --- the library ---------------------------------------------------------------------
-  private async openLibrary(s: Extract<EngineState, { kind: "ready" }>): Promise<void> {
+  private async openLibrary(s: Ready): Promise<void> {
+    if (this.libraryFor !== s.origin) this.clearLibrary();
     this.libraryFor = s.origin;
-    this.hostApi = s.host;
-    this.libraryLoaded = false;
-    this.entries = [];
+    this.libraryLoading = true;
+    this.redrawLibrary();
     try {
-      this.entries = [...(await s.host.library())];
+      const entries = [...(await s.host.library())];
+      if (this.libraryFor !== s.origin) return;
+      this.entries = entries;
+      this.libraryError = undefined;
     } catch (e) {
+      if (this.libraryFor !== s.origin) return;
       if (e instanceof VersionSkew) {
+        this.libraryLoading = false;
         return this.show({
           kind: "error",
           head: "This host speaks a different version",
           text: `${sentence(e.message)} Update the host, or this page, so the two agree.`,
         });
       }
-      // The stream still works without a library, so this is a line on the screen rather than a
+      // The stream still works without a library, so this is a line on the page rather than a
       // dead end.
-      this.libraryLoaded = true;
-      return this.redrawLibrary(s, e instanceof Error ? e.message : String(e));
-    }
-    this.libraryLoaded = true;
-    this.redrawLibrary(s);
-    // The one thing worth refreshing while someone looks at the grid: what the host is running.
-    // Polled, because the event stream is not on this browser's lane; five seconds is plenty.
-    const poll = async () => {
-      const now = this.engine.current;
-      if (now.kind !== "ready" || now.origin !== s.origin) return;
-      try {
-        const st = await s.host.status();
-        const live = st.games.find((g) => g.state === "running" || g.state === "launching");
-        this.running = live?.title;
-        this.runningId = live?.app_id ?? undefined;
-        this.redrawLibrary(now);
-      } catch {
-        // A failed poll is not news; the next one will say.
+      this.libraryError = e instanceof Error ? e.message : String(e);
+    } finally {
+      if (this.libraryFor === s.origin) {
+        this.libraryLoading = false;
+        this.libraryAt = Date.now();
       }
-      this.statusTimer = window.setTimeout(() => void poll(), 5000);
-    };
-    void poll();
-    void s.host.info().then((h) => {
-      this.hostName = h.hostname;
-      const now = this.engine.current;
-      if (now.kind === "ready") this.redrawLibrary(now);
-    }).catch(() => {});
+    }
+    this.redrawLibrary();
     // Art after the grid, per entry: the grid should appear before its covers do.
     for (const entry of this.entries) {
       const art = entry.art.portrait ?? entry.art.header;
@@ -515,37 +624,85 @@ class App {
       void s.host
         .art(art)
         .then((url) => {
-          if (!url) return;
+          if (!url || this.libraryFor !== s.origin) return;
           this.art.set(entry.id, url);
-          const now = this.engine.current;
-          if (now.kind === "ready") this.redrawLibrary(now);
+          this.redrawLibrary();
         })
         // A cover that cannot load leaves its tile's placeholder.
         .catch(() => {});
     }
   }
 
-  private redrawLibrary(s: Extract<EngineState, { kind: "ready" }>, error?: string): void {
+  /** What the host is running, polled while its library is connected: the event stream is not
+   *  on this browser's lane, and five seconds is plenty for a grid someone is looking at. */
+  private watchRunning(s: Ready): void {
+    if (this.pollingFor === s.origin) return;
+    clearTimeout(this.statusTimer);
+    this.pollingFor = s.origin;
+    const poll = async () => {
+      const now = this.engine.current;
+      if (now.kind !== "ready" || now.origin !== s.origin) {
+        if (this.pollingFor === s.origin) this.pollingFor = null;
+        return;
+      }
+      try {
+        const st = await now.host.status();
+        const live = st.games.find((g) => g.state === "running" || g.state === "launching");
+        this.running = live?.title;
+        this.runningId = live?.app_id ?? undefined;
+        this.redrawLibrary();
+      } catch {
+        // A failed poll is not news; the next one will say.
+      }
+      this.statusTimer = window.setTimeout(() => void poll(), 5000);
+    };
+    void poll();
+  }
+
+  private stopPolling(): void {
+    clearTimeout(this.statusTimer);
+    this.pollingFor = null;
+  }
+
+  private showLibrary(): void {
+    const origin = this.currentShelf();
+    const s = this.engine.current;
+    const connected = s.kind === "ready" && s.origin === origin;
+    const mine = origin !== null && this.libraryFor === origin;
+    const shelves = this.paired();
     this.show({
       kind: "library",
-      origin: s.origin,
-      entries: this.entries,
+      origin,
+      shelves,
+      entries: mine ? this.entries : [],
       art: this.art,
-      busy: this.libraryFor === s.origin && !this.libraryLoaded,
-      ...(this.hostName ? { host: this.hostName } : {}),
-      ...(this.running ? { running: this.running } : {}),
-      ...(this.tools ? { tools: this.tools } : {}),
-      ...this.resumable(),
-      ...(error ? { error: `${sentence(error)} You can still stream the desktop.` } : {}),
+      busy: this.quiet || (connected && (!mine || this.libraryLoading)),
+      ...(origin ? { host: this.nameOf(origin) } : {}),
+      ...(!connected && !this.quiet ? { offline: true } : {}),
+      ...(mine && this.running ? { running: this.running } : {}),
+      ...(connected && this.tools ? { tools: this.tools } : {}),
+      ...(mine ? this.resumable() : {}),
+      ...(mine && this.libraryError ? { error: `${sentence(this.libraryError)} You can still stream the desktop.` } : {}),
     });
+    void this.probe(shelves.map((h) => h.origin));
+  }
+
+  private redrawLibrary(): void {
+    if (this.screen.kind === "library") this.showLibrary();
   }
 
   // --- the host sheet ---------------------------------------------------------------------
+  /** The shelf's host, when the library is connected to it. */
+  private shelfHost(): Host | null {
+    const s = this.engine.current;
+    return s.kind === "ready" && s.origin === this.currentShelf() ? s.host : null;
+  }
+
   /** Open the sheet and ask the host what this device may do to it. */
   private async openTools(on: boolean): Promise<void> {
     this.tools = on ? { actions: [], busy: true } : null;
-    this.redrawTools();
-    const host = this.hostApi;
+    this.redrawLibrary();
+    const host = this.shelfHost();
     if (!on || !host) return;
     try {
       // `display.next` moves a live stream to another monitor: nothing to offer from the library.
@@ -568,7 +725,7 @@ class App {
   }
 
   private async hostAction(id: string): Promise<void> {
-    const host = this.hostApi;
+    const host = this.shelfHost();
     if (!host || !this.tools) return;
     this.setTools({ busy: true });
     try {
@@ -580,7 +737,7 @@ class App {
   }
 
   private async sendLog(): Promise<void> {
-    const host = this.hostApi;
+    const host = this.shelfHost();
     if (!host || !this.tools) return;
     this.setTools({ busy: true });
     try {
@@ -594,12 +751,7 @@ class App {
   private setTools(patch: Partial<HostTools>): void {
     if (!this.tools) return;
     this.tools = { ...this.tools, ...patch };
-    this.redrawTools();
-  }
-
-  private redrawTools(): void {
-    const now = this.engine.current;
-    if (now.kind === "ready") this.redrawLibrary(now);
+    this.redrawLibrary();
   }
 
   /** The running title's entry, by library id where the host gave one, else by title. */
@@ -612,12 +764,12 @@ class App {
   }
 
   private clearLibrary(): void {
-    clearTimeout(this.statusTimer);
-    this.hostApi = null;
+    this.stopPolling();
     this.tools = null;
     this.libraryFor = null;
-    this.libraryLoaded = false;
-    this.hostName = undefined;
+    this.libraryLoading = false;
+    this.libraryAt = 0;
+    this.libraryError = undefined;
     this.running = undefined;
     this.runningId = undefined;
     this.entries = [];
@@ -639,6 +791,9 @@ class App {
       deadzone: this.prefs.deadzone,
       statsTier: this.prefs.statsTier,
       advancedStats: this.prefs.advancedStats,
+      codec: this.prefs.codec,
+      hdr: this.prefs.hdr,
+      invertScroll: this.prefs.invertScroll,
     });
   }
 
@@ -668,7 +823,31 @@ class App {
     observer.observe(this.uiCanvas);
   }
 
-  private play(entry?: LibraryEntry): void {
+  /** Stream `entry`, or the desktop, from `origin` — the open shelf unless named. A host that is
+   *  not the one connected is reached first, and the stream starts once it is ready. Called from
+   *  a click, which is the one moment the browser allows fullscreen. */
+  private play(entry?: LibraryEntry, origin = this.currentShelf()): void {
+    if (!origin) return;
+    if (this.web && this.prefs.fullscreen && !document.fullscreenElement) {
+      this.fullscreened = true;
+      this.engine.fullscreen(true);
+    }
+    const s = this.engine.current;
+    if (s.kind === "ready" && s.origin === origin) return this.start(entry);
+    this.quiet = false;
+    this.resumeOnReady = entry ? { entry } : {};
+    void this.engine.connect(this.targetOf(origin));
+  }
+
+  /** Back to a window, if this page went fullscreen for the stream that just ended. */
+  private windowed(): void {
+    if (!this.fullscreened) return;
+    this.fullscreened = false;
+    this.engine.fullscreen(false);
+  }
+
+  /** Start a stream on the host that is ready. */
+  private start(entry?: LibraryEntry): void {
     this.lastPlay = entry ? { entry } : {};
     this.engine.startStream({ ...this.streamOptions(), ...(entry ? { launch: entry } : {}) });
   }
@@ -682,6 +861,15 @@ class App {
       fps: this.prefs.fps,
       bitrateKbps: this.prefs.bitrateKbps,
     };
+  }
+}
+
+/** The shelf a previous visit left open, if storage allows. */
+function readShelf(): string | null {
+  try {
+    return localStorage.getItem(SHELF_KEY);
+  } catch {
+    return null;
   }
 }
 
@@ -809,20 +997,13 @@ try {
     ...(__PF_TRANSPORT_HOST__ ? { transportHost: __PF_TRANSPORT_HOST__ } : {}),
   });
   const server = await configuredHosts();
-  new App(engine, pickUi(engine, uiCanvas), uiCanvas, server.listed, server.viaServer);
+  const ui = pickUi(engine, uiCanvas);
+  new App(engine, ui, ui instanceof WebShell, uiCanvas, server.listed, server.viaServer);
 } catch (e) {
   // Before there is an engine there is no interface to say this on; the one sheet the page
   // carries for exactly this case does.
   const shell = new WebShell(document.body);
-  shell.mount({
-    connect() {}, pair() {}, requestAccess() {}, cancelRequest() {}, retry() {}, back() {}, play() {},
-    forget() {}, wake() {}, disconnect() {},
-    openTools() {}, hostAction() {}, sendLog() {},
-    followLink() {}, copyLink() {},
-    setAdding() {}, rename() {}, openSettings() {}, setSettings() {}, toggleCapture() {},
-    showDiagnostics() {}, openMenu() {}, fullscreen() {}, cycleStats() {}, toggleMic() {},
-    consoleMode() {},
-  });
+  shell.mount(noop);
   shell.render({
     kind: "error",
     head: "This browser cannot run the client",

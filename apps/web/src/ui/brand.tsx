@@ -32,7 +32,7 @@ function orbitTransform(a: number, side: number): string {
 
 const origin = { transformBox: "fill-box", transformOrigin: "center" } as const;
 
-function BrandMark({ className, animate }: { className: string; animate: boolean }): JSX.Element {
+export function BrandMark({ className, animate }: { className: string; animate: boolean }): JSX.Element {
   const angle = useMotionValue(animate ? 0 : END);
   useEffect(() => {
     if (!animate) return;
@@ -67,7 +67,7 @@ const LETTERS = [
   { x: 420.91, w: 141.79, d: "M420.91,15.943l0,102.687l31.253,0l0,-39.258l17.089,0l46.032,39.258l47.418,0l-64.353,-52.344l59.426,-50.959l-47.88,0l-40.644,37.873l-17.089,0l0,-37.257l-31.253,0Z" },
 ];
 
-function Wordmark({ className, animate }: { className: string; animate: boolean }): JSX.Element {
+export function Wordmark({ className, animate }: { className: string; animate: boolean }): JSX.Element {
   // Unique per wordmark on the page; React's colons are not safe inside `url(#…)`.
   const uid = useId().replace(/:/g, "");
   return (

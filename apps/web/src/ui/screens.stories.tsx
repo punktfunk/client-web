@@ -22,6 +22,7 @@ type Story = StoryObj<typeof meta>;
 const of = (screen: Screen): Story => ({ args: { screen } });
 
 export const Home = of(SCREENS["home"]);
+export const HomeAdd = of(SCREENS["home-add"]);
 export const HomeFirstRun = of(SCREENS["home-first-run"]);
 export const HomeError = of(SCREENS["home-error"]);
 export const Connecting = of(SCREENS["connecting"]);
@@ -36,6 +37,8 @@ export const Trust = of(SCREENS["trust"]);
 export const Library = of(SCREENS["library"]);
 export const LibraryEmpty = of(SCREENS["library-empty"]);
 export const LibraryLoading = of(SCREENS["library-loading"]);
+export const LibraryOffline = of(SCREENS["library-offline"]);
+export const LibraryNone = of(SCREENS["library-none"]);
 export const Streaming = of(SCREENS["streaming"]);
 export const StreamingDiagnostics = of(SCREENS["streaming-diagnostics"]);
 export const StreamingCaptured = of(SCREENS["streaming-captured"]);

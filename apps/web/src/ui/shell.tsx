@@ -5,24 +5,25 @@
 // is built for the thing actually holding the browser — a mouse, a trackpad, a phone. Same
 // `Screen` values, same `Actions`, no state of its own beyond what is on screen.
 //
-// The same stack as the host's management console: React, @unom/ui for every control, Tailwind
-// on the shared brand tokens in `../styles.css`. Nothing here names a colour, and every string
-// comes from `app.ts` or from the network — none of it goes through `innerHTML`.
+// The layout is the macOS client's in the host console's clothes: a sidebar with Hosts, Library
+// and Settings, the page beside it, and nothing at all around a live stream. React, @unom/ui and
+// Tailwind on the shared brand tokens in `../styles.css`; nothing here names a colour, and every
+// string comes from `app.ts` or from the network — none of it goes through `innerHTML`.
 //
-// `render(screen)` is one external store the tree subscribes to. The DOM follows a value, as it
-// did on Solid, and the frame loop underneath never waits on it: React commits on its own tick.
+// `render(screen)` is one external store the tree subscribes to. The DOM follows a value, and
+// the frame loop underneath never waits on it: React commits on its own tick.
 
-import { cn } from "@unom/ui/lib/utils";
-import { AnimatePresence, MotionConfig, motion } from "motion/react";
+import { MotionConfig } from "motion/react";
 import { type JSX, useSyncExternalStore } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import "../styles.css";
+import { Frame } from "./frame.tsx";
 import { Home } from "./home.tsx";
 import { Hud } from "./hud.tsx";
 import { Library } from "./library.tsx";
-import { SettingsDialog } from "./settings.tsx";
+import { SettingsDialog, SettingsPage } from "./settings.tsx";
 import { Accept, Connecting, ErrorCard, LinkSheet, Pair, Trust, Waiting } from "./sheets.tsx";
-import type { Actions, Screen, Ui } from "./types.ts";
+import { type Actions, type Screen, tabOf, type Ui } from "./types.ts";
 
 export class WebShell implements Ui {
   private screen: Screen = { kind: "home", hosts: [], adding: true };
@@ -61,8 +62,9 @@ export class WebShell implements Ui {
   }
 }
 
-const noop: Actions = {
-  connect() {}, pair() {}, requestAccess() {}, cancelRequest() {}, retry() {}, back() {}, play() {},
+export const noop: Actions = {
+  connect() {}, streamDesktop() {}, browse() {}, navigate() {},
+  pair() {}, requestAccess() {}, cancelRequest() {}, retry() {}, back() {}, play() {},
   forget() {}, wake() {}, disconnect() {},
   openTools() {}, hostAction() {}, sendLog() {},
   followLink() {}, copyLink() {},
@@ -78,51 +80,42 @@ function Shell({ shell }: { shell: WebShell }): JSX.Element {
   return <ShellFrame screen={screen} actions={shell.act} />;
 }
 
-/** The whole interface for one `Screen`: the layout, the live region, the screen itself.
- *  Exported so Storybook can draw a screen exactly as the page does, with no `WebShell` behind it. */
+/** The whole interface for one `Screen`. Exported so Storybook draws a screen exactly as the
+ *  page does, with no `WebShell` behind it. */
 export function ShellFrame({ screen, actions }: { screen: Screen; actions: Actions }): JSX.Element | null {
   const kind = screen.kind;
   // The console's own canvas is the interface: nothing here may cover it or take its pointer.
   if (kind === "console") return null;
-  const live = kind === "streaming";
-  // One screen gives way to the next with a short fade; each then brings its own parts in. The
-  // address field is its own screen for this, though it shares `home`'s kind.
-  const scene = kind === "home" && screen.adding ? "home-add" : kind;
+  // Over a live picture: the overlay, or settings in a dialog. Transparent to the pointer except
+  // where they draw, and no ground: the picture is the page.
+  if (kind === "streaming" || (kind === "settings" && screen.streaming)) {
+    return (
+      <MotionConfig reducedMotion="user">
+        <div className="pointer-events-none fixed inset-0 z-2 grid items-start justify-items-center overflow-hidden" data-screen={kind}>
+          <Announce screen={screen} />
+          {kind === "streaming" ? <Hud screen={screen} actions={actions} /> : <SettingsDialog screen={screen} actions={actions} />}
+        </div>
+      </MotionConfig>
+    );
+  }
   return (
     <MotionConfig reducedMotion="user">
-      {/* `overscroll-contain`: Safari's rubber-band scroll on a fixed overlay drags the whole
-          shell without it. `data-screen` is for the harness driver and devtools, not styling.
-          Streaming must not cover the picture: transparent to the pointer except where the HUD
-          itself is. */}
-      <div
-        className={cn(
-          "fixed inset-0 z-2 overscroll-contain",
-          live ? "pointer-events-none overflow-hidden" : "overflow-x-hidden overflow-y-auto",
-        )}
-        data-screen={kind}
-      >
-        {!live && <div className="pf-aurora" aria-hidden="true" />}
-        {/* One live region for the whole interface: state changes are announced without any
-            screen having to remember to. */}
-        <div className="sr-only" role="status" aria-live="polite">{announce(screen)}</div>
-        <AnimatePresence mode="wait" initial={false}>
-          <motion.div
-            key={scene}
-            className={cn("min-h-full", live && "grid items-start justify-items-center")}
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            transition={{ duration: 0.18, ease: "easeOut" }}
-          >
-            <Screens screen={screen} actions={actions} />
-          </motion.div>
-        </AnimatePresence>
+      {/* `data-screen` is for the harness driver and devtools, not styling. */}
+      <div className="fixed inset-0 z-2" data-screen={kind}>
+        <div className="pf-aurora" aria-hidden="true" />
+        <Announce screen={screen} />
+        <Frame tab={tabOf(screen)} host={kind === "library" ? screen.host : undefined} actions={actions}>
+          {/* A new page fades in; the old one does not wait to fade out first. */}
+          <div key={kind} className="flex min-h-full flex-col animate-in fade-in duration-150">
+            <Page screen={screen} actions={actions} />
+          </div>
+        </Frame>
       </div>
     </MotionConfig>
   );
 }
 
-function Screens({ screen, actions }: { screen: Screen; actions: Actions }): JSX.Element {
+function Page({ screen, actions }: { screen: Screen; actions: Actions }): JSX.Element {
   switch (screen.kind) {
     case "home": return <Home screen={screen} actions={actions} />;
     case "accept": return <Accept screen={screen} actions={actions} />;
@@ -132,14 +125,19 @@ function Screens({ screen, actions }: { screen: Screen; actions: Actions }): JSX
     case "trust": return <Trust screen={screen} actions={actions} />;
     case "link": return <LinkSheet screen={screen} actions={actions} />;
     case "library": return <Library screen={screen} actions={actions} />;
-    case "streaming": return <Hud screen={screen} actions={actions} />;
-    case "settings": return <SettingsDialog screen={screen} actions={actions} />;
+    case "settings": return <SettingsPage screen={screen} actions={actions} />;
     case "error": return <ErrorCard screen={screen} actions={actions} />;
+    case "streaming":
     case "console": return <></>;
   }
 }
 
-/** What a screen reader hears when the screen changes. Short, and only the part that is new. */
+/** One live region for the whole interface: state changes are announced without any screen
+ *  having to remember to. Short, and only the part that is new. */
+function Announce({ screen }: { screen: Screen }): JSX.Element {
+  return <div className="sr-only" role="status" aria-live="polite">{announce(screen)}</div>;
+}
+
 function announce(s: Screen): string {
   switch (s.kind) {
     case "home": return s.error ? s.error : s.busy ? "Connecting" : `${s.hosts.length} known hosts`;
