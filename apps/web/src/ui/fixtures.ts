@@ -66,6 +66,7 @@ export const SCREENS = {
   "pair-again": { kind: "pair", origin: "https://192.168.1.25:47990", mode: "again" },
   "pair-refused": { kind: "pair", origin: "https://192.168.1.25:47990", mode: "first", error: "That PIN was refused." },
   "waiting": { kind: "waiting", origin: "https://192.168.1.25:47990", name: "Safari on Mac" },
+  "link": { kind: "link", name: "Desk", address: "192.168.1.21", launch: "steam:570" },
   "trust": {
     kind: "trust",
     origin: "https://192.168.1.25:47990",
@@ -98,6 +99,7 @@ export const noop: Actions = {
   connect() {}, pair() {}, requestAccess() {}, cancelRequest() {}, retry() {}, back() {}, play() {},
   forget() {}, wake() {}, disconnect() {},
   openTools() {}, hostAction() {}, sendLog() {},
+  followLink() {}, copyLink() {},
   setAdding() {}, rename() {}, openSettings() {}, setSettings() {}, toggleCapture() {},
   showDiagnostics() {}, openMenu() {}, fullscreen() {}, cycleStats() {}, toggleMic() {},
 };

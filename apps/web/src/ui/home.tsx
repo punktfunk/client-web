@@ -119,6 +119,9 @@ function HostTile({ host, actions, busy }: { host: HostCard; actions: Actions; b
         <Button size="sm" variant="ghost" aria-label={`Rename ${label}`} title="Rename" onClick={() => setEditing(true)}>
           Rename
         </Button>
+        <Button size="sm" variant="ghost" aria-label={`Copy a link to ${label}`} title="Copy a link" onClick={() => actions.copyLink(host.origin)}>
+          Link
+        </Button>
         {/* Marked at rest, not only on hover: the button that discards a pairing has to read as
             the heavier of the two before the pointer is anywhere near it. */}
         <Button

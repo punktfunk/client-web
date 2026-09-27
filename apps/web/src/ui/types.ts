@@ -110,6 +110,8 @@ export type Screen =
    * so it carries no route of its own; `openSettings(false)` puts the previous screen back.
    */
   | { kind: "settings"; values: Settings; streaming: boolean }
+  /** A connect link, waiting for a yes: any site can build one, so none connects by itself. */
+  | { kind: "link"; name: string; address: string; launch?: string }
   /** `retry` marks an error worth trying again from, which most network ones are. */
   | { kind: "error"; head: string; text: string; retry?: boolean };
 
@@ -136,6 +138,10 @@ export interface Actions {
    *  to the management API, so this is the first screen with anything to choose. */
   play(entry?: LibraryEntry): void;
   forget(origin: string): void;
+  /** Answer the link on screen: connect as it asks, or drop it. */
+  followLink(yes: boolean): void;
+  /** Put a link to this host, pinned to its fingerprint, on the clipboard. */
+  copyLink(origin: string): void;
   /** The host sheet on the library: its power actions, and sending this page's log. */
   openTools(on: boolean): void;
   hostAction(id: string): void;

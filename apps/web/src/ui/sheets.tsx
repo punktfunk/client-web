@@ -150,6 +150,24 @@ export function Trust({ screen, actions }: Props<"trust">): JSX.Element {
   );
 }
 
+export function LinkSheet({ screen, actions }: Props<"link">): JSX.Element {
+  return (
+    <Centre>
+      <Sheet title={`Connect to ${screen.name}?`}>
+        <Sub>
+          A link asks this browser to connect to {screen.address}
+          {screen.launch ? ` and start ${screen.launch}` : ""}. Only go ahead if you opened it
+          yourself.
+        </Sub>
+        <Row>
+          <Button variant="secondary" onClick={() => actions.followLink(false)}>Cancel</Button>
+          <Button autoFocus onClick={() => actions.followLink(true)}>Connect</Button>
+        </Row>
+      </Sheet>
+    </Centre>
+  );
+}
+
 export function ErrorCard({ screen, actions }: Props<"error">): JSX.Element {
   return (
     <Centre>

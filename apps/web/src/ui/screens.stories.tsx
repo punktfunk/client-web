@@ -31,6 +31,7 @@ export const Pair = of(SCREENS["pair"]);
 export const PairAgain = of(SCREENS["pair-again"]);
 export const PairRefused = of(SCREENS["pair-refused"]);
 export const Waiting = of(SCREENS.waiting);
+export const Link = of(SCREENS.link);
 export const Trust = of(SCREENS["trust"]);
 export const Library = of(SCREENS["library"]);
 export const LibraryEmpty = of(SCREENS["library-empty"]);
