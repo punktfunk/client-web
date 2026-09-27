@@ -99,14 +99,25 @@ export interface InputOptions {
 
 /**
  * The shortcuts every punktfunk client shares. On the keyboard: Ctrl+Alt+Shift with S (stats),
- * O (quick menu), Q (release input), D (end the stream), M (mouse model), and F11 or Alt+Enter
+ * O (quick menu), Q (release input), D (end the stream), M (mouse model), V (microphone), and F11
+ * or Alt+Enter
  * (fullscreen). On a pad: Back+A (quick menu), and LB+RB+Start+Back, which releases input and
  * leaves fullscreen when pressed and ends the stream when held.
  */
-export type Chord = "stats" | "menu" | "release" | "end" | "mouse" | "fullscreen" | "escape" | "escape-hold";
+export type Chord =
+  | "stats"
+  | "menu"
+  | "release"
+  | "end"
+  | "mouse"
+  | "mic"
+  | "fullscreen"
+  | "escape"
+  | "escape-hold";
 
 const KEY_CHORDS: Record<string, Chord> = {
   KeyS: "stats",
+  KeyV: "mic",
   KeyO: "menu",
   KeyQ: "release",
   KeyD: "end",

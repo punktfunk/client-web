@@ -98,6 +98,7 @@ class App {
       },
       fullscreen: () => engine.fullscreen(),
       cycleStats: () => engine.cycleStats(),
+      toggleMic: () => engine.toggleMic(),
       setAdding: (on) => {
         this.adding = on;
         if (engine.current.kind === "idle") this.render(engine.current);
@@ -560,7 +561,7 @@ try {
     connect() {}, pair() {}, requestAccess() {}, cancelRequest() {}, retry() {}, back() {}, play() {},
     forget() {}, disconnect() {},
     setAdding() {}, rename() {}, openSettings() {}, setSettings() {}, toggleCapture() {},
-    showDiagnostics() {}, openMenu() {}, fullscreen() {}, cycleStats() {},
+    showDiagnostics() {}, openMenu() {}, fullscreen() {}, cycleStats() {}, toggleMic() {},
   });
   shell.render({
     kind: "error",

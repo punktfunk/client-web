@@ -147,6 +147,16 @@ function QuickMenu({ screen, actions }: { screen: Extract<Screen, { kind: "strea
         Statistics
         <span className="ml-auto text-muted-foreground">{screen.diagnostics ? "On" : "Off"}</span>
       </Button>
+      <Button
+        role="menuitem"
+        variant="ghost"
+        className={item}
+        disabled={screen.stats.mic === "unsupported"}
+        onClick={() => actions.toggleMic()}
+      >
+        Microphone
+        <span className="ml-auto text-muted-foreground">{MIC_STATE[screen.stats.mic ?? "off"]}</span>
+      </Button>
       <Button role="menuitem" variant="ghost" className={item} onClick={() => actions.fullscreen()}>
         Fullscreen
       </Button>
@@ -159,6 +169,15 @@ function QuickMenu({ screen, actions }: { screen: Extract<Screen, { kind: "strea
     </Card>
   );
 }
+
+/** The microphone item's state, as the player reads it. */
+const MIC_STATE: Record<NonNullable<SessionStats["mic"]>, string> = {
+  off: "Off",
+  starting: "Asking…",
+  on: "On",
+  denied: "Blocked by the browser",
+  unsupported: "Not in this browser",
+};
 
 /** How each overlay role reads: headline, breakdown, aside, warning. */
 const ROLE_CLASS: Record<HudLine["role"], string> = {

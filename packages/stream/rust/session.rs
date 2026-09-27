@@ -329,7 +329,7 @@ pub unsafe extern "C" fn pf_session_hello(
                 } else {
                     0
                 },
-            audio_channels: 2,
+            audio_channels: crate::audio::requested_channels(),
             // What `VideoDecoder` said it takes; H.264 always.
             video_codecs: CODECS.with(std::cell::Cell::get),
             // No preference: the host picks the best codec both sides have.
@@ -488,6 +488,7 @@ fn on_welcome(c: &mut Client, welcome: Welcome) {
     c.depth = welcome.bit_depth;
     c.hdr = welcome.color.is_hdr();
     c.audio_channels = welcome.audio_channels;
+    crate::audio::negotiated(welcome.audio_channels, welcome.audio_layout);
     c.grants = welcome.grants;
     c.access_secs = welcome.expires_in_secs;
     c.access_seq = c.access_seq.wrapping_add(1);
