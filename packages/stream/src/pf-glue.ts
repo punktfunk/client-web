@@ -463,8 +463,8 @@ mergeInto(LibraryManager.library, {
 
   pf_video_au: function (ptr: number, len: number, ptsUs: number, key: number, flags: number): void {
     if (!Module.__pfOnAccessUnit) return;
-    // `slice`, not `subarray`: EncodedVideoChunk keeps the bytes past this call, and the Rust
-    // buffer is freed the moment we return. `flags` crosses as i32; `>>> 0` makes it the u32.
-    Module.__pfOnAccessUnit(HEAPU8.slice(ptr, ptr + len), ptsUs, key !== 0, flags >>> 0);
+    // A view, not a copy: `EncodedVideoChunk` copies its data as it is built, which `submit` does
+    // before this returns and Rust frees the buffer. `flags` crosses as i32; `>>> 0` makes it u32.
+    Module.__pfOnAccessUnit(HEAPU8.subarray(ptr, ptr + len), ptsUs, key !== 0, flags >>> 0);
   },
 });

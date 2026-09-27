@@ -194,7 +194,18 @@ export class InputPipe {
     this.on(window, "keydown", (e: KeyboardEvent) => this.key(e, true));
     this.on(window, "keyup", (e: KeyboardEvent) => this.key(e, false));
     this.on(c, "pointerdown", (e: PointerEvent) => this.pointer(e, "down"));
-    this.on(c, "pointermove", (e: PointerEvent) => this.pointer(e, "move"));
+    // Mouse motion raw where the browser has it (Chromium): `pointermove` arrives once a frame,
+    // which holds every move back by up to a refresh. Touch keeps `pointermove`.
+    if ("onpointerrawupdate" in c) {
+      this.on(c, "pointerrawupdate" as "pointermove", (e: PointerEvent) => {
+        if (e.pointerType !== "touch") this.pointer(e, "move");
+      });
+      this.on(c, "pointermove", (e: PointerEvent) => {
+        if (e.pointerType === "touch") this.pointer(e, "move");
+      });
+    } else {
+      this.on(c, "pointermove", (e: PointerEvent) => this.pointer(e, "move"));
+    }
     this.on(c, "pointerup", (e: PointerEvent) => this.pointer(e, "up"));
     this.on(c, "pointercancel", (e: PointerEvent) => this.pointer(e, "up"));
     this.on(c, "wheel", (e: WheelEvent) => this.scroll(e), { passive: false });
