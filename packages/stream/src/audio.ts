@@ -87,6 +87,65 @@ class PunktfunkSink extends AudioWorkletProcessor {
 registerProcessor("punktfunk-sink", PunktfunkSink);
 `;
 
+/**
+ * `OpusHead` for a multistream decoder, mapping family 255: the decoder's output channel `i` is
+ * the stream channel `mapping[i]`, with no reordering by the browser, so channels come out in the
+ * wire's order (front left, front right, centre, LFE, rear, side), which is the order an output
+ * device's channels take.
+ */
+export function opusHead(channels: number, streams: number, coupled: number, mapping: ArrayLike<number>): Uint8Array {
+  const head = new Uint8Array(21 + channels);
+  head.set([0x4f, 0x70, 0x75, 0x73, 0x48, 0x65, 0x61, 0x64]); // "OpusHead"
+  const v = new DataView(head.buffer);
+  v.setUint8(8, 1); // version
+  v.setUint8(9, channels);
+  v.setUint16(10, 0, true); // pre-skip
+  v.setUint32(12, SAMPLE_RATE, true);
+  v.setInt16(16, 0, true); // output gain
+  v.setUint8(18, 255);
+  v.setUint8(19, streams);
+  v.setUint8(20, coupled);
+  head.set(Array.from(mapping).slice(0, channels), 21);
+  return head;
+}
+
+/** The layouts a probe asks the decoder about: the host's default 5.1 and 7.1 coupling. */
+const PROBE: Record<number, [streams: number, coupled: number]> = { 6: [4, 2], 8: [5, 3] };
+
+/**
+ * How many channels this page can play: 8 or 6 when the output device has them and the browser's
+ * Opus decoder takes a family-255 multistream, else 2. A browser that would reorder surround in
+ * its own way stays on stereo rather than put the centre in a rear speaker.
+ */
+export async function playableChannels(): Promise<number> {
+  if (!AudioPipe.supported()) return 2;
+  let max = 2;
+  try {
+    const ctx = new AudioContext();
+    max = ctx.destination.maxChannelCount;
+    void ctx.close();
+  } catch {
+    return 2;
+  }
+  for (const channels of [8, 6]) {
+    if (max < channels) continue;
+    const [streams, coupled] = PROBE[channels]!;
+    const mapping = Array.from({ length: channels }, (_, i) => i);
+    try {
+      const { supported } = await AudioDecoder.isConfigSupported({
+        codec: "opus",
+        sampleRate: SAMPLE_RATE,
+        numberOfChannels: channels,
+        description: opusHead(channels, streams, coupled, mapping),
+      });
+      if (supported) return channels;
+    } catch {
+      // A decoder that throws on the description does not take it.
+    }
+  }
+  return 2;
+}
+
 export class AudioPipe {
   private ctx: AudioContext | null = null;
   private node: AudioWorkletNode | null = null;
@@ -101,6 +160,8 @@ export class AudioPipe {
   constructor(
     private readonly mod: PunktfunkModule,
     private readonly channels: number,
+    /** Surround: the multistream the host encodes (`OpusHead`), which the decoder needs. */
+    private readonly description?: Uint8Array,
   ) {}
 
   static supported(): boolean {
@@ -137,6 +198,16 @@ export class AudioPipe {
     node.port.onmessage = (e: MessageEvent<{ underruns: number }>) => {
       this.underruns = e.data.underruns;
     };
+    if (this.channels > 2) {
+      // Each channel to its own speaker, in order, with no down- or up-mix by the graph.
+      try {
+        ctx.destination.channelCount = this.channels;
+        ctx.destination.channelCountMode = "explicit";
+        ctx.destination.channelInterpretation = "discrete";
+      } catch {
+        // The output took fewer channels after all; the graph mixes down.
+      }
+    }
     node.connect(ctx.destination);
     this.node = node;
 
@@ -146,7 +217,12 @@ export class AudioPipe {
         this.errors++;
       },
     });
-    decoder.configure({ codec: "opus", sampleRate: SAMPLE_RATE, numberOfChannels: this.channels });
+    decoder.configure({
+      codec: "opus",
+      sampleRate: SAMPLE_RATE,
+      numberOfChannels: this.channels,
+      ...(this.description ? { description: this.description } : {}),
+    });
     this.decoder = decoder;
 
     this.state = ctx.state === "running" ? "playing" : "suspended";

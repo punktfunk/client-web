@@ -20,10 +20,12 @@ import { DeviceRefused, Host, type LibraryEntry, VersionSkew } from "./host.ts";
 import * as pf from "./pf-connect.ts";
 import { decodeSupported, VideoPipe } from "./video.ts";
 import { type Chord, InputPipe } from "./input.ts";
-import { AudioPipe, type AudioSnapshot } from "./audio.ts";
+import { AudioPipe, type AudioSnapshot, opusHead, playableChannels } from "./audio.ts";
+import { MicPipe, type MicState } from "./mic.ts";
 import { STATS_TIERS, type StatsTier } from "./settings.ts";
 
 export type { AudioSnapshot, AudioState } from "./audio.ts";
+export type { MicState } from "./mic.ts";
 export type { HostInfo, HostStatus, LibraryEntry } from "./host.ts";
 export { VersionSkew } from "./host.ts";
 export { type KnownHost, type Plane, type Reach, hosts, originOf, reach } from "./pf-connect.ts";
@@ -73,6 +75,8 @@ export interface SessionStats {
   access?: string;
   /** A change to that access, or the host's warning before it ends, while it shows. */
   accessNotice?: string;
+  /** The microphone going up to the host: off until the player turns it on. */
+  mic: MicState;
 }
 
 /** Long enough to read a sentence with its cause. */
@@ -211,6 +215,7 @@ export class Engine {
   private video: VideoPipe | null = null;
   private input: InputPipe | null = null;
   private audio: AudioPipe | null = null;
+  private mic: MicPipe | null = null;
   private host: Host | null = null;
   private pairing = false;
   private settled = false;
@@ -240,6 +245,8 @@ export class Engine {
   private constructor(
     private readonly mod: PunktfunkModule,
     private readonly opts: EngineOptions,
+    /** How many channels this page can play: 2, 6 or 8, probed once at `create`. */
+    private readonly surround = 2,
   ) {
     this.tunable = {
       videoBackend: opts.videoBackend ?? TUNABLE_DEFAULTS.videoBackend,
@@ -269,8 +276,8 @@ export class Engine {
     if (!decodeSupported()) {
       throw new Error("this browser cannot decode video (no WebCodecs)");
     }
-    const mod = await loadModule();
-    return new Engine(mod, opts);
+    const [mod, channels] = await Promise.all([loadModule(), playableChannels()]);
+    return new Engine(mod, opts, channels);
   }
 
   // --- observation ---------------------------------------------------------------------
@@ -424,6 +431,7 @@ export class Engine {
     this.launchNotice = null;
     this.access = { seq: 0, grants: 0, deadline: null };
     this.accessNotice = null;
+    this.mod._pf_session_audio?.(this.tunable.audio ? this.surround : 2);
     this.set({ kind: "starting", origin: this.origin });
     this.pendingStream = opts;
     this.dial();
@@ -530,6 +538,8 @@ export class Engine {
         return this.capturePointer(false);
       case "mouse":
         return this.configure({ pointer: this.tunable.pointer === "capture" ? "absolute" : "capture" });
+      case "mic":
+        return this.toggleMic();
       case "fullscreen":
         return this.fullscreen();
       case "escape":
@@ -539,6 +549,14 @@ export class Engine {
       case "escape-hold":
         return this.disconnect(true);
     }
+  }
+
+  /** Turn the microphone on or off for this session. On needs a gesture: the browser asks. */
+  toggleMic(): void {
+    if (this.state.kind !== "streaming") return;
+    this.mic ??= new MicPipe(this.mod);
+    if (this.mic.state === "on" || this.mic.state === "starting") this.mic.stop();
+    else void this.mic.start();
   }
 
   /** Forget a host this browser knows. Its pairing on the host side is untouched. */
@@ -719,6 +737,8 @@ export class Engine {
 
   /** The session's two pipes, torn down together. Idempotent. */
   private stopSession(): void {
+    this.mic?.stop();
+    this.mic = null;
     this.input?.detach();
     this.input = null;
     this.inputSize = { width: 0, height: 0 };
@@ -803,7 +823,7 @@ export class Engine {
     if (!this.audio && this.tunable.audio) {
       const channels = this.mod._pf_session_audio_channels();
       if (channels > 0) {
-        this.audio = new AudioPipe(this.mod, channels);
+        this.audio = new AudioPipe(this.mod, channels, this.surroundHead(channels));
         this.audio.attach();
       }
     }
@@ -841,8 +861,23 @@ export class Engine {
           ? { launchNotice: this.launchNotice.text }
           : {}),
         ...this.accessStats(now),
+        mic: this.mic?.state ?? (MicPipe.supported() ? "off" : "unsupported"),
       },
     });
+  }
+
+  /** The `OpusHead` for the surround the host encodes, or nothing for stereo. */
+  private surroundHead(channels: number): Uint8Array | undefined {
+    if (channels <= 2 || !this.mod._pf_session_audio_layout) return undefined;
+    const p = this.mod._malloc(10);
+    try {
+      const n = this.mod._pf_session_audio_layout(p);
+      if (n < 2) return undefined;
+      const bytes = this.mod.HEAPU8.slice(p, p + n);
+      return opusHead(channels, bytes[0]!, bytes[1]!, bytes.subarray(2));
+    } finally {
+      this.mod._free(p);
+    }
   }
 
   /** Take a new access advert. The first is `Welcome`'s: it sets the chip and says nothing. */

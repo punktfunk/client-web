@@ -303,7 +303,7 @@ pub unsafe extern "C" fn pf_session_hello(
             // `HOST_TIMING`: the host's own share of each frame, which the overlay reports.
             video_caps: punktfunk_core::quic::VIDEO_CAP_PROBE_SEQ
                 | punktfunk_core::quic::VIDEO_CAP_HOST_TIMING,
-            audio_channels: 2,
+            audio_channels: crate::audio::requested_channels(),
             // H.264 only for now: it is what a GPU-less host can encode, and what every engine
             // decodes. HEVC and AV1 wait until there is a stream to test them against.
             video_codecs: punktfunk_core::quic::CODEC_H264,
@@ -447,6 +447,7 @@ fn on_welcome(c: &mut Client, welcome: Welcome) {
     c.height = welcome.mode.height;
     c.host_caps = welcome.host_caps;
     c.audio_channels = welcome.audio_channels;
+    crate::audio::negotiated(welcome.audio_channels, welcome.audio_layout);
     c.grants = welcome.grants;
     c.access_secs = welcome.expires_in_secs;
     c.access_seq = c.access_seq.wrapping_add(1);

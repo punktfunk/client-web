@@ -37,6 +37,8 @@ export interface SessionStats {
   access?: string;
   /** A change to that access, or the warning before it ends, while it shows. */
   accessNotice?: string;
+  /** The microphone going up to the host. */
+  mic?: "off" | "starting" | "on" | "denied" | "unsupported";
 }
 
 /**
@@ -122,6 +124,8 @@ export interface Actions {
   fullscreen(): void;
   /** Step the statistics overlay: off, compact, normal, detailed. */
   cycleStats(): void;
+  /** Turn the microphone on or off. From a gesture: the browser asks for permission. */
+  toggleMic(): void;
   openSettings(on: boolean): void;
   setSettings(patch: Partial<Settings>): void;
   /** Take or release the pointer. Taking it needs a gesture, so this is only ever called from

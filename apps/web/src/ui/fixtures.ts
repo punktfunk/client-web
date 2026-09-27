@@ -96,5 +96,5 @@ export type ScreenName = keyof typeof SCREENS;
 export const noop: Actions = {
   connect() {}, pair() {}, retry() {}, back() {}, play() {}, forget() {}, disconnect() {},
   setAdding() {}, rename() {}, openSettings() {}, setSettings() {}, toggleCapture() {},
-  showDiagnostics() {}, openMenu() {}, fullscreen() {}, cycleStats() {},
+  showDiagnostics() {}, openMenu() {}, fullscreen() {}, cycleStats() {}, toggleMic() {},
 };

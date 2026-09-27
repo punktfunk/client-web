@@ -27,6 +27,9 @@ export interface PunktfunkModule {
   _pf_ctl_recv(ptr: number, len: number): void;
 
   // --- the session -----------------------------------------------------------------------
+  _pf_session_audio?(channels: number): void;
+  _pf_session_audio_layout?(out: number): number;
+  _pf_mic_send?(ptr: number, len: number, seq: number, ptsNs: number): void;
   _pf_session_access_seq?(): number;
   _pf_session_access_grants?(): number;
   _pf_session_access_secs?(): number;
