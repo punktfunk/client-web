@@ -67,6 +67,8 @@ class App {
   private probing = false;
   /** The settings sheet renders over whatever is showing, so it is a flag rather than a state. */
   private settingsOpen = false;
+  /** The quick menu over a live picture; closed whenever the stream is not. */
+  private menuOpen = false;
   private prefs: Settings = settings.get();
   private resizeTimer = 0;
 
@@ -85,6 +87,8 @@ class App {
         void engine.connect(this.targetOf(address));
       },
       pair: (pin) => engine.pair(pin),
+      requestAccess: () => engine.requestAccess(this.streamOptions()),
+      cancelRequest: () => engine.cancelRequest(),
       retry: () => {
         const s = engine.current;
         // After a dropped stream, try again means that stream: the same title, not the library.
@@ -95,7 +99,17 @@ class App {
       back: () => engine.disconnect(),
       play: (entry) => this.play(entry),
       forget: (origin) => this.forget(origin),
-      disconnect: () => engine.disconnect(),
+      disconnect: (quit) => {
+        this.menuOpen = false;
+        engine.disconnect(quit);
+      },
+      openMenu: (on) => {
+        this.menuOpen = on;
+        this.render(engine.current);
+      },
+      fullscreen: () => engine.fullscreen(),
+      cycleStats: () => engine.cycleStats(),
+      toggleMic: () => engine.toggleMic(),
       setAdding: (on) => {
         this.adding = on;
         if (engine.current.kind === "idle") this.render(engine.current);
@@ -125,6 +139,10 @@ class App {
     });
     this.applyPrefs();
     this.watchSize();
+    engine.onMenu(() => {
+      this.menuOpen = !this.menuOpen;
+      this.render(engine.current);
+    });
     engine.onState((s) => this.render(s));
   }
 
@@ -135,6 +153,7 @@ class App {
 
   /** Facts in, words out. */
   private render(s: EngineState): void {
+    if (s.kind !== "streaming") this.menuOpen = false;
     if (this.settingsOpen) {
       return this.show({ kind: "settings", values: this.prefs, streaming: s.kind === "streaming" });
     }
@@ -170,6 +189,8 @@ class App {
         return this.show({ kind: "pair", origin: s.origin, mode: "first" });
       case "pairing":
         return this.show({ kind: "pair", origin: s.origin, mode: "first", busy: true });
+      case "awaiting-approval":
+        return this.show({ kind: "waiting", origin: s.origin, name: s.name });
       case "paired": {
         this.show({ kind: "pair", origin: s.origin, mode: "first", busy: true });
         // The host closes after the ceremony, as it does for native clients; streaming is a
@@ -206,6 +227,7 @@ class App {
           kind: "streaming",
           stats: { origin: s.origin, ...s.stats },
           diagnostics: s.stats.statsTier !== "off",
+          menu: this.menuOpen,
         });
       case "error": {
         // Was a stream live, or starting, when this happened? Then trying again resumes it.
@@ -449,16 +471,18 @@ class App {
 
   private play(entry?: LibraryEntry): void {
     this.lastPlay = entry ? { entry } : {};
+    this.engine.startStream({ ...this.streamOptions(), ...(entry ? { launch: entry } : {}) });
+  }
+
+  /** The desktop stream the settings and the window ask for. */
+  private streamOptions(): { width: number; height: number; fps: number; bitrateKbps: number } {
     const [fit, fitHeight] = size(this.uiCanvas);
-    const width = this.prefs.width || fit;
-    const height = this.prefs.height || fitHeight;
-    this.engine.startStream({
-      width,
-      height,
+    return {
+      width: this.prefs.width || fit,
+      height: this.prefs.height || fitHeight,
       fps: this.prefs.fps,
       bitrateKbps: this.prefs.bitrateKbps,
-      ...(entry ? { launch: entry } : {}),
-    });
+    };
   }
 }
 
@@ -578,9 +602,10 @@ try {
   // carries for exactly this case does.
   const shell = new WebShell(document.body);
   shell.mount({
-    connect() {}, pair() {}, retry() {}, back() {}, play() {}, forget() {}, disconnect() {},
+    connect() {}, pair() {}, requestAccess() {}, cancelRequest() {}, retry() {}, back() {}, play() {},
+    forget() {}, disconnect() {},
     setAdding() {}, rename() {}, openSettings() {}, setSettings() {}, toggleCapture() {},
-    showDiagnostics() {},
+    showDiagnostics() {}, openMenu() {}, fullscreen() {}, cycleStats() {}, toggleMic() {},
   });
   shell.render({
     kind: "error",
