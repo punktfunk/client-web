@@ -20,6 +20,7 @@ import {
   type ConsoleGame,
   type ConsoleHostRow,
   type Engine,
+  type Host,
   type LibraryEntry,
 } from "@punktfunk/stream";
 import type { Actions, HostCard, Screen, Ui } from "./types.ts";
@@ -49,6 +50,9 @@ const SETTINGS_KEY = "punktfunk.console.settings";
 /** The screens the console cannot draw; everything else is the console's. */
 const WEB_SCREENS = new Set<Screen["kind"]>(["accept", "trust", "link", "streaming"]);
 
+/** How long a wake is waited on before the console hears it did not come back. */
+const WAKE_TIMEOUT_S = 60;
+
 /** A standard-mapping pad's buttons, in the order `pf_console_pad` reads its bits: A, B, X, Y,
  *  L1, R1, then the D-pad's up, down, left, right. */
 const PAD_BITS = [0, 1, 2, 3, 4, 5, 12, 13, 14, 15];
@@ -59,6 +63,8 @@ export class ConsoleUi implements Ui {
   private mounted = false;
   /** The console's state bits after the last frame. */
   private state = 0;
+  /** The web shell was told to stand aside for a launch hold over the stream. */
+  private held = false;
   private screen: Screen | null = null;
   /** Host rows by the key the console knows them by, and the origin each stands for. */
   private origins = new Map<string, string>();
@@ -76,6 +82,11 @@ export class ConsoleUi implements Ui {
   private dialled = false;
   /** A shelf the console asked for whose host is still being reached: a failure lands on it. */
   private fetching: string | null = null;
+  /** The management API of the host whose shelf the console shows: its launch hold asks it what
+   *  is running. */
+  private hostApi: { origin: string; host: Host } | null = null;
+  /** A wake the console asked for: it gates the console's navigation until it hears back. */
+  private waking: { key: string; origin: string; name: string; then: boolean; since: number; timer: number } | null = null;
   private readonly live: HTMLElement;
   private readonly leave: HTMLButtonElement;
   private readonly onKey: (e: KeyboardEvent) => void;
@@ -131,13 +142,15 @@ export class ConsoleUi implements Ui {
   render(screen: Screen): void {
     const was = this.screen;
     this.screen = screen;
-    this.fallback.render(WEB_SCREENS.has(screen.kind) || !this.started ? screen : { kind: "console" });
+    const web = (WEB_SCREENS.has(screen.kind) && !this.held) || !this.started;
+    this.fallback.render(web ? screen : { kind: "console" });
     if (!this.started) return;
     this.follow(was, screen);
   }
 
   destroy(): void {
     this.mounted = false;
+    this.endWake(false);
     window.removeEventListener("keydown", this.onKey);
     this.live.remove();
     this.leave.remove();
@@ -171,6 +184,12 @@ export class ConsoleUi implements Ui {
     if (this.showing()) this.pad();
     this.engine.console.frame(width, height);
     this.state = this.engine.console.state();
+    // A launch hold covers the stream until the game is up: the page's own overlay waits.
+    const holding = !!(this.state & CONSOLE_STATE.HOLDS_LAUNCH);
+    if (holding !== this.held && this.screen) {
+      this.held = holding;
+      this.fallback.render(holding ? { kind: "console" } : this.screen);
+    }
     const showing = this.showing();
     // The canvas takes the pointer only while the console is on it; over a stream the pointer
     // is the game's.
@@ -180,11 +199,9 @@ export class ConsoleUi implements Ui {
 
   /** The console is on screen: before and between streams, and over one it is holding. */
   private showing(): boolean {
-    return (
-      this.started &&
-      (!(this.state & CONSOLE_STATE.IN_STREAM) || !!(this.state & CONSOLE_STATE.HOLDS_LAUNCH)) &&
-      !WEB_SCREENS.has(this.screen?.kind ?? "console")
-    );
+    if (!this.started) return false;
+    if (this.state & CONSOLE_STATE.HOLDS_LAUNCH) return true;
+    return !(this.state & CONSOLE_STATE.IN_STREAM) && !WEB_SCREENS.has(this.screen?.kind ?? "console");
   }
 
   // --- input ----------------------------------------------------------------------------------
@@ -306,6 +323,8 @@ export class ConsoleUi implements Ui {
     if (this.fetching === s.origin) this.fetching = null;
     if (this.shelf !== s.origin) {
       this.shelf = s.origin;
+      const now = this.engine.current;
+      if (now.kind === "ready" && now.origin === s.origin) this.hostApi = { origin: s.origin, host: now.host };
       this.gamesSent = "";
       this.artSent.clear();
       // A pairing that just finished: the console's Pair screen waits for this.
@@ -416,7 +435,9 @@ export class ConsoleUi implements Ui {
       this.pendingPin = null;
       this.pendingKnock = null;
       this.dialled = false;
-      this.actions?.back();
+      // A request for access is withdrawn, so a late approval admits nothing.
+      if (this.engine.current.kind === "awaiting-approval") this.actions?.cancelRequest();
+      else this.actions?.back();
       return;
     }
     if (typeof a === "string") return;
@@ -484,13 +505,65 @@ export class ConsoleUi implements Ui {
         if (origin) this.actions?.forget(origin);
         return;
       case "Wake":
-        if (origin) this.actions?.wake(origin);
+        if (origin) this.startWake(str("key"), origin, body["then_connect"] === true);
+        return;
+      case "CancelWake":
+        this.endWake(true);
+        return;
+      case "RefreshRunning":
+        if (origin) this.refreshRunning(origin);
         return;
       default:
         // Presets, the speed test, pad tests, licences and host tools are the native clients';
         // the page offers what it has through the web shell.
         return;
     }
+  }
+
+  /** What the host runs, as the console's launch hold and Resume badge read it. Unanswered,
+   *  the hold gives up after 15 s and covers the stream with a failure. */
+  private refreshRunning(origin: string): void {
+    const api = this.hostApi;
+    if (!api || api.origin !== origin) return;
+    void api.host
+      .status()
+      .then((st) =>
+        this.engine.console.push(
+          CONSOLE_PUSH.LIBRARY_RUNNING,
+          st.games.map((g) => ({ app_id: g.app_id ?? null, title: g.title, state: g.state, awaiting_window: !!g.awaiting_window })),
+        ),
+      )
+      .catch(() => {});
+  }
+
+  /** Wake a host and keep the console's wake card current: seconds while the page's own wake
+   *  polls it, then online (the console connects by itself if asked to) or timed out. */
+  private startWake(key: string, origin: string, then: boolean): void {
+    this.endWake(false);
+    const name = this.hosts.find((h) => h.origin === origin)?.name ?? key;
+    const since = Date.now();
+    const tick = () => {
+      const w = this.waking;
+      if (!w) return;
+      const seconds = Math.floor((Date.now() - w.since) / 1000);
+      const online = this.hosts.find((h) => h.origin === w.origin)?.reach === "ok";
+      const timedOut = !online && seconds >= WAKE_TIMEOUT_S;
+      this.engine.console.push(CONSOLE_PUSH.WAKE, { key, name, seconds, timed_out: timedOut, online, then_connect: then });
+      if (online || timedOut) {
+        clearInterval(w.timer);
+        // Online without a connect to follow: the card has said so, and goes.
+        if (online && !then) window.setTimeout(() => this.endWake(true), 1500);
+      }
+    };
+    this.waking = { key, origin, name, then, since, timer: window.setInterval(tick, 1000) };
+    this.actions?.wake(origin);
+    tick();
+  }
+
+  private endWake(clear: boolean): void {
+    if (this.waking) clearInterval(this.waking.timer);
+    this.waking = null;
+    if (clear && this.started) this.engine.console.push(CONSOLE_PUSH.WAKE, null);
   }
 
   /** The origin a console key or address stands for. */
