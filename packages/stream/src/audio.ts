@@ -30,8 +30,10 @@ export interface AudioSnapshot {
 
 /**
  * The playback thread's side: an interleaved f32 ring the main thread appends to. `process`
- * pulls one render quantum per call; a dry ring plays silence and counts it. A ring that has
- * grown past `cap` — jitter that never drained — is cut back to `keep`, so latency cannot creep.
+ * pulls one render quantum per call. It starts only once `prime` is queued, and primes again
+ * after running dry, so one late packet costs one gap rather than a gap per packet. A backlog
+ * that sits more than `slack` over `prime` for half a second is trimmed back to `prime`, and one
+ * past `cap` at once: latency cannot creep.
  *
  * A string, because the worklet is loaded by URL and the bundler must not see a second entry.
  */
@@ -41,7 +43,10 @@ class PunktfunkSink extends AudioWorkletProcessor {
     super();
     this.channels = options.processorOptions.channels;
     this.cap = options.processorOptions.cap;
-    this.keep = options.processorOptions.keep;
+    this.prime = options.processorOptions.prime;
+    this.slack = options.processorOptions.slack;
+    this.primed = false;
+    this.over = 0;
     this.chunks = [];
     this.offset = 0;
     this.queued = 0;
@@ -50,18 +55,28 @@ class PunktfunkSink extends AudioWorkletProcessor {
       const pcm = e.data;
       this.chunks.push(pcm);
       this.queued += pcm.length / this.channels;
-      if (this.queued > this.cap) {
-        while (this.queued > this.keep && this.chunks.length > 1) {
-          const gone = this.chunks.shift();
-          this.queued -= (gone.length - this.offset) / this.channels;
-          this.offset = 0;
-        }
-      }
+      if (this.queued > this.cap) this.trim(this.prime);
     };
+  }
+  trim(to) {
+    while (this.queued > to && this.chunks.length > 1) {
+      const gone = this.chunks.shift();
+      this.queued -= (gone.length - this.offset) / this.channels;
+      this.offset = 0;
+    }
   }
   process(_inputs, outputs) {
     const out = outputs[0];
     const frames = out[0].length;
+    if (!this.primed) {
+      if (this.queued < this.prime) return true;
+      this.primed = true;
+    }
+    this.over = this.queued > this.prime + this.slack ? this.over + frames : 0;
+    if (this.over > sampleRate / 2) {
+      this.trim(this.prime);
+      this.over = 0;
+    }
     let wrote = 0;
     while (wrote < frames && this.chunks.length) {
       const chunk = this.chunks[0];
@@ -78,6 +93,7 @@ class PunktfunkSink extends AudioWorkletProcessor {
       if (this.offset >= chunk.length) { this.chunks.shift(); this.offset = 0; }
     }
     if (wrote < frames) {
+      this.primed = false;
       this.underruns++;
       if (this.underruns % 100 === 1) this.port.postMessage({ underruns: this.underruns });
     }
@@ -192,8 +208,8 @@ export class AudioPipe {
       numberOfInputs: 0,
       numberOfOutputs: 1,
       outputChannelCount: [this.channels],
-      // 60 ms of backlog is jitter that will not drain; cut back to 20 ms.
-      processorOptions: { channels: this.channels, cap: SAMPLE_RATE * 0.06, keep: SAMPLE_RATE * 0.02 },
+      // 20 ms is the jitter the main thread's delivery needs; 60 ms is a backlog that will not drain.
+      processorOptions: { channels: this.channels, prime: SAMPLE_RATE * 0.02, slack: SAMPLE_RATE * 0.01, cap: SAMPLE_RATE * 0.06 },
     });
     node.port.onmessage = (e: MessageEvent<{ underruns: number }>) => {
       this.underruns = e.data.underruns;
