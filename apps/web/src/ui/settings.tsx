@@ -1,9 +1,10 @@
 // The settings sheet. It renders over whatever screen was showing — including a live one — so
-// it is a dialog rather than a route, and closing it puts the previous screen back.
+// it is a dialog rather than a route, and closing it puts the previous screen back. Rows are the
+// console's: label and hint on the left, the control on the right, on and off as two buttons.
 
 import { DEFAULTS, type Settings } from "@punktfunk/stream";
 import { Label } from "@unom/ui/form/label";
-import { Switch } from "@unom/ui/form/switch";
+import { cn } from "@unom/ui/lib/utils";
 import type { JSX, ReactNode } from "react";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -35,7 +36,7 @@ export function SettingsDialog({ screen, actions }: { screen: Extract<Screen, { 
   const set = (patch: Partial<Settings>) => actions.setSettings(patch);
   return (
     <Dialog open onOpenChange={(open) => { if (!open) actions.openSettings(false); }}>
-      <DialogContent showCloseButton={false} className="max-w-xl">
+      <DialogContent showCloseButton={false} className="max-w-2xl">
         <DialogHeader>
           <DialogTitle>Settings</DialogTitle>
           <DialogDescription>
@@ -44,7 +45,7 @@ export function SettingsDialog({ screen, actions }: { screen: Extract<Screen, { 
           </DialogDescription>
         </DialogHeader>
 
-        <Field label="Stream size" htmlFor="pf-size">
+        <Setting label="Stream size" htmlFor="pf-size" first>
           <Select
             value={`${v.width}x${v.height}`}
             onValueChange={(value) => {
@@ -57,16 +58,16 @@ export function SettingsDialog({ screen, actions }: { screen: Extract<Screen, { 
               {SIZES.map(([label, w, h]) => <SelectItem key={label} value={`${w}x${h}`}>{label}</SelectItem>)}
             </SelectContent>
           </Select>
-        </Field>
+        </Setting>
 
-        <Field label="Frame rate" htmlFor="pf-fps">
+        <Setting label="Frame rate" htmlFor="pf-fps">
           <Select value={String(v.fps)} onValueChange={(value) => set({ fps: Number(value) })}>
             <SelectTrigger id="pf-fps"><SelectValue /></SelectTrigger>
             <SelectContent>
               {RATES.map((f) => <SelectItem key={f} value={String(f)}>{f} fps</SelectItem>)}
             </SelectContent>
           </Select>
-        </Field>
+        </Setting>
 
         <Toggle
           id="pf-auto-bitrate"
@@ -87,7 +88,7 @@ export function SettingsDialog({ screen, actions }: { screen: Extract<Screen, { 
           />
         )}
 
-        <Field label="Video plane" htmlFor="pf-backend">
+        <Setting label="Video plane" htmlFor="pf-backend">
           <Select value={v.videoBackend} onValueChange={(value) => set({ videoBackend: value as Settings["videoBackend"] })}>
             <SelectTrigger id="pf-backend"><SelectValue /></SelectTrigger>
             <SelectContent>
@@ -96,9 +97,9 @@ export function SettingsDialog({ screen, actions }: { screen: Extract<Screen, { 
               <SelectItem value="webgl2">WebGL2</SelectItem>
             </SelectContent>
           </Select>
-        </Field>
+        </Setting>
 
-        <Field label="Mouse" htmlFor="pf-pointer">
+        <Setting label="Mouse" htmlFor="pf-pointer">
           <Select value={v.pointer} onValueChange={(value) => set({ pointer: value as Settings["pointer"] })}>
             <SelectTrigger id="pf-pointer"><SelectValue /></SelectTrigger>
             <SelectContent>
@@ -106,9 +107,10 @@ export function SettingsDialog({ screen, actions }: { screen: Extract<Screen, { 
               <SelectItem value="capture">Capture the pointer (games)</SelectItem>
             </SelectContent>
           </Select>
-        </Field>
+        </Setting>
 
         <Slider
+          className="border-t border-border pt-4"
           label="Stick deadzone"
           min={0}
           max={40}
@@ -118,7 +120,7 @@ export function SettingsDialog({ screen, actions }: { screen: Extract<Screen, { 
           onValueChange={(n) => set({ deadzone: n / 100 })}
         />
 
-        <Field label="Statistics overlay" htmlFor="pf-stats">
+        <Setting label="Statistics overlay" htmlFor="pf-stats">
           <Select value={v.statsTier} onValueChange={(value) => set({ statsTier: value as Settings["statsTier"] })}>
             <SelectTrigger id="pf-stats"><SelectValue /></SelectTrigger>
             <SelectContent>
@@ -128,7 +130,7 @@ export function SettingsDialog({ screen, actions }: { screen: Extract<Screen, { 
               <SelectItem value="detailed">Detailed</SelectItem>
             </SelectContent>
           </Select>
-        </Field>
+        </Setting>
 
         <Toggle
           id="pf-advanced-stats"
@@ -136,15 +138,16 @@ export function SettingsDialog({ screen, actions }: { screen: Extract<Screen, { 
           hint="Off shows the figures Moonlight's overlay also shows. On shows capture to glass as p50/p95 and every stage between."
           on={v.advancedStats}
           onChange={(on) => set({ advancedStats: on })}
-        />
-        <a
-          href="https://docs.punktfunk.unom.io/docs/stats"
-          target="_blank"
-          rel="noreferrer"
-          className="-mt-2 text-xs text-muted-foreground underline"
         >
-          What each number means
-        </a>
+          <a
+            href="https://docs.punktfunk.unom.io/docs/stats"
+            target="_blank"
+            rel="noreferrer"
+            className="text-xs text-muted-foreground underline"
+          >
+            What each number means
+          </a>
+        </Toggle>
 
         <Toggle id="pf-audio" label="Play the host's audio" on={v.audio} onChange={(on) => set({ audio: on })} />
         <Toggle id="pf-input" label="Send keyboard, mouse and gamepads" on={v.captureInput} onChange={(on) => set({ captureInput: on })} />
@@ -166,24 +169,61 @@ export function SettingsDialog({ screen, actions }: { screen: Extract<Screen, { 
   );
 }
 
-function Field({ label, htmlFor, children }: { label: string; htmlFor: string; children: ReactNode }): JSX.Element {
+/** One setting as the console lays it out: label and hint on the left, the control on the right,
+ *  stacked on a phone. A rule above every row but the first. */
+function Setting({
+  label,
+  hint,
+  htmlFor,
+  first,
+  children,
+  extra,
+}: {
+  label: string;
+  hint?: string | undefined;
+  htmlFor?: string;
+  first?: boolean;
+  children: ReactNode;
+  extra?: ReactNode;
+}): JSX.Element {
   return (
-    <div className="grid gap-1.5">
-      <Label htmlFor={htmlFor}>{label}</Label>
-      {children}
+    <div className={cn("flex flex-col gap-3 md:flex-row md:items-center md:justify-between md:gap-8", !first && "border-t border-border pt-4")}>
+      <div className="min-w-0 space-y-1">
+        <Label htmlFor={htmlFor} className="text-sm font-medium">{label}</Label>
+        {hint && <p className="text-xs text-muted-foreground">{hint}</p>}
+        {extra}
+      </div>
+      <div className="shrink-0 md:w-64">{children}</div>
     </div>
   );
 }
 
-/** A switch belongs beside its label, not under it. */
-function Toggle({ id, label, hint, on, onChange }: { id: string; label: string; hint?: string; on: boolean; onChange: (on: boolean) => void }): JSX.Element {
+/** On and off as the console offers them: two buttons, the live one filled. */
+function Toggle({
+  id,
+  label,
+  hint,
+  on,
+  onChange,
+  children,
+}: {
+  id: string;
+  label: string;
+  hint?: string;
+  on: boolean;
+  onChange: (on: boolean) => void;
+  children?: ReactNode;
+}): JSX.Element {
   return (
-    <div className="flex items-center gap-4 border-t border-border pt-3">
-      <Label htmlFor={id} className="flex-1 leading-snug">
-        {label}
-        {hint && <span className="mt-1 block text-xs font-normal text-muted-foreground">{hint}</span>}
-      </Label>
-      <Switch id={id} checked={on} onCheckedChange={onChange} />
-    </div>
+    <Setting label={label} hint={hint} extra={children}>
+      <div id={id} role="group" aria-label={label} className="flex gap-2 md:justify-end">
+        <Button size="sm" variant={on ? "outline" : "default"} aria-pressed={!on} onClick={() => on && onChange(false)}>
+          Off
+        </Button>
+        <Button size="sm" variant={on ? "default" : "outline"} aria-pressed={on} onClick={() => !on && onChange(true)}>
+          On
+        </Button>
+      </div>
+    </Setting>
   );
 }

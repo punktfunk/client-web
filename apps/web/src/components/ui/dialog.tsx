@@ -1,6 +1,6 @@
 // The client's Dialog IS @unom/ui's radix dialog. @unom/ui ships the SURFACE only and leaves
 // placement to the app, so `DialogContent` here is the surface already wrapped in its portal +
-// overlay and centred in the viewport — the console's arrangement, verbatim.
+// overlay and centred in the viewport, with the console's row stagger — its arrangement, verbatim.
 import {
   Dialog,
   DialogClose,
@@ -13,9 +13,11 @@ import {
   DialogTitle,
 } from "@unom/ui/dialog";
 import { cn } from "@unom/ui/lib/utils";
-import type { ComponentProps } from "react";
+import { motion } from "motion/react";
+import { Children, type ComponentProps, isValidElement } from "react";
+import { ROW, ROW_GAP, Stagger } from "@/components/stagger";
 
-const DialogContent = ({ className, ...props }: ComponentProps<typeof DialogSurface>) => (
+const DialogContent = ({ className, children, ...props }: ComponentProps<typeof DialogSurface>) => (
   <DialogPortal>
     <DialogOverlay />
     <DialogSurface
@@ -25,7 +27,17 @@ const DialogContent = ({ className, ...props }: ComponentProps<typeof DialogSurf
         className,
       )}
       {...props}
-    />
+    >
+      {/* `root`: a portal sits outside every screen's cascade, so nothing above drives
+          `from → enter`. `contents` keeps each row a flex item, so the surface's gap spaces it. */}
+      <Stagger root gap={ROW_GAP} className="contents">
+        {Children.toArray(children).map((child, i) => (
+          <motion.div key={isValidElement(child) ? (child.key ?? i) : i} variants={ROW}>
+            {child}
+          </motion.div>
+        ))}
+      </Stagger>
+    </DialogSurface>
   </DialogPortal>
 );
 DialogContent.displayName = "DialogContent";

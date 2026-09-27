@@ -2,9 +2,10 @@
 // for — and brought back by a pointer, a key or a tap, then hidden again.
 
 import type { HudLine } from "@punktfunk/stream";
-import { Badge } from "@unom/ui/badge";
 import { cn } from "@unom/ui/lib/utils";
+import { Maximize, Menu, MousePointer2, Settings } from "lucide-react";
 import { type JSX, useEffect, useState } from "react";
+import { Badge, type BadgeVariant } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { bare } from "./pieces.tsx";
@@ -18,12 +19,12 @@ const HIDE_AFTER_MS = 2600;
  * Drops alone, because drops are the only loss signal the engine reports today; jitter and
  * packet loss are on `SessionStats` but not yet filled in, and a dot that lies is worse than a
  * coarse one. The thresholds are what reads as "smooth" and "visibly hitching" at 60 fps. */
-function quality(s: SessionStats): { tint: "outline" | "success" | "warn" | "error"; text: string } {
-  if (!s.decoded) return { tint: "outline", text: "starting" };
+function quality(s: SessionStats): { variant: BadgeVariant; text: string } {
+  if (!s.decoded) return { variant: "outline", text: "starting" };
   const lost = s.dropped / Math.max(1, s.decoded + s.dropped);
-  if (lost < 0.005) return { tint: "success", text: "good" };
-  if (lost < 0.03) return { tint: "warn", text: "fair" };
-  return { tint: "error", text: "poor" };
+  if (lost < 0.005) return { variant: "success", text: "good" };
+  if (lost < 0.03) return { variant: "warning", text: "fair" };
+  return { variant: "destructive", text: "poor" };
 }
 
 export function Hud({ screen, actions }: { screen: Extract<Screen, { kind: "streaming" }>; actions: Actions }): JSX.Element {
@@ -58,7 +59,7 @@ export function Hud({ screen, actions }: { screen: Extract<Screen, { kind: "stre
         role="toolbar"
         aria-label="Stream"
         className={cn(
-          "pointer-events-auto m-3 flex items-center gap-2 rounded-full border border-border bg-card/85 py-1.5 pr-2 pl-3 shadow-lg backdrop-blur-xl transition-[opacity,transform] duration-400",
+          "pointer-events-auto m-3 flex max-w-[calc(100vw-1.5rem)] items-center gap-2 rounded-full border border-border bg-card/85 py-1.5 pr-2 pl-3 shadow-lg backdrop-blur-xl transition-[opacity,transform] duration-400 *:shrink-0",
           idle && !screen.diagnostics && "pointer-events-none -translate-y-2 opacity-0",
         )}
       >
@@ -70,19 +71,32 @@ export function Hud({ screen, actions }: { screen: Extract<Screen, { kind: "stre
           title="Connection quality"
           onClick={() => actions.showDiagnostics(!screen.diagnostics)}
         >
-          <Badge variant={q.tint} size="sm" dot>{q.text}</Badge>
+          <Badge variant={q.variant}>{q.text}</Badge>
         </button>
-        <span className="font-semibold">{bare(stats.origin)}</span>
-        {stats.access && <Badge variant="outline" size="sm">{stats.access}</Badge>}
+        {/* The one part that gives way on a phone. */}
+        <span className="min-w-0 shrink! truncate font-semibold">{bare(stats.origin)}</span>
+        {stats.access && <Badge variant="outline">{stats.access}</Badge>}
         <span className="hidden text-muted-foreground tabular-nums sm:inline">{line}</span>
         <span className="h-4 w-px bg-border" aria-hidden="true" />
-        <Button size="sm" variant="ghost" aria-pressed={stats.pointerCaptured} onClick={() => actions.toggleCapture()}>
-          {stats.pointerCaptured ? "Release mouse" : "Capture mouse"}
+        <Button
+          size="icon"
+          variant="ghost"
+          aria-pressed={stats.pointerCaptured}
+          aria-label={stats.pointerCaptured ? "Release mouse" : "Capture mouse"}
+          title={stats.pointerCaptured ? "Release mouse" : "Capture mouse"}
+          onClick={() => actions.toggleCapture()}
+        >
+          <MousePointer2 className="size-4" />
         </Button>
-        <Button size="sm" variant="ghost" onClick={() => actions.openSettings(true)}>Settings</Button>
-        <Button size="sm" variant="ghost" onClick={() => actions.fullscreen()}>Fullscreen</Button>
+        <Button size="icon" variant="ghost" aria-label="Settings" title="Settings" onClick={() => actions.openSettings(true)}>
+          <Settings className="size-4" />
+        </Button>
+        <Button size="icon" variant="ghost" aria-label="Fullscreen" title="Fullscreen" onClick={() => actions.fullscreen()}>
+          <Maximize className="size-4" />
+        </Button>
         <Button size="sm" variant="ghost" aria-expanded={screen.menu} onClick={() => actions.openMenu(!screen.menu)}>
-          Menu
+          <Menu className="size-4" />
+          <span className="hidden sm:inline">Menu</span>
         </Button>
       </div>
       {screen.menu && <QuickMenu screen={screen} actions={actions} />}
