@@ -426,7 +426,12 @@ mergeInto(LibraryManager.library, {
   // straight into the video plane's texture and never enters the wasm heap.
   pf_refused__deps: ["$UTF8ToString"],
   pf_refused: function (code: number, ptr: number, len: number): void {
-    if (Module.__pfOnRefused) Module.__pfOnRefused(code, UTF8ToString(ptr, len));
+    // After `pf_ctl_recv` returns: the engine tears the session down in answer, and doing that
+    // from inside the call that holds it aborts the module.
+    const reason = UTF8ToString(ptr, len);
+    queueMicrotask(function () {
+      if (Module.__pfOnRefused) Module.__pfOnRefused(code, reason);
+    });
   },
 
   pf_launch_notice__deps: ["$UTF8ToString"],

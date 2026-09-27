@@ -262,6 +262,8 @@ export class VideoPipe {
     this.decoder = decoder;
   }
 
+  // Called from inside `pf_session_pump`, which holds the session while it hands each access unit
+  // over: a call back into the session from here aborts the module, so it goes on a microtask.
   private submit(data: Uint8Array, ptsUs: number, key: boolean, flags: number): void {
     const decoder = this.decoder;
     if (!decoder || decoder.state !== "configured") return;
@@ -285,7 +287,7 @@ export class VideoPipe {
     } catch (e) {
       this.stats.errors++;
       console.error("punktfunk: decode", e);
-      this.mod._pf_gate_no_output();
+      queueMicrotask(() => this.mod._pf_gate_no_output());
     }
   }
 
