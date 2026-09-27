@@ -9,13 +9,15 @@
 //!
 //! The page decodes (WebCodecs `AudioDecoder`) and plays (an `AudioWorklet`), because the browser
 //! has an Opus decoder and this module does not. What crosses is the encoded frame, borrowed for
-//! one call. Mic uplink is not here yet; it is the same plane the other way (`0xCB`).
+//! one call. The microphone is the same plane the other way: the page encodes, [`pf_mic_send`]
+//! wraps each frame as `0xCB`.
 
 use punktfunk_core::audio::{AudioRedRecovery, FRAME_MS};
 use punktfunk_core::quic::{
-    decode_audio_datagram, decode_audio_red_datagram, AUDIO_MAGIC, AUDIO_RED_MAGIC,
+    decode_audio_datagram, decode_audio_red_datagram, encode_mic_datagram, AUDIO_MAGIC,
+    AUDIO_RED_MAGIC,
 };
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::BTreeMap;
 
 unsafe extern "C" {
@@ -45,6 +47,64 @@ struct Plane {
 
 thread_local! {
     static PLANE: RefCell<Plane> = RefCell::new(Plane::default());
+    /// The channels the next `Hello` asks for: what the page's output and decoder can play. The
+    /// page's to say, so a session reset leaves it.
+    static WANT_CHANNELS: Cell<u8> = const { Cell::new(2) };
+    /// `Welcome`'s answer: the channels and layout the host encodes.
+    static NEGOTIATED: Cell<(u8, u8)> = const { Cell::new((2, 0)) };
+}
+
+/// Ask for 2, 6 or 8 channels in the next `Hello`; anything else is stereo.
+#[unsafe(no_mangle)]
+pub extern "C" fn pf_session_audio(channels: u32) {
+    let channels = match channels {
+        6 => 6,
+        8 => 8,
+        _ => 2,
+    };
+    WANT_CHANNELS.with(|c| c.set(channels));
+}
+
+/// What `Hello` asks for.
+pub fn requested_channels() -> u8 {
+    WANT_CHANNELS.with(Cell::get)
+}
+
+/// `Welcome`'s channels and layout, which the page's decoder is built from.
+pub fn negotiated(channels: u8, layout: u8) {
+    NEGOTIATED.with(|n| n.set((channels, layout)));
+}
+
+/// The multistream the host encodes: stream count, coupled count, then one mapping byte per
+/// channel, which is what a family-255 `OpusHead` carries. Returns the byte count, `0` for
+/// stereo or a layout this build does not know.
+///
+/// # Safety
+/// `out` must point to 10 writable bytes: two counts and up to eight mapping bytes.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pf_session_audio_layout(out: *mut u8) -> u32 {
+    let (channels, layout) = NEGOTIATED.with(Cell::get);
+    let Some(bytes) = crate::surround::multistream(channels, layout) else {
+        return 0;
+    };
+    // SAFETY: the caller guarantees 10 writable bytes at `out`; at most 2 + 8 are written.
+    unsafe { std::ptr::copy_nonoverlapping(bytes.as_ptr(), out, bytes.len()) };
+    bytes.len() as u32
+}
+
+/// One Opus frame from the page's microphone, sent as the `0xCB` uplink. Dropped unless a
+/// session is live: the host reads it only on the connection it admitted.
+///
+/// # Safety
+/// `ptr` must point to `len` readable bytes for this call.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pf_mic_send(ptr: *const u8, len: u32, seq: u32, pts_ns: f64) {
+    if ptr.is_null() || !crate::session::is_live() {
+        return;
+    }
+    // SAFETY: the caller guarantees `len` readable bytes at `ptr` for this call.
+    let opus = unsafe { std::slice::from_raw_parts(ptr, len as usize) };
+    crate::transport::send_datagram(&encode_mic_datagram(seq, pts_ns as u64, opus));
 }
 
 /// Is this datagram audio? The ring's commit asks before publishing a slot.

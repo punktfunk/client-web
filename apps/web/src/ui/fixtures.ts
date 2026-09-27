@@ -65,6 +65,7 @@ export const SCREENS = {
   "pair": { kind: "pair", origin: "https://192.168.1.25:47990", mode: "first" },
   "pair-again": { kind: "pair", origin: "https://192.168.1.25:47990", mode: "again" },
   "pair-refused": { kind: "pair", origin: "https://192.168.1.25:47990", mode: "first", error: "That PIN was refused." },
+  "waiting": { kind: "waiting", origin: "https://192.168.1.25:47990", name: "Safari on Mac" },
   "trust": {
     kind: "trust",
     origin: "https://192.168.1.25:47990",
@@ -73,12 +74,14 @@ export const SCREENS = {
   "library": { kind: "library", origin: "https://192.168.1.25:47990", host: "living-room-pc", entries, art, running: "Hades" },
   "library-empty": { kind: "library", origin: "https://192.168.1.25:47990", host: "living-room-pc", entries: [], art: new Map() },
   "library-loading": { kind: "library", origin: "https://192.168.1.25:47990", host: "living-room-pc", entries: [], art: new Map(), busy: true },
-  "streaming": { kind: "streaming", stats, diagnostics: false },
-  "streaming-diagnostics": { kind: "streaming", stats, diagnostics: true },
+  "streaming": { kind: "streaming", stats, diagnostics: false, menu: false },
+  "streaming-diagnostics": { kind: "streaming", stats, diagnostics: true, menu: false },
+  "streaming-menu": { kind: "streaming", stats, diagnostics: false, menu: true },
   "streaming-captured": {
     kind: "streaming",
     stats: { ...stats, pointerCaptured: true },
     diagnostics: false,
+    menu: false,
   },
   "settings": { kind: "settings", values: DEFAULTS, streaming: false },
   "error": {
@@ -92,7 +95,8 @@ export const SCREENS = {
 export type ScreenName = keyof typeof SCREENS;
 
 export const noop: Actions = {
-  connect() {}, pair() {}, retry() {}, back() {}, play() {}, forget() {}, wake() {}, disconnect() {},
+  connect() {}, pair() {}, requestAccess() {}, cancelRequest() {}, retry() {}, back() {}, play() {},
+  forget() {}, wake() {}, disconnect() {},
   setAdding() {}, rename() {}, openSettings() {}, setSettings() {}, toggleCapture() {},
-  showDiagnostics() {},
+  showDiagnostics() {}, openMenu() {}, fullscreen() {}, cycleStats() {}, toggleMic() {},
 };

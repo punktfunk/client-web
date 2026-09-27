@@ -51,6 +51,14 @@ class App {
   private libraryLoaded = false;
   private hostName: string | undefined;
   private running: string | undefined;
+  /** The running title's library id, which is what `Resume` launches. */
+  private runningId: string | undefined;
+  /** What the last stream played (`entry` unset: the desktop), and what to start again once the
+   *  host is ready after a stream that dropped. */
+  private lastPlay: { entry?: LibraryEntry } | null = null;
+  private resumeOnReady: { entry?: LibraryEntry } | null = null;
+  /** The stream that dropped into the error on screen, which "Try again" brings back. */
+  private dropped: { entry?: LibraryEntry } | null = null;
   private statusTimer = 0;
   /** Is the address field in front? Forced on when there is no card to click instead. */
   private adding = false;
@@ -61,6 +69,8 @@ class App {
   private probing = false;
   /** The settings sheet renders over whatever is showing, so it is a flag rather than a state. */
   private settingsOpen = false;
+  /** The quick menu over a live picture; closed whenever the stream is not. */
+  private menuOpen = false;
   private prefs: Settings = settings.get();
   private resizeTimer = 0;
 
@@ -79,15 +89,30 @@ class App {
         void engine.connect(this.targetOf(address));
       },
       pair: (pin) => engine.pair(pin),
+      requestAccess: () => engine.requestAccess(this.streamOptions()),
+      cancelRequest: () => engine.cancelRequest(),
       retry: () => {
         const s = engine.current;
+        // After a dropped stream, try again means that stream: the same title, not the library.
+        this.resumeOnReady = this.dropped;
+        this.dropped = null;
         if ("origin" in s && s.origin) void engine.connect(this.targetOf(s.origin));
       },
       back: () => engine.disconnect(),
       play: (entry) => this.play(entry),
       forget: (origin) => this.forget(origin),
       wake: (origin) => void this.wake(origin),
-      disconnect: () => engine.disconnect(),
+      disconnect: (quit) => {
+        this.menuOpen = false;
+        engine.disconnect(quit);
+      },
+      openMenu: (on) => {
+        this.menuOpen = on;
+        this.render(engine.current);
+      },
+      fullscreen: () => engine.fullscreen(),
+      cycleStats: () => engine.cycleStats(),
+      toggleMic: () => engine.toggleMic(),
       setAdding: (on) => {
         this.adding = on;
         if (engine.current.kind === "idle") this.render(engine.current);
@@ -117,6 +142,10 @@ class App {
     });
     this.applyPrefs();
     this.watchSize();
+    engine.onMenu(() => {
+      this.menuOpen = !this.menuOpen;
+      this.render(engine.current);
+    });
     engine.onState((s) => this.render(s));
   }
 
@@ -127,12 +156,15 @@ class App {
 
   /** Facts in, words out. */
   private render(s: EngineState): void {
+    if (s.kind !== "streaming") this.menuOpen = false;
     if (this.settingsOpen) {
       return this.show({ kind: "settings", values: this.prefs, streaming: s.kind === "streaming" });
     }
     switch (s.kind) {
       case "idle":
         this.clearLibrary();
+        this.resumeOnReady = null;
+        this.dropped = null;
         return this.home();
       case "bad-address":
         // The field stays in front: what was typed is wrong and this is where it is fixed.
@@ -160,6 +192,8 @@ class App {
         return this.show({ kind: "pair", origin: s.origin, mode: "first" });
       case "pairing":
         return this.show({ kind: "pair", origin: s.origin, mode: "first", busy: true });
+      case "awaiting-approval":
+        return this.show({ kind: "waiting", origin: s.origin, name: s.name });
       case "paired": {
         this.show({ kind: "pair", origin: s.origin, mode: "first", busy: true });
         // The host closes after the ceremony, as it does for native clients; streaming is a
@@ -177,9 +211,18 @@ class App {
         });
       case "forgotten":
         return this.show({ kind: "pair", origin: s.origin, mode: "again" });
-      case "ready":
+      case "ready": {
+        const resume = this.resumeOnReady;
+        if (resume) {
+          // Not from inside this listener: starting the stream sets the engine's state again. The
+          // connecting screen stays up until it does.
+          this.resumeOnReady = null;
+          queueMicrotask(() => this.play(resume.entry));
+          return;
+        }
         if (this.libraryFor !== s.origin) void this.openLibrary(s);
         return this.redrawLibrary(s);
+      }
       case "starting":
         return this.show({ kind: "connecting", origin: s.origin, phase: "starting" });
       case "streaming":
@@ -187,16 +230,26 @@ class App {
           kind: "streaming",
           stats: { origin: s.origin, ...s.stats },
           diagnostics: s.stats.statsTier !== "off",
+          menu: this.menuOpen,
         });
-      case "error":
+      case "error": {
+        // Was a stream live, or starting, when this happened? Then trying again resumes it.
+        const was = this.screen;
+        const streamed = was.kind === "streaming" || (was.kind === "connecting" && was.phase === "starting");
+        if (streamed) this.dropped = this.lastPlay;
         return this.show({
           kind: "error",
-          head: s.skew ? "This host speaks a different version" : "Something went wrong",
+          head: s.skew
+            ? "This host speaks a different version"
+            : streamed
+              ? "The stream stopped"
+              : "Something went wrong",
           text: s.skew
             ? `${sentence(s.message)} Update the host, or this page, so the two agree.`
             : sentence(s.message),
           retry: !s.skew,
         });
+      }
     }
   }
 
@@ -349,6 +402,7 @@ class App {
         const st = await s.host.status();
         const live = st.games.find((g) => g.state === "running" || g.state === "launching");
         this.running = live?.title;
+        this.runningId = live?.app_id ?? undefined;
         this.redrawLibrary(now);
       } catch {
         // A failed poll is not news; the next one will say.
@@ -387,8 +441,18 @@ class App {
       busy: this.libraryFor === s.origin && !this.libraryLoaded,
       ...(this.hostName ? { host: this.hostName } : {}),
       ...(this.running ? { running: this.running } : {}),
+      ...this.resumable(),
       ...(error ? { error: `${sentence(error)} You can still stream the desktop.` } : {}),
     });
+  }
+
+  /** The running title's entry, by library id where the host gave one, else by title. */
+  private resumable(): { resume?: LibraryEntry } {
+    if (!this.running) return {};
+    const entry =
+      this.entries.find((e) => this.runningId !== undefined && e.id === this.runningId) ??
+      this.entries.find((e) => e.title === this.running);
+    return entry ? { resume: entry } : {};
   }
 
   private clearLibrary(): void {
@@ -397,6 +461,7 @@ class App {
     this.libraryLoaded = false;
     this.hostName = undefined;
     this.running = undefined;
+    this.runningId = undefined;
     this.entries = [];
     for (const url of this.art.values()) {
       if (url.startsWith("blob:")) URL.revokeObjectURL(url);
@@ -446,16 +511,19 @@ class App {
   }
 
   private play(entry?: LibraryEntry): void {
+    this.lastPlay = entry ? { entry } : {};
+    this.engine.startStream({ ...this.streamOptions(), ...(entry ? { launch: entry } : {}) });
+  }
+
+  /** The desktop stream the settings and the window ask for. */
+  private streamOptions(): { width: number; height: number; fps: number; bitrateKbps: number } {
     const [fit, fitHeight] = size(this.uiCanvas);
-    const width = this.prefs.width || fit;
-    const height = this.prefs.height || fitHeight;
-    this.engine.startStream({
-      width,
-      height,
+    return {
+      width: this.prefs.width || fit,
+      height: this.prefs.height || fitHeight,
       fps: this.prefs.fps,
       bitrateKbps: this.prefs.bitrateKbps,
-      ...(entry ? { launch: entry } : {}),
-    });
+    };
   }
 }
 
@@ -577,9 +645,10 @@ try {
   // carries for exactly this case does.
   const shell = new WebShell(document.body);
   shell.mount({
-    connect() {}, pair() {}, retry() {}, back() {}, play() {}, forget() {}, wake() {}, disconnect() {},
+    connect() {}, pair() {}, requestAccess() {}, cancelRequest() {}, retry() {}, back() {}, play() {},
+    forget() {}, wake() {}, disconnect() {},
     setAdding() {}, rename() {}, openSettings() {}, setSettings() {}, toggleCapture() {},
-    showDiagnostics() {},
+    showDiagnostics() {}, openMenu() {}, fullscreen() {}, cycleStats() {}, toggleMic() {},
   });
   shell.render({
     kind: "error",
