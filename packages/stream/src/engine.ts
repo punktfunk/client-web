@@ -18,7 +18,7 @@ import { chipText, updateNotice } from "./access.ts";
 import type { PunktfunkModule } from "./emscripten.ts";
 import { DeviceRefused, Host, type LibraryEntry, VersionSkew } from "./host.ts";
 import * as pf from "./pf-connect.ts";
-import { type Decodable, decodableCodecs, decodeSupported, hdrDisplay, VideoPipe } from "./video.ts";
+import { type Decodable, decodableCodecs, decodeSupported, hdrDisplay, VideoPipe, webgpuUsable } from "./video.ts";
 import { type Chord, InputPipe, playRumble } from "./input.ts";
 import { AudioPipe, type AudioSnapshot, opusHead, playableChannels } from "./audio.ts";
 import { MicPipe, type MicState } from "./mic.ts";
@@ -267,6 +267,10 @@ export class Engine {
   private pendingPin: string | null = null;
   /** A stream asked for from `ready`, sent as `Hello` when the dial it started opens. */
   private pendingStream: StreamOptions | null = null;
+  /** The last stream asked for, which an SDR restart asks for again. */
+  private streamed: StreamOptions | null = null;
+  /** The stream is an SDR restart, which the next session says once. */
+  private sdrNotice = false;
   /** A request for access, sent as `Hello` when the next control stream opens. Survives `reset`,
    *  as `pendingPin` does, for the reconnect that clears a stale pairing first. */
   private pendingKnock: StreamOptions | null = null;
@@ -280,6 +284,8 @@ export class Engine {
     private readonly codecs: Decodable = { mask: 1, tenBit: false },
     /** How many channels this page can play: 2, 6 or 8, probed once at `create`. */
     private readonly surround = 2,
+    /** Whether WebGPU gives this page an adapter, probed once at `create`: HDR needs one. */
+    private readonly gpu = false,
   ) {
     this.tunable = {
       ...TUNABLE_DEFAULTS,
@@ -313,8 +319,8 @@ export class Engine {
     if (!decodeSupported()) {
       throw new Error("this browser cannot decode video (no WebCodecs)");
     }
-    const [mod, codecs, channels] = await Promise.all([loadModule(), decodableCodecs(), playableChannels()]);
-    return new Engine(mod, opts, codecs, channels);
+    const [mod, codecs, channels, gpu] = await Promise.all([loadModule(), decodableCodecs(), playableChannels(), webgpuUsable()]);
+    return new Engine(mod, opts, codecs, channels, gpu);
   }
 
   // --- observation ---------------------------------------------------------------------
@@ -511,21 +517,45 @@ export class Engine {
     if (!this.origin || this.state.kind !== "ready") return;
     // HDR is offered per stream: the window may have moved to another display, and the plane
     // may have been switched to WebGL2, since the last one.
-    const hdr = this.tunable.hdr && this.codecs.tenBit && hdrDisplay(this.tunable.videoBackend);
+    const hdr = this.tunable.hdr && this.codecs.tenBit && hdrDisplay(this.tunable.videoBackend, this.gpu);
     this.mod._pf_session_codecs?.(this.codecs.mask, hdr ? 1 : 0, CODEC_BIT[this.tunable.codec]);
     this.set({ kind: "starting", origin: this.origin });
+    this.streamed = opts;
+    this.pendingStream = opts;
+    this.dial();
+  }
+
+  /**
+   * The browser converted an HDR frame itself, which nothing here can undo: the same stream again
+   * in SDR, on a fresh connection. The title keeps running on the host; `hdrDisplay` now says no
+   * for this browser build, so this happens once.
+   */
+  private restartInSdr(): void {
+    const origin = this.origin;
+    const opts = this.streamed;
+    if (!origin || !opts || (this.state.kind !== "streaming" && this.state.kind !== "starting")) return;
+    this.stopSession();
+    this.mod._pf_session_codecs?.(this.codecs.mask, 0, CODEC_BIT[this.tunable.codec]);
+    this.sdrNotice = true;
+    this.set({ kind: "starting", origin });
     this.pendingStream = opts;
     this.dial();
   }
 
   /** Send `Hello`, with the video plane up to take what answers it. */
   private hello(opts: StreamOptions): void {
-    this.video ??= new VideoPipe(this.mod, this.opts.videoCanvas, this.tunable.videoBackend);
+    // Off the decoder's own callback: the restart closes that decoder.
+    this.video ??= new VideoPipe(this.mod, this.opts.videoCanvas, this.tunable.videoBackend, () =>
+      setTimeout(() => this.restartInSdr(), 0),
+    );
     this.video.attach();
     this.tier = this.tunable.statsTier;
     this.hud = [];
     this.lastDropped = 0;
-    this.launchNotice = null;
+    this.launchNotice = this.sdrNotice
+      ? { text: "This browser can't show HDR video, so the stream is in SDR.", at: performance.now() }
+      : null;
+    this.sdrNotice = false;
     this.access = { seq: 0, grants: 0, deadline: null };
     this.accessNotice = null;
     this.mod._pf_session_audio?.(this.tunable.audio ? this.surround : 2);

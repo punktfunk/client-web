@@ -11,6 +11,7 @@
 //   * `toneMapping: { mode: "extended" }` on the canvas configuration, which is the **only**
 //     shipped HDR route in either engine. Chromium's WebGL2 path (`drawingBufferStorage` +
 //     float16) is still behind a flag, and Safari has no WebGL2 HDR at all. This is the reason.
+//     Neither engine decodes PQ for us, so `fs_pq` does.
 //
 // `create()` is async because adapter and device are; everything after is synchronous, so the
 // per-frame path matches the WebGL2 one call for call.
@@ -36,9 +37,41 @@ fn vs(@builtin(vertex_index) i: u32) -> VertexOut {
 
 @fragment
 fn fs(in: VertexOut) -> @location(0) vec4f {
-  // textureSampleBaseClampToEdge is the required entry point for an external texture: it is
-  // what applies the frame's own colour-space conversion, which is where BT.2020/PQ survives.
   return textureSampleBaseClampToEdge(frame, samp, in.uv);
+}
+
+// HDR10. Neither engine decodes PQ when it samples a frame, so the decoder is told the picture is
+// sRGB-transfer (\`video.ts\`) and the samples arrive as the PQ signal the host sent, BT.2020 R'G'B'.
+// Decoded here to light with 203 nits as 1.0 — SDR white, as the host puts SDR into PQ and the
+// Apple client anchors EDR — then into Display P3, encoded for an extended-range canvas. Values
+// past 1.0 are highlights; an SDR canvas clips them and keeps the rest right.
+fn pq_eotf(e: vec3f) -> vec3f {
+  let m1 = 0.1593017578125;
+  let m2 = 78.84375;
+  let c1 = 0.8359375;
+  let c2 = 18.8515625;
+  let c3 = 18.6875;
+  let p = pow(clamp(e, vec3f(0.0), vec3f(1.0)), vec3f(1.0 / m2));
+  return pow(max(p - c1, vec3f(0.0)) / (c2 - c3 * p), vec3f(1.0 / m1));
+}
+
+// BT.2020 to Display P3, both linear, D65. Column-major: these are the columns.
+const BT2020_TO_P3 = mat3x3f(
+  vec3f(1.343578, -0.065297, 0.002822),
+  vec3f(-0.282180, 1.075788, -0.019598),
+  vec3f(-0.061399, -0.010490, 1.016777));
+
+// The sRGB curve, mirrored for the negative values a wide gamut can leave, and unclamped.
+fn srgb_encode_ext(c: vec3f) -> vec3f {
+  let a = abs(c);
+  return sign(c) * select(1.055 * pow(a, vec3f(1.0 / 2.4)) - 0.055, a * 12.92, a <= vec3f(0.0031308));
+}
+
+@fragment
+fn fs_pq(in: VertexOut) -> @location(0) vec4f {
+  let pq = textureSampleBaseClampToEdge(frame, samp, in.uv).rgb;
+  let light = BT2020_TO_P3 * (pq_eotf(pq) * (10000.0 / 203.0));
+  return vec4f(srgb_encode_ext(light), 1.0);
 }`;
 
 export class VideoSurfaceWebGPU implements VideoPlane {
@@ -46,7 +79,7 @@ export class VideoSurfaceWebGPU implements VideoPlane {
   /** The display's own format for SDR; float16 for HDR, whose values run past 1.0. */
   private readonly sdrFormat: GPUTextureFormat;
   private format: GPUTextureFormat;
-  private readonly pipelines = new Map<GPUTextureFormat, GPURenderPipeline>();
+  private readonly pipelines = new Map<string, GPURenderPipeline>();
   private readonly module: GPUShaderModule;
   private readonly sampler: GPUSampler;
   private colorSpace: VideoColorSpace | null = null;
@@ -81,17 +114,19 @@ export class VideoSurfaceWebGPU implements VideoPlane {
     this.configureContext();
   }
 
-  /** One pipeline per target format; there are only ever the two. */
+  /** One pipeline per target format and signal: SDR as sampled, or PQ decoded here. */
   private pipeline(): GPURenderPipeline {
-    let pipeline = this.pipelines.get(this.format);
+    const pq = this.dynamicRange === "high";
+    const key = `${this.format}${pq ? "|pq" : ""}`;
+    let pipeline = this.pipelines.get(key);
     if (!pipeline) {
       pipeline = this.device.createRenderPipeline({
         layout: "auto",
         vertex: { module: this.module, entryPoint: "vs" },
-        fragment: { module: this.module, entryPoint: "fs", targets: [{ format: this.format }] },
+        fragment: { module: this.module, entryPoint: pq ? "fs_pq" : "fs", targets: [{ format: this.format }] },
         primitive: { topology: "triangle-list" },
       });
-      this.pipelines.set(this.format, pipeline);
+      this.pipelines.set(key, pipeline);
     }
     return pipeline;
   }
@@ -102,6 +137,8 @@ export class VideoSurfaceWebGPU implements VideoPlane {
       device: this.device,
       format: this.format,
       alphaMode: "opaque",
+      // `fs_pq` writes Display P3: BT.2020 greens and reds that sRGB would clip.
+      colorSpace: this.dynamicRange === "high" ? "display-p3" : "srgb",
     };
     // The HDR switch. `extended` lets values above 1.0 through to the panel; without it the
     // compositor clamps and BT.2020/PQ content is indistinguishable from SDR. Guarded because an
