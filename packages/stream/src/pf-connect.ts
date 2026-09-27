@@ -208,13 +208,14 @@ export const hosts = {
     delete all[origin];
     localStorage.setItem(KEY, JSON.stringify(all));
   },
-  /** Rename a host, or drop the name again when `label` is empty. */
+  /** Rename a host, or drop the name again when `label` is empty. A host the page's server lists
+   *  has no record until its first connect, so a name can be what starts one. */
   rename(origin: string, label: string): void {
     const all = hosts.all();
-    if (!all[origin]) return;
+    const host = (all[origin] ??= {});
     const trimmed = label.trim();
-    if (trimmed) all[origin].label = trimmed;
-    else delete all[origin].label;
+    if (trimmed) host.label = trimmed;
+    else delete host.label;
     localStorage.setItem(KEY, JSON.stringify(all));
   },
   /** Drop the pairing but keep the host: it is still one this browser knows, just not one it is

@@ -25,6 +25,7 @@ export { DeviceRefused };
 export type LibraryEntry = api.OperatorGameEntry;
 export type HostInfo = api.HostInfo;
 export type HostStatus = api.RuntimeStatus;
+export type HostAction = api.ActionInfo;
 
 /** The host speaks a wire shape this page does not: one side is newer than the other. */
 export class VersionSkew extends Error {
@@ -87,6 +88,46 @@ export class Host {
     return URL.createObjectURL(await res.blob());
   }
 
+  /** The host actions this device sees, power among them, and whether its access allows each. */
+  async actions(): Promise<ReadonlyArray<HostAction>> {
+    return (await this.run("actions", (c) => c.listActions(undefined))).actions;
+  }
+
+  /**
+   * Run a host action. Power actions end every session first, this device's included.
+   *
+   * By hand rather than through the client: a power action answers `202` with no body, which the
+   * generated decoder, written for `display.next`'s `200`, would report as a version mismatch.
+   */
+  async invoke(id: string): Promise<void> {
+    const res = await this.post(`/api/v1/actions/${encodeURIComponent(id)}`);
+    if (!res.ok) throw new Error(await refusal(res, "the host did not run that action"));
+  }
+
+  /**
+   * Hand the page's log to the host, which files it under this device for its console. The
+   * client does not carry the plain-text body this route takes, so this is by hand too.
+   */
+  async uploadLog(text: string): Promise<string> {
+    const res = await this.post("/api/v1/client-logs", text);
+    if (!res.ok) throw new Error(await refusal(res, "the host did not take the log"));
+    return ((await res.json()) as { id: string }).id;
+  }
+
+  private async post(path: string, body?: string): Promise<Response> {
+    // Unbound: `window.fetch` called as a method of anything but `window` throws "Illegal invocation".
+    const fetch = this.conn.fetch;
+    return fetch(`${this.origin}${path}`, {
+      method: "POST",
+      cache: "no-store",
+      headers: {
+        authorization: await this.conn.credential.header(),
+        ...(body === undefined ? {} : { "content-type": "text/plain; charset=utf-8" }),
+      },
+      ...(body === undefined ? {} : { body }),
+    });
+  }
+
   private async run<A>(
     operation: string,
     f: (client: ReturnType<typeof api.make>) => Effect.Effect<A, unknown>,
@@ -97,6 +138,16 @@ export class Host {
     } catch (e) {
       throw translate(operation, e);
     }
+  }
+}
+
+/** The host's own sentence for a refusal, when its body carries one, else `fallback`. */
+async function refusal(res: Response, fallback: string): Promise<string> {
+  try {
+    const body = (await res.json()) as { error?: string };
+    return body.error ?? fallback;
+  } catch {
+    return fallback;
   }
 }
 

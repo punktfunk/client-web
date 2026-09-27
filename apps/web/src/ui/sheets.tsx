@@ -73,6 +73,7 @@ export function Pair({ screen, actions }: Props<"pair">): JSX.Element {
             ? "This host no longer knows this browser — it was unpaired there. Enter the PIN it is showing to pair again."
             : "Enter the PIN this host is showing. It is on the host's own screen, and it expires after a couple of minutes."}
         </Sub>
+        <Sub>No PIN? Request access, and approve this browser in the host's console.</Sub>
         {/* Wide tracking and a large size because it is copied off another screen, digit by
             digit, and a mistyped one costs a whole pairing window. `h-16!` because the input's
             own `h-input-height` is a token tailwind-merge cannot see as a height. */}
@@ -92,9 +93,29 @@ export function Pair({ screen, actions }: Props<"pair">): JSX.Element {
         {screen.error && <ErrorLine text={screen.error} />}
         <Row>
           <Button variant="secondary" onClick={() => actions.back()}>Back</Button>
+          <Button variant="secondary" disabled={!!screen.busy} onClick={() => actions.requestAccess()}>
+            Request access
+          </Button>
           <Button disabled={!!screen.busy} onClick={submit}>
             {screen.busy ? "Pairing…" : "Pair"}
           </Button>
+        </Row>
+      </Sheet>
+    </Centre>
+  );
+}
+
+export function Waiting({ screen, actions }: Props<"waiting">): JSX.Element {
+  return (
+    <Centre>
+      <Sheet title="Waiting for approval">
+        <Sub>
+          Approve “{screen.name}” in the console of {bare(screen.origin)}, under Pairing. The
+          stream starts as soon as you do. The request lapses after three minutes.
+        </Sub>
+        <Spinner className="mx-auto my-10 block size-10" />
+        <Row>
+          <Button autoFocus variant="secondary" onClick={() => actions.cancelRequest()}>Cancel</Button>
         </Row>
       </Sheet>
     </Centre>

@@ -11,11 +11,11 @@ mod hosts;
 mod proxy;
 mod tls;
 
-use axum::extract::{Request, State};
-use axum::http::{header, HeaderValue};
+use axum::extract::{Path, Request, State};
+use axum::http::{header, HeaderMap, HeaderValue, StatusCode};
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
-use axum::routing::{any, get};
+use axum::routing::{any, get, post};
 use axum::{Json, Router};
 use hosts::Hosts;
 use std::path::PathBuf;
@@ -70,6 +70,7 @@ pub(crate) fn router(hosts: Arc<Hosts>, dist: PathBuf) -> Router {
         .route("/config.json", get(config_json))
         .route("/h/{id}/{*rest}", any(proxy::listed))
         .route("/a/{target}/{*rest}", any(proxy::typed))
+        .route("/wake/{id}", post(wake))
         .with_state(hosts)
         .fallback_service(tower_http::services::ServeDir::new(dist))
         .layer(axum::middleware::from_fn(cache))
@@ -81,10 +82,56 @@ async fn config_json(State(state): State<Arc<Hosts>>) -> impl IntoResponse {
     let hosts: Vec<_> = state
         .all()
         .into_iter()
-        .map(|h| serde_json::json!({ "id": h.id, "name": h.name, "api": format!("h/{}", h.id), "plane": h.addr }))
+        .map(|h| {
+            let mut j = serde_json::json!({ "id": h.id, "name": h.name, "api": format!("h/{}", h.id), "plane": h.addr });
+            if !state.macs(&h.id).is_empty() {
+                j["wake"] = format!("wake/{}", h.id).into();
+            }
+            j
+        })
         .collect();
     let body = serde_json::json!({ "hosts": hosts, "add": state.add_hosts });
     ([(header::CACHE_CONTROL, "no-store")], Json(body))
+}
+
+/// Wake a listed host: a magic packet to every MAC it announced while awake, from this machine,
+/// which is on the host's network where a browser cannot send one. Only this page may ask, not one
+/// on another site: a cross-site request is refused.
+async fn wake(
+    State(state): State<Arc<Hosts>>,
+    Path(id): Path<String>,
+    headers: HeaderMap,
+) -> StatusCode {
+    if headers
+        .get("sec-fetch-site")
+        .is_some_and(|v| v == "cross-site")
+    {
+        return StatusCode::FORBIDDEN;
+    }
+    let Some(host) = state.get(&id) else {
+        return StatusCode::NOT_FOUND;
+    };
+    let macs: Vec<_> = state
+        .macs(&id)
+        .iter()
+        .filter_map(|m| punktfunk_core::wol::parse_mac(m))
+        .collect();
+    if macs.is_empty() {
+        return StatusCode::CONFLICT;
+    }
+    let ip = host.addr.parse().ok();
+    match tokio::task::spawn_blocking(move || punktfunk_core::wol::send_magic_packet(&macs, ip))
+        .await
+    {
+        Ok(Ok(())) => {
+            tracing::info!(host = %id, "sent a wake packet");
+            StatusCode::NO_CONTENT
+        }
+        _ => {
+            tracing::warn!(host = %id, "wake packet did not go out");
+            StatusCode::BAD_GATEWAY
+        }
+    }
 }
 
 /// Vite hashes everything under `/assets`, so those never change; the page itself always might.
@@ -152,6 +199,36 @@ mod tests {
             assert_eq!(json["hosts"][0]["api"], "h/desk");
             assert_eq!(json["hosts"][0]["plane"], "10.0.0.2");
         }
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[tokio::test]
+    async fn wake_goes_only_to_a_known_host_from_this_page() {
+        let dir = std::env::temp_dir().join(format!("pf-wake-route-{}", std::process::id()));
+        let desk = Listed {
+            name: "Desk".into(),
+            addr: "10.0.0.2".into(),
+            port: 47990,
+            pin: None,
+        };
+        let hosts = crate::Hosts::new(vec![desk], &dir, true).unwrap();
+        let wake = |path: &str, site: &str| {
+            Request::post(path)
+                .header("sec-fetch-site", site)
+                .body(Body::empty())
+                .unwrap()
+        };
+        let status = |req: Request<Body>| {
+            let app = crate::router(hosts.clone(), dir.clone());
+            async move { app.oneshot(req).await.unwrap().status() }
+        };
+        assert_eq!(status(wake("/wake/desk", "cross-site")).await, 403);
+        assert_eq!(status(wake("/wake/nowhere", "same-origin")).await, 404);
+        assert_eq!(
+            status(wake("/wake/desk", "same-origin")).await,
+            409,
+            "no MAC known yet"
+        );
         let _ = std::fs::remove_dir_all(dir);
     }
 }

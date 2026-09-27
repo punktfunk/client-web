@@ -101,6 +101,18 @@ function HostTile({ host, actions, busy }: { host: HostCard; actions: Actions; b
           </button>
         </Card>
       )}
+      {/* An asleep host's way back, shown without a hover: a phone has none. */}
+      {host.wake && host.reach !== "ok" && !editing && (
+        <Button
+          size="sm"
+          variant="secondary"
+          className="absolute top-2 right-2"
+          disabled={host.waking}
+          onClick={() => actions.wake(host.origin)}
+        >
+          {host.waking ? "Waking…" : "Wake"}
+        </Button>
+      )}
       {/* Bottom-right, not top-right: the name is the widest thing on the card and the row it
           sits in is the one place these cannot go without covering it. */}
       <span className="absolute right-2 bottom-2 flex gap-0.5 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100">

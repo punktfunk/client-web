@@ -43,8 +43,11 @@ fn fs(in: VertexOut) -> @location(0) vec4f {
 
 export class VideoSurfaceWebGPU implements VideoPlane {
   private readonly context: GPUCanvasContext;
-  private readonly format: GPUTextureFormat;
-  private readonly pipeline: GPURenderPipeline;
+  /** The display's own format for SDR; float16 for HDR, whose values run past 1.0. */
+  private readonly sdrFormat: GPUTextureFormat;
+  private format: GPUTextureFormat;
+  private readonly pipelines = new Map<GPUTextureFormat, GPURenderPipeline>();
+  private readonly module: GPUShaderModule;
   private readonly sampler: GPUSampler;
   private colorSpace: VideoColorSpace | null = null;
   private width = 0;
@@ -71,20 +74,30 @@ export class VideoSurfaceWebGPU implements VideoPlane {
     const context = canvas.getContext("webgpu");
     if (!context) throw new Error("no WebGPU canvas context");
     this.context = context;
-    this.format = navigator.gpu.getPreferredCanvasFormat();
-
-    const module = device.createShaderModule({ code: SHADER });
-    this.pipeline = device.createRenderPipeline({
-      layout: "auto",
-      vertex: { module, entryPoint: "vs" },
-      fragment: { module, entryPoint: "fs", targets: [{ format: this.format }] },
-      primitive: { topology: "triangle-list" },
-    });
+    this.sdrFormat = navigator.gpu.getPreferredCanvasFormat();
+    this.format = this.sdrFormat;
+    this.module = device.createShaderModule({ code: SHADER });
     this.sampler = device.createSampler({ magFilter: "linear", minFilter: "linear" });
     this.configureContext();
   }
 
+  /** One pipeline per target format; there are only ever the two. */
+  private pipeline(): GPURenderPipeline {
+    let pipeline = this.pipelines.get(this.format);
+    if (!pipeline) {
+      pipeline = this.device.createRenderPipeline({
+        layout: "auto",
+        vertex: { module: this.module, entryPoint: "vs" },
+        fragment: { module: this.module, entryPoint: "fs", targets: [{ format: this.format }] },
+        primitive: { topology: "triangle-list" },
+      });
+      this.pipelines.set(this.format, pipeline);
+    }
+    return pipeline;
+  }
+
   private configureContext(): void {
+    this.format = this.dynamicRange === "high" && !this.toneMappingUnavailable ? "rgba16float" : this.sdrFormat;
     const config: GPUCanvasConfiguration = {
       device: this.device,
       format: this.format,
@@ -100,6 +113,8 @@ export class VideoSurfaceWebGPU implements VideoPlane {
       this.context.configure(config);
     } catch {
       delete (config as { toneMapping?: { mode: string } }).toneMapping;
+      this.format = this.sdrFormat;
+      config.format = this.format;
       this.context.configure(config);
       this.toneMappingUnavailable = true;
     }
@@ -130,8 +145,9 @@ export class VideoSurfaceWebGPU implements VideoPlane {
     // No copy: this is the line the WebGPU plane exists for. The external texture is valid for
     // this submission, which is why the bind group is rebuilt per frame rather than cached.
     const external = device.importExternalTexture({ source: frame });
+    const pipeline = this.pipeline();
     const bind = device.createBindGroup({
-      layout: this.pipeline.getBindGroupLayout(0),
+      layout: pipeline.getBindGroupLayout(0),
       entries: [
         { binding: 0, resource: this.sampler },
         { binding: 1, resource: external },
@@ -148,7 +164,7 @@ export class VideoSurfaceWebGPU implements VideoPlane {
         },
       ],
     });
-    pass.setPipeline(this.pipeline);
+    pass.setPipeline(pipeline);
     pass.setBindGroup(0, bind);
     pass.draw(3);
     pass.end();

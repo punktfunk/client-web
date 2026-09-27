@@ -6,6 +6,7 @@ import type { LibraryEntry } from "@punktfunk/stream";
 import { Spinner } from "@unom/ui/spinner";
 import { type JSX, type KeyboardEvent, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Logo } from "./brand.tsx";
 import { bare, ErrorLine } from "./pieces.tsx";
@@ -46,11 +47,25 @@ export function Library({ screen, actions }: { screen: LibraryScreen; actions: A
             onChange={(e) => setQuery(e.currentTarget.value)}
           />
         )}
-        <Button autoFocus size="sm" onClick={() => actions.play()}>Stream the desktop</Button>
+        {screen.resume && (
+          <Button autoFocus size="sm" onClick={() => actions.play(screen.resume)}>
+            Resume {screen.resume.title}
+          </Button>
+        )}
+        <Button
+          autoFocus={!screen.resume}
+          size="sm"
+          variant={screen.resume ? "secondary" : "default"}
+          onClick={() => actions.play()}
+        >
+          Stream the desktop
+        </Button>
+        <Button size="sm" variant="ghost" onClick={() => actions.openTools(true)}>Host</Button>
         <Button size="sm" variant="ghost" onClick={() => actions.openSettings(true)}>Settings</Button>
         <Button size="sm" variant="ghost" onClick={() => actions.disconnect()}>Disconnect</Button>
       </header>
       {screen.error && <div className="px-inset"><ErrorLine text={screen.error} /></div>}
+      {screen.tools && <HostSheet screen={screen} tools={screen.tools} actions={actions} />}
       {screen.busy && screen.entries.length === 0 ? (
         <Spinner className="mx-auto my-10 block size-10" />
       ) : screen.entries.length === 0 ? (
@@ -77,6 +92,44 @@ export function Library({ screen, actions }: { screen: LibraryScreen; actions: A
         </div>
       )}
     </>
+  );
+}
+
+/** The host's power actions as this device may run them, and sending this page's log. A
+ *  destructive one asks twice, as the native clients' dial does. */
+function HostSheet({ screen, tools, actions }: { screen: LibraryScreen; tools: NonNullable<LibraryScreen["tools"]>; actions: Actions }): JSX.Element {
+  const [armed, setArmed] = useState<string | null>(null);
+  return (
+    <Dialog open onOpenChange={(open) => { if (!open) actions.openTools(false); }}>
+      <DialogContent className="max-w-md">
+        <DialogHeader>
+          <DialogTitle>{screen.host ?? bare(screen.origin)}</DialogTitle>
+          <DialogDescription>What this device may do to the host.</DialogDescription>
+        </DialogHeader>
+        <div className="grid gap-2">
+          {tools.busy && tools.actions.length === 0 && <Spinner className="mx-auto my-4 block size-6" />}
+          {tools.actions.map((a) => (
+            <Button
+              key={a.id}
+              variant={armed === a.id ? "destructive" : "secondary"}
+              disabled={!a.enabled || tools.busy}
+              title={a.reason}
+              onClick={() => {
+                if (a.danger && armed !== a.id) return setArmed(a.id);
+                setArmed(null);
+                actions.hostAction(a.id);
+              }}
+            >
+              {armed === a.id ? `${a.title}? Press again` : a.title}
+            </Button>
+          ))}
+          <Button variant="ghost" disabled={tools.busy} onClick={() => actions.sendLog()}>
+            Send this page's log to the host
+          </Button>
+        </div>
+        {tools.note && <p className="text-sm text-muted-foreground">{tools.note}</p>}
+      </DialogContent>
+    </Dialog>
   );
 }
 

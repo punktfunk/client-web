@@ -10,7 +10,9 @@
 // this file.
 
 import {
+  captureLog,
   Engine,
+  type Host,
   type EngineState,
   type HostTarget,
   hosts,
@@ -18,6 +20,7 @@ import {
   type LibraryEntry,
   linkFor,
   type PageLink,
+  pageLog,
   parseLink,
   type Reach,
   reach,
@@ -27,7 +30,7 @@ import {
 } from "@punktfunk/stream";
 import { ConsoleUi } from "./ui/console.ts";
 import { WebShell } from "./ui/shell.tsx";
-import type { HostCard, Screen, Ui } from "./ui/types.ts";
+import type { HostCard, HostTools, Screen, Ui } from "./ui/types.ts";
 
 /** How long a reachability probe is believed. Long enough that returning to the home screen
  *  does not re-probe every host, short enough that a machine woken in the meantime shows up. */
@@ -53,18 +56,33 @@ class App {
    *  that host spinning for ever instead of saying so. */
   private libraryLoaded = false;
   private hostName: string | undefined;
+  /** The management API of the host the library is open for, and the host sheet when open. */
+  private hostApi: Host | null = null;
+  private tools: HostTools | null = null;
   private running: string | undefined;
+  /** The running title's library id, which is what `Resume` launches. */
+  private runningId: string | undefined;
+  /** What the last stream played (`entry` unset: the desktop), and what to start again once the
+   *  host is ready after a stream that dropped. */
+  private lastPlay: { entry?: LibraryEntry } | null = null;
+  private resumeOnReady: { entry?: LibraryEntry } | null = null;
+  /** The stream that dropped into the error on screen, which "Try again" brings back. */
+  private dropped: { entry?: LibraryEntry } | null = null;
   private statusTimer = 0;
   /** Is the address field in front? Forced on when there is no card to click instead. */
   private adding = false;
   /** What a probe last said about each known host, and when. */
   private readonly reachCache = new Map<string, { reach: Reach; at: number }>();
+  /** Hosts a wake went to that have not answered yet. */
+  private readonly waking = new Set<string>();
   private probing = false;
   /** A connect link the page opened with, until it is answered, and the title it asked for. */
   private link: { target: string | HostTarget; fp?: string; launch?: string } | null = null;
   private launchOnReady: string | null = null;
   /** The settings sheet renders over whatever is showing, so it is a flag rather than a state. */
   private settingsOpen = false;
+  /** The quick menu over a live picture; closed whenever the stream is not. */
+  private menuOpen = false;
   private prefs: Settings = settings.get();
   private resizeTimer = 0;
 
@@ -83,8 +101,13 @@ class App {
         void engine.connect(this.targetOf(address));
       },
       pair: (pin) => engine.pair(pin),
+      requestAccess: () => engine.requestAccess(this.streamOptions()),
+      cancelRequest: () => engine.cancelRequest(),
       retry: () => {
         const s = engine.current;
+        // After a dropped stream, try again means that stream: the same title, not the library.
+        this.resumeOnReady = this.dropped;
+        this.dropped = null;
         if ("origin" in s && s.origin) void engine.connect(this.targetOf(s.origin));
       },
       back: () => engine.disconnect(),
@@ -92,7 +115,21 @@ class App {
       forget: (origin) => this.forget(origin),
       followLink: (yes) => this.followLink(yes),
       copyLink: (origin) => void this.copyLink(origin),
-      disconnect: () => engine.disconnect(),
+      openTools: (on) => void this.openTools(on),
+      hostAction: (id) => void this.hostAction(id),
+      sendLog: () => void this.sendLog(),
+      wake: (origin) => void this.wake(origin),
+      disconnect: (quit) => {
+        this.menuOpen = false;
+        engine.disconnect(quit);
+      },
+      openMenu: (on) => {
+        this.menuOpen = on;
+        this.render(engine.current);
+      },
+      fullscreen: () => engine.fullscreen(),
+      cycleStats: () => engine.cycleStats(),
+      toggleMic: () => engine.toggleMic(),
       setAdding: (on) => {
         this.adding = on;
         if (engine.current.kind === "idle") this.render(engine.current);
@@ -122,6 +159,10 @@ class App {
     });
     this.applyPrefs();
     this.watchSize();
+    engine.onMenu(() => {
+      this.menuOpen = !this.menuOpen;
+      this.render(engine.current);
+    });
     engine.onState((s) => this.render(s));
     this.openLink();
   }
@@ -133,6 +174,7 @@ class App {
 
   /** Facts in, words out. */
   private render(s: EngineState): void {
+    if (s.kind !== "streaming") this.menuOpen = false;
     if (this.settingsOpen) {
       return this.show({ kind: "settings", values: this.prefs, streaming: s.kind === "streaming" });
     }
@@ -140,6 +182,8 @@ class App {
       case "idle":
         this.clearLibrary();
         this.launchOnReady = null;
+        this.resumeOnReady = null;
+        this.dropped = null;
         return this.home();
       case "bad-address":
         // The field stays in front: what was typed is wrong and this is where it is fixed.
@@ -167,6 +211,8 @@ class App {
         return this.show({ kind: "pair", origin: s.origin, mode: "first" });
       case "pairing":
         return this.show({ kind: "pair", origin: s.origin, mode: "first", busy: true });
+      case "awaiting-approval":
+        return this.show({ kind: "waiting", origin: s.origin, name: s.name });
       case "paired": {
         this.show({ kind: "pair", origin: s.origin, mode: "first", busy: true });
         // The host closes after the ceremony, as it does for native clients; streaming is a
@@ -193,6 +239,14 @@ class App {
           queueMicrotask(() => this.play({ id: launch, title: launch } as LibraryEntry));
           return;
         }
+        const resume = this.resumeOnReady;
+        if (resume) {
+          // Not from inside this listener: starting the stream sets the engine's state again. The
+          // connecting screen stays up until it does.
+          this.resumeOnReady = null;
+          queueMicrotask(() => this.play(resume.entry));
+          return;
+        }
         if (this.libraryFor !== s.origin) void this.openLibrary(s);
         return this.redrawLibrary(s);
       }
@@ -203,16 +257,26 @@ class App {
           kind: "streaming",
           stats: { origin: s.origin, ...s.stats },
           diagnostics: s.stats.statsTier !== "off",
+          menu: this.menuOpen,
         });
-      case "error":
+      case "error": {
+        // Was a stream live, or starting, when this happened? Then trying again resumes it.
+        const was = this.screen;
+        const streamed = was.kind === "streaming" || (was.kind === "connecting" && was.phase === "starting");
+        if (streamed) this.dropped = this.lastPlay;
         return this.show({
           kind: "error",
-          head: s.skew ? "This host speaks a different version" : "Something went wrong",
+          head: s.skew
+            ? "This host speaks a different version"
+            : streamed
+              ? "The stream stopped"
+              : "Something went wrong",
           text: s.skew
             ? `${sentence(s.message)} Update the host, or this page, so the two agree.`
             : sentence(s.message),
           retry: !s.skew,
         });
+      }
     }
   }
 
@@ -223,7 +287,13 @@ class App {
     // The server's hosts first, under the name it gives them; then the ones typed here.
     const known = new Map(this.engine.knownHosts().map((h) => [h.origin, h]));
     const listed: HostCard[] = [
-      ...[...this.configured].map(([origin, c]) => ({ ...known.get(origin), origin, name: c.name, plane: c.plane })),
+      ...[...this.configured].map(([origin, c]) => ({
+        ...known.get(origin),
+        origin,
+        name: c.name,
+        plane: c.plane,
+        ...(c.wake ? { wake: c.wake, waking: this.waking.has(origin) } : {}),
+      })),
       ...[...known.values()].filter((h) => !this.configured.has(h.origin)),
     ];
     const hosts: HostCard[] = listed.map((h) => {
@@ -346,6 +416,38 @@ class App {
     }
   }
 
+  /**
+   * Wake a host through the page's server, which sits on its network where a browser cannot send
+   * a magic packet. Then ask after it every few seconds, as it boots, until it answers or a minute
+   * has gone.
+   */
+  private async wake(origin: string): Promise<void> {
+    const url = this.configured.get(origin)?.wake;
+    if (!url || this.waking.has(origin)) return;
+    this.waking.add(origin);
+    this.redrawHome();
+    try {
+      const r = await fetch(url, { method: "POST" });
+      if (!r.ok) throw new Error(`wake refused (${r.status})`);
+      for (let tries = 0; tries < 20; tries++) {
+        await new Promise((done) => setTimeout(done, 3000));
+        const now = await reach(origin);
+        this.reachCache.set(origin, { reach: now, at: Date.now() });
+        if (now === "ok") break;
+      }
+    } catch (e) {
+      console.warn("punktfunk: wake", e);
+    } finally {
+      this.waking.delete(origin);
+      this.redrawHome();
+    }
+  }
+
+  /** Redraw the host list if it is what is showing. */
+  private redrawHome(): void {
+    if (this.engine.current.kind === "idle" && !this.settingsOpen) this.home();
+  }
+
   /** Forget a host. From the trust screen this is "forget and pair again", so the reconnect
    *  follows — with the stored fingerprint gone, the next connection is a first one. */
   private forget(origin: string): void {
@@ -358,6 +460,7 @@ class App {
   // --- the library ---------------------------------------------------------------------
   private async openLibrary(s: Extract<EngineState, { kind: "ready" }>): Promise<void> {
     this.libraryFor = s.origin;
+    this.hostApi = s.host;
     this.libraryLoaded = false;
     this.entries = [];
     try {
@@ -386,6 +489,7 @@ class App {
         const st = await s.host.status();
         const live = st.games.find((g) => g.state === "running" || g.state === "launching");
         this.running = live?.title;
+        this.runningId = live?.app_id ?? undefined;
         this.redrawLibrary(now);
       } catch {
         // A failed poll is not news; the next one will say.
@@ -424,16 +528,92 @@ class App {
       busy: this.libraryFor === s.origin && !this.libraryLoaded,
       ...(this.hostName ? { host: this.hostName } : {}),
       ...(this.running ? { running: this.running } : {}),
+      ...(this.tools ? { tools: this.tools } : {}),
+      ...this.resumable(),
       ...(error ? { error: `${sentence(error)} You can still stream the desktop.` } : {}),
     });
   }
 
+  // --- the host sheet ---------------------------------------------------------------------
+  /** Open the sheet and ask the host what this device may do to it. */
+  private async openTools(on: boolean): Promise<void> {
+    this.tools = on ? { actions: [], busy: true } : null;
+    this.redrawTools();
+    const host = this.hostApi;
+    if (!on || !host) return;
+    try {
+      // `display.next` moves a live stream to another monitor: nothing to offer from the library.
+      const actions = (await host.actions()).filter((a) => a.id !== "display.next");
+      this.setTools({
+        busy: false,
+        actions: actions.map((a) => ({
+          id: a.id,
+          title: a.title,
+          danger: a.danger,
+          enabled: a.available && a.permitted,
+          ...(a.available && a.permitted
+            ? {}
+            : { reason: a.available ? "This device's access does not include it" : (a.unavailable_reason ?? "Not on this host") }),
+        })),
+      });
+    } catch (e) {
+      this.setTools({ busy: false, note: sentence(e instanceof Error ? e.message : String(e)) });
+    }
+  }
+
+  private async hostAction(id: string): Promise<void> {
+    const host = this.hostApi;
+    if (!host || !this.tools) return;
+    this.setTools({ busy: true });
+    try {
+      await host.invoke(id);
+      this.setTools({ busy: false, note: "Done. The host is doing it now, and ends every stream first." });
+    } catch (e) {
+      this.setTools({ busy: false, note: sentence(e instanceof Error ? e.message : String(e)) });
+    }
+  }
+
+  private async sendLog(): Promise<void> {
+    const host = this.hostApi;
+    if (!host || !this.tools) return;
+    this.setTools({ busy: true });
+    try {
+      const id = await host.uploadLog(pageLog());
+      this.setTools({ busy: false, note: `Sent. The host's console lists it under this device as ${id}.` });
+    } catch (e) {
+      this.setTools({ busy: false, note: sentence(e instanceof Error ? e.message : String(e)) });
+    }
+  }
+
+  private setTools(patch: Partial<HostTools>): void {
+    if (!this.tools) return;
+    this.tools = { ...this.tools, ...patch };
+    this.redrawTools();
+  }
+
+  private redrawTools(): void {
+    const now = this.engine.current;
+    if (now.kind === "ready") this.redrawLibrary(now);
+  }
+
+  /** The running title's entry, by library id where the host gave one, else by title. */
+  private resumable(): { resume?: LibraryEntry } {
+    if (!this.running) return {};
+    const entry =
+      this.entries.find((e) => this.runningId !== undefined && e.id === this.runningId) ??
+      this.entries.find((e) => e.title === this.running);
+    return entry ? { resume: entry } : {};
+  }
+
   private clearLibrary(): void {
     clearTimeout(this.statusTimer);
+    this.hostApi = null;
+    this.tools = null;
     this.libraryFor = null;
     this.libraryLoaded = false;
     this.hostName = undefined;
     this.running = undefined;
+    this.runningId = undefined;
     this.entries = [];
     for (const url of this.art.values()) {
       if (url.startsWith("blob:")) URL.revokeObjectURL(url);
@@ -483,16 +663,19 @@ class App {
   }
 
   private play(entry?: LibraryEntry): void {
+    this.lastPlay = entry ? { entry } : {};
+    this.engine.startStream({ ...this.streamOptions(), ...(entry ? { launch: entry } : {}) });
+  }
+
+  /** The desktop stream the settings and the window ask for. */
+  private streamOptions(): { width: number; height: number; fps: number; bitrateKbps: number } {
     const [fit, fitHeight] = size(this.uiCanvas);
-    const width = this.prefs.width || fit;
-    const height = this.prefs.height || fitHeight;
-    this.engine.startStream({
-      width,
-      height,
+    return {
+      width: this.prefs.width || fit,
+      height: this.prefs.height || fitHeight,
       fps: this.prefs.fps,
       bitrateKbps: this.prefs.bitrateKbps,
-      ...(entry ? { launch: entry } : {}),
-    });
+    };
   }
 }
 
@@ -573,9 +756,10 @@ function routeOf(address: string): HostTarget | null {
   return plane ? { api: address.replace(/\/+$/, ""), plane } : null;
 }
 
-/** A host from the page server's `config.json`. */
+/** A host from the page server's `config.json`. `wake` is its wake URL when the server can. */
 interface Configured extends HostTarget {
   name: string;
+  wake?: string;
 }
 
 /**
@@ -587,13 +771,14 @@ async function configuredHosts(): Promise<{ listed: Map<string, Configured>; via
   try {
     const r = await fetch("./config.json", { cache: "no-store" });
     const c = (await r.json()) as {
-      hosts?: Array<{ name: string; api: string; plane: string }>;
+      hosts?: Array<{ name: string; api: string; plane: string; wake?: string }>;
       add?: boolean;
     };
     const listed = new Map(
       (c.hosts ?? []).map((h): [string, Configured] => {
         const api = new URL(h.api, location.href).href.replace(/\/+$/, "");
-        return [api, { api, plane: h.plane, name: h.name }];
+        const wake = h.wake ? new URL(h.wake, location.href).href : undefined;
+        return [api, { api, plane: h.plane, name: h.name, ...(wake ? { wake } : {}) }];
       }),
     );
     return { listed, viaServer: c.add === true };
@@ -604,6 +789,9 @@ async function configuredHosts(): Promise<{ listed: Map<string, Configured>; via
 
 /** Set by `vite.config.ts` when the dev server proxies a host; absent in a build. */
 declare const __PF_TRANSPORT_HOST__: string | undefined;
+
+// Before anything logs, so a log sent to a host has the whole visit in it.
+captureLog();
 
 const uiCanvas = document.getElementById("pf-ui") as HTMLCanvasElement;
 const videoCanvas = document.getElementById("pf-video") as HTMLCanvasElement;
@@ -621,10 +809,12 @@ try {
   // carries for exactly this case does.
   const shell = new WebShell(document.body);
   shell.mount({
-    connect() {}, pair() {}, retry() {}, back() {}, play() {}, forget() {}, disconnect() {},
+    connect() {}, pair() {}, requestAccess() {}, cancelRequest() {}, retry() {}, back() {}, play() {},
+    forget() {}, wake() {}, disconnect() {},
+    openTools() {}, hostAction() {}, sendLog() {},
     followLink() {}, copyLink() {},
     setAdding() {}, rename() {}, openSettings() {}, setSettings() {}, toggleCapture() {},
-    showDiagnostics() {},
+    showDiagnostics() {}, openMenu() {}, fullscreen() {}, cycleStats() {}, toggleMic() {},
   });
   shell.render({
     kind: "error",

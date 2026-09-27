@@ -9,9 +9,9 @@ services:
   punktfunk-web:
     image: git.unom.io/unom/punktfunk-client-web:latest
     restart: unless-stopped
-    # The host's network, so the server finds hosts over mDNS by itself. On Docker Desktop, or to
-    # keep the container off it: drop this, publish the port (ports: ["8443:8443"]) and list the
-    # hosts below.
+    # The host's network, so the server finds hosts over mDNS by itself and can wake them with a
+    # magic packet. On Docker Desktop, or to keep the container off it: drop this, publish the port
+    # (ports: ["8443:8443"]) and list the hosts below.
     network_mode: host
     environment:
       # Every name or address you open the page at, so the certificate is issued for them.
