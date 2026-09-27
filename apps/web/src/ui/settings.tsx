@@ -24,6 +24,9 @@ const SIZES: ReadonlyArray<[label: string, width: number, height: number]> = [
 
 const RATES = [30, 60, 120, 144];
 
+/** Where the slider starts when Automatic is turned off. */
+const FIXED_START_KBPS = 20_000;
+
 /** Set by `vite.config.ts` from `git describe`. */
 declare const __PF_VERSION__: string;
 
@@ -65,15 +68,24 @@ export function SettingsDialog({ screen, actions }: { screen: Extract<Screen, { 
           </Select>
         </Field>
 
-        <Slider
-          label="Bitrate"
-          min={2}
-          max={150}
-          step={1}
-          value={Math.round(v.bitrateKbps / 1000)}
-          formatValue={(n) => `${n} Mbps`}
-          onValueChange={(n) => set({ bitrateKbps: n * 1000 })}
+        <Toggle
+          id="pf-auto-bitrate"
+          label="Automatic bitrate"
+          hint="The host picks the rate this connection carries and follows it as that changes."
+          on={v.bitrateKbps === 0}
+          onChange={(on) => set({ bitrateKbps: on ? 0 : FIXED_START_KBPS })}
         />
+        {v.bitrateKbps > 0 && (
+          <Slider
+            label="Bitrate"
+            min={2}
+            max={150}
+            step={1}
+            value={Math.round(v.bitrateKbps / 1000)}
+            formatValue={(n) => `${n} Mbps`}
+            onValueChange={(n) => set({ bitrateKbps: n * 1000 })}
+          />
+        )}
 
         <Field label="Video plane" htmlFor="pf-backend">
           <Select value={v.videoBackend} onValueChange={(value) => set({ videoBackend: value as Settings["videoBackend"] })}>

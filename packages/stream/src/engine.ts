@@ -201,6 +201,7 @@ export interface StreamOptions {
   width: number;
   height: number;
   fps?: number;
+  /** `0` or unset is Automatic: the host picks the rate the link carries and follows it. */
   bitrateKbps?: number;
   /** What the host should launch. Its `id` goes on the wire; unset streams the desktop. */
   launch?: LibraryEntry;
@@ -493,7 +494,7 @@ export class Engine {
         opts.width,
         opts.height,
         opts.fps ?? 60,
-        opts.bitrateKbps ?? 20000,
+        opts.bitrateKbps ?? 0,
         id ? p : 0,
         id ? len : 0,
         n,
