@@ -162,9 +162,9 @@ export class InputPipe {
     this.on(c, "wheel", (e: WheelEvent) => this.scroll(e), { passive: false });
     this.on(c, "contextmenu", (e: Event) => e.preventDefault());
     // The pad set is polled; these only keep the arrival and removal events honest.
-    this.on(window, "gamepadconnected", (e: GamepadEvent) => this.arrive(e.gamepad.index));
+    this.on(window, "gamepadconnected", (e: GamepadEvent) => this.arrive(e.gamepad));
     this.on(window, "gamepaddisconnected", (e: GamepadEvent) => this.leave(e.gamepad.index));
-    for (const g of navigator.getGamepads()) if (g) this.arrive(g.index);
+    for (const g of navigator.getGamepads()) if (g) this.arrive(g);
     c.focus();
   }
 
@@ -312,10 +312,12 @@ export class InputPipe {
   }
 
   // --- gamepads --------------------------------------------------------------------------
-  private arrive(index: number): void {
-    if (this.pads.has(index)) return;
-    this.pads.add(index);
-    this.mod._pf_gamepad_arrival(index);
+  /** Only a standard-mapping pad is forwarded: its button indices are the only ones this reads,
+   *  and any other layout would press the wrong buttons on the host. */
+  private arrive(g: Gamepad): void {
+    if (this.pads.has(g.index) || g.mapping !== "standard") return;
+    this.pads.add(g.index);
+    this.mod._pf_gamepad_arrival(g.index, padKind(g.id));
   }
 
   private leave(index: number): void {
@@ -340,3 +342,37 @@ export class InputPipe {
     this.off.push(() => target.removeEventListener(type, fn as EventListener, opts));
   }
 }
+
+/**
+ * The `GamepadPref` wire byte for a pad, by the rules the native clients use: the vendor and
+ * product where the browser gives them (Chromium and Firefox put them in the id), else the name
+ * (Safari gives only that). Unknown pads get Xbox 360, which every game reads.
+ */
+export function padKind(id: string): number {
+  const ids = /Vendor: ([0-9a-f]{4}) Product: ([0-9a-f]{4})/i.exec(id) ?? /^([0-9a-f]{1,4})-([0-9a-f]{1,4})-/i.exec(id);
+  const vid = ids ? parseInt(ids[1]!, 16) : -1;
+  const pid = ids ? parseInt(ids[2]!, 16) : -1;
+  const name = id.toLowerCase();
+  if ((vid === 0x054c && pid === 0x0df2) || name.includes("dualsense edge")) return PAD_KIND.DUALSENSE_EDGE;
+  if ((vid === 0x054c && pid === 0x0ce6) || name.includes("dualsense")) return PAD_KIND.DUALSENSE;
+  if ((vid === 0x054c && [0x05c4, 0x09cc, 0x0ba0].includes(pid)) || name.includes("dualshock")) return PAD_KIND.DUALSHOCK4;
+  if (vid === 0x28de && pid === 0x1205) return PAD_KIND.STEAM_DECK;
+  if (vid === 0x28de && [0x1102, 0x1142].includes(pid)) return PAD_KIND.STEAM_CONTROLLER;
+  if ((vid === 0x057e && [0x2009, 0x200e].includes(pid)) || name.includes("pro controller")) return PAD_KIND.SWITCH_PRO;
+  if (vid === 0x045e ? ![0x028e, 0x028f, 0x0719].includes(pid) : name.includes("xbox") && !name.includes("360")) {
+    return PAD_KIND.XBOX_ONE;
+  }
+  return PAD_KIND.XBOX_360;
+}
+
+/** `punktfunk_core::config::GamepadPref::to_u8`. */
+const PAD_KIND = {
+  XBOX_360: 1,
+  DUALSENSE: 2,
+  XBOX_ONE: 3,
+  DUALSHOCK4: 4,
+  STEAM_CONTROLLER: 5,
+  STEAM_DECK: 6,
+  DUALSENSE_EDGE: 7,
+  SWITCH_PRO: 8,
+} as const;

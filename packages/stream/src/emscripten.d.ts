@@ -87,7 +87,7 @@ export interface PunktfunkModule {
   _pf_input(kind: number, code: number, x: number, y: number, flags: number): void;
   /** The whole pad; Rust sends what changed. Sticks −32768..32767 with +y = up, triggers 0..255. */
   _pf_gamepad(pad: number, buttons: number, lsX: number, lsY: number, rsX: number, rsY: number, lt: number, rt: number): void;
-  _pf_gamepad_arrival(pad: number): void;
+  _pf_gamepad_arrival(pad: number, kind: number): void;
   _pf_gamepad_remove(pad: number): void;
 
   // --- the datagram ring -------------------------------------------------------------------
