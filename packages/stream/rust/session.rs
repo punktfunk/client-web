@@ -19,8 +19,8 @@ use crate::transport::WebTransportDatagrams;
 use punktfunk_core::config::{CompositorPref, GamepadPref, Mode, Role};
 use punktfunk_core::hud::{self, StatsSnapshot, StatsVerbosity};
 use punktfunk_core::quic::{
-    AccessUpdate, AuthChallenge, Hello, PairChallenge, PairResult, Reconfigure, Reconfigured,
-    Refused, RequestKeyframe, RfiRequest, Start, Welcome, MAGIC,
+    AccessUpdate, AuthChallenge, CursorRenderMode, CursorShape, Hello, PairChallenge, PairResult,
+    Reconfigure, Reconfigured, Refused, RequestKeyframe, RfiRequest, Start, Welcome, MAGIC,
 };
 use punktfunk_core::reanchor::{GateVerdict, ReanchorGate};
 use punktfunk_core::session::Session;
@@ -97,6 +97,10 @@ struct Client {
     grants: u32,
     access_secs: u32,
     access_seq: u32,
+    /// The host pointer's last `CursorState`: shape serial and flags (`CURSOR_VISIBLE`), with
+    /// `0x100` set once one has arrived. Zero until the host forwards its cursor.
+    cursor_serial: u32,
+    cursor_flags: u32,
 }
 
 fn new_hud() -> hud::Stats {
@@ -129,6 +133,8 @@ impl Client {
             grants: 0,
             access_secs: 0,
             access_seq: 0,
+            cursor_serial: 0,
+            cursor_flags: 0,
         }
     }
 }
@@ -184,6 +190,8 @@ pub extern "C" fn pf_session_reset() {
         c.grants = 0;
         c.access_secs = 0;
         c.access_seq = 0;
+        c.cursor_serial = 0;
+        c.cursor_flags = 0;
         c.hud = new_hud();
         c.receipts.clear();
         c.snap = None;
@@ -221,6 +229,54 @@ pub fn host_caps() -> u8 {
     CLIENT.with(|c| c.borrow().host_caps)
 }
 
+/// `Welcome::host_caps`, for the page: `HOST_CAP_CURSOR` says whether the host forwards its
+/// pointer instead of drawing it into the picture.
+#[unsafe(no_mangle)]
+pub extern "C" fn pf_session_host_caps() -> u32 {
+    u32::from(host_caps())
+}
+
+/// Who draws the pointer from here on: the page (`1`, the host leaves it out of the picture) or
+/// the host (`0`, pointer lock). A no-op on a host that did not grant the cursor channel.
+#[unsafe(no_mangle)]
+pub extern "C" fn pf_cursor_render(client_draws: u32) {
+    CLIENT.with(|c| {
+        let c = c.borrow();
+        if c.phase == Phase::Live && c.host_caps & punktfunk_core::quic::HOST_CAP_CURSOR != 0 {
+            write_msg(
+                &CursorRenderMode {
+                    client_draws: client_draws != 0,
+                }
+                .encode(),
+            );
+        }
+    });
+}
+
+/// One `CursorState` datagram (0xD0). Only the serial and visibility are kept: the page's own
+/// pointer is already where the user put it.
+pub fn on_cursor_state(datagram: &[u8]) {
+    if let Some(s) = punktfunk_core::quic::decode_cursor_state_datagram(datagram) {
+        CLIENT.with(|c| {
+            let mut c = c.borrow_mut();
+            c.cursor_serial = s.serial;
+            c.cursor_flags = 0x100 | u32::from(s.flags);
+        });
+    }
+}
+
+/// The last `CursorState`'s shape serial; see [`pf_cursor_flags`].
+#[unsafe(no_mangle)]
+pub extern "C" fn pf_cursor_serial() -> u32 {
+    CLIENT.with(|c| c.borrow().cursor_serial)
+}
+
+/// The last `CursorState`'s flags, `0x100` set once one has arrived.
+#[unsafe(no_mangle)]
+pub extern "C" fn pf_cursor_flags() -> u32 {
+    CLIENT.with(|c| c.borrow().cursor_flags)
+}
+
 thread_local! {
     static CLIENT: RefCell<Client> = RefCell::new(Client::new());
     /// What this browser decodes, and whether it can show HDR10, as the next `Hello` offers them.
@@ -252,6 +308,16 @@ unsafe extern "C" {
     /// The host's sentence for a launch that did not give the player their game. UTF-8,
     /// borrowed for the call.
     fn pf_launch_notice(text: *const u8, len: u32);
+    /// A host pointer bitmap: straight-alpha RGBA, `w * h * 4` bytes, borrowed for the call.
+    fn pf_cursor_shape(
+        serial: u32,
+        w: u32,
+        h: u32,
+        hot_x: u32,
+        hot_y: u32,
+        rgba: *const u8,
+        len: u32,
+    );
 }
 
 /// Frame the way the control plane does everywhere else: `u16` length, then the payload.
@@ -336,7 +402,9 @@ pub unsafe extern "C" fn pf_session_hello(
             // No preference: the host picks the best codec both sides have.
             preferred_codec: 0,
             display_hdr: None,
-            client_caps: 0,
+            // The page wears the host's pointer as its own cursor, so the host leaves it out of
+            // the picture until pointer lock hands drawing back (`pf_cursor_render`).
+            client_caps: punktfunk_core::quic::CLIENT_CAP_CURSOR,
             max_shard_payload: punktfunk_core::config::max_shard_payload() as u16,
             audio_rate_hz: 0,
             audio_bits: 0,
@@ -470,6 +538,19 @@ pub unsafe extern "C" fn pf_ctl_recv(ptr: *const u8, len: u32) {
             } else if let Ok(r) = Refused::decode(&body) {
                 // SAFETY: the string is borrowed for a call into JavaScript that copies it.
                 unsafe { pf_refused(r.code, r.reason.as_ptr(), r.reason.len() as u32) };
+            } else if let Ok(shape) = CursorShape::decode(&body) {
+                // SAFETY: the bitmap is borrowed for a call into JavaScript that copies it.
+                unsafe {
+                    pf_cursor_shape(
+                        shape.serial,
+                        u32::from(shape.w),
+                        u32::from(shape.h),
+                        u32::from(shape.hot_x),
+                        u32::from(shape.hot_y),
+                        shape.rgba.as_ptr(),
+                        shape.rgba.len() as u32,
+                    )
+                };
             } else if let Some(text) = crate::launch::notice(&body) {
                 // SAFETY: the string is borrowed for a call into JavaScript that copies it.
                 unsafe { pf_launch_notice(text.as_ptr(), text.len() as u32) };

@@ -41,6 +41,10 @@ export interface PunktfunkModule {
   _pf_session_access_seq?(): number;
   _pf_session_access_grants?(): number;
   _pf_session_access_secs?(): number;
+  _pf_session_host_caps?(): number;
+  _pf_cursor_render?(clientDraws: number): void;
+  _pf_cursor_serial?(): number;
+  _pf_cursor_flags?(): number;
   _pf_session_hello(
     width: number,
     height: number,
@@ -141,6 +145,8 @@ export interface PunktfunkModule {
   __pfOnRefused?: (code: number, reason: string) => void;
   /** The host's sentence for a launch that did not give the player their game. */
   __pfOnLaunchNotice?: (text: string) => void;
+  /** A host pointer bitmap: straight-alpha RGBA, copied out of wasm memory. */
+  __pfOnCursorShape?: (serial: number, w: number, h: number, hotX: number, hotY: number, rgba: Uint8Array) => void;
   /** The negotiated video format, once `Welcome` has been read. */
   __pfOnVideoConfig?: (codec: number, width: number, height: number, depth: number, hdr: boolean) => void;
   /** One access unit. The bytes are copied out of wasm memory before this is called. */

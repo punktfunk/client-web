@@ -123,7 +123,8 @@ pub extern "C" fn pf_rx_claim() -> i32 {
 /// Everything on the flow that is not video is demuxed here, by its first byte, before the slot
 /// is published: the session pump treats every ring entry as a sealed video datagram, and an
 /// audio frame handed to it would fail to open and vanish. Audio goes to [`crate::audio`],
-/// rumble to [`crate::rumble`], and the slot is reused.
+/// rumble to [`crate::rumble`], host timing and the host pointer's state to [`crate::session`],
+/// and the slot is reused.
 #[unsafe(no_mangle)]
 pub extern "C" fn pf_rx_commit(slot: i32, len: u32) {
     RING.with(|r| {
@@ -147,6 +148,10 @@ pub extern "C" fn pf_rx_commit(slot: i32, len: u32) {
         // The host's per-frame timing rides the same plane; it feeds the stats overlay.
         if len > 0 && r.buf[start] == punktfunk_core::quic::HOST_TIMING_MAGIC {
             crate::session::on_host_timing(&r.buf[start..start + len]);
+            return;
+        }
+        if len > 0 && r.buf[start] == punktfunk_core::quic::CURSOR_STATE_MAGIC {
+            crate::session::on_cursor_state(&r.buf[start..start + len]);
             return;
         }
         r.lens[slot] = len as u32;

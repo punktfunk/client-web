@@ -24,6 +24,7 @@ import { AudioPipe, type AudioSnapshot, opusHead, playableChannels } from "./aud
 import { MicPipe, type MicState } from "./mic.ts";
 import { STATS_TIERS, type StatsTier } from "./settings.ts";
 import type { ConsoleEvent } from "./console-bridge.ts";
+import { HostCursor } from "./cursor.ts";
 
 export type { AudioSnapshot, AudioState } from "./audio.ts";
 export type { MicState } from "./mic.ts";
@@ -226,6 +227,7 @@ export class Engine {
   private input: InputPipe | null = null;
   private audio: AudioPipe | null = null;
   private mic: MicPipe | null = null;
+  private readonly cursor = new HostCursor();
   private host: Host | null = null;
   private pairing = false;
   private settled = false;
@@ -285,6 +287,7 @@ export class Engine {
       this.launchNotice = { text, at: performance.now() };
     };
     mod.__pfOnRumble = (pad, low, high, lt, rt, ms) => playRumble(navigator.getGamepads(), pad, low, high, lt, rt, ms);
+    mod.__pfOnCursorShape = (serial, w, h, hx, hy, rgba) => this.cursor.shape(serial, w, h, hx, hy, rgba);
     requestAnimationFrame(() => this.frame());
   }
 
@@ -883,6 +886,7 @@ export class Engine {
     this.mic = null;
     this.input?.detach();
     this.input = null;
+    this.cursor.reset(this.opts.videoCanvas);
     this.inputSize = { width: 0, height: 0 };
     this.audio?.close();
     this.audio = null;
@@ -980,6 +984,10 @@ export class Engine {
       this.input.tune({ streamWidth: v.width, streamHeight: v.height });
     }
     this.input?.poll();
+    if (v?.width) {
+      const input = this.input !== null;
+      this.cursor.tick(this.mod, this.opts.videoCanvas, input, this.tunable.pointer === "absolute", this.input?.captured ?? false, v.width);
+    }
     // Audio from the first live frame too: the channel count is `Welcome`'s.
     if (!this.audio && this.tunable.audio) {
       const channels = this.mod._pf_session_audio_channels();

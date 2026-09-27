@@ -417,6 +417,11 @@ mergeInto(LibraryManager.library, {
     if (Module.__pfOnLaunchNotice) Module.__pfOnLaunchNotice(UTF8ToString(ptr, len));
   },
 
+  // `slice`: the bitmap is cached past this call, and Rust frees it on return.
+  pf_cursor_shape: function (serial: number, w: number, h: number, hx: number, hy: number, ptr: number, len: number): void {
+    if (Module.__pfOnCursorShape) Module.__pfOnCursorShape(serial >>> 0, w, h, hx, hy, HEAPU8.slice(ptr, ptr + len));
+  },
+
   pf_video_config: function (codec: number, width: number, height: number, depth: number, hdr: number): void {
     if (Module.__pfOnVideoConfig) Module.__pfOnVideoConfig(codec, width, height, depth, hdr !== 0);
   },
