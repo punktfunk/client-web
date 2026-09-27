@@ -330,8 +330,7 @@ pub unsafe extern "C" fn pf_session_hello(
                     0
                 },
             audio_channels: 2,
-            // H.264 only for now: it is what a GPU-less host can encode, and what every engine
-            // decodes. HEVC and AV1 wait until there is a stream to test them against.
+            // What `VideoDecoder` said it takes; H.264 always.
             video_codecs: CODECS.with(std::cell::Cell::get),
             // No preference: the host picks the best codec both sides have.
             preferred_codec: 0,
