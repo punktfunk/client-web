@@ -27,13 +27,23 @@ export interface PunktfunkModule {
   _pf_ctl_recv(ptr: number, len: number): void;
 
   // --- the session -----------------------------------------------------------------------
+  _pf_session_codecs?(mask: number, hdr: number): void;
   _pf_session_audio?(channels: number): void;
   _pf_session_audio_layout?(out: number): number;
   _pf_mic_send?(ptr: number, len: number, seq: number, ptsNs: number): void;
   _pf_session_access_seq?(): number;
   _pf_session_access_grants?(): number;
   _pf_session_access_secs?(): number;
-  _pf_session_hello(width: number, height: number, fps: number, bitrateKbps: number, launchPtr: number, launchLen: number): number;
+  _pf_session_hello(
+    width: number,
+    height: number,
+    fps: number,
+    bitrateKbps: number,
+    launchPtr: number,
+    launchLen: number,
+    namePtr: number,
+    nameLen: number,
+  ): number;
   /** Drain the ring and hand each finished access unit to the page. Returns how many. */
   _pf_session_pump(): number;
   /** `0` idle, `1` offered, `2` live, `3` failed. */
@@ -84,7 +94,7 @@ export interface PunktfunkModule {
   _pf_input(kind: number, code: number, x: number, y: number, flags: number): void;
   /** The whole pad; Rust sends what changed. Sticks −32768..32767 with +y = up, triggers 0..255. */
   _pf_gamepad(pad: number, buttons: number, lsX: number, lsY: number, rsX: number, rsY: number, lt: number, rt: number): void;
-  _pf_gamepad_arrival(pad: number): void;
+  _pf_gamepad_arrival(pad: number, kind: number): void;
   _pf_gamepad_remove(pad: number): void;
 
   // --- the datagram ring -------------------------------------------------------------------
@@ -125,7 +135,7 @@ export interface PunktfunkModule {
   /** The host's sentence for a launch that did not give the player their game. */
   __pfOnLaunchNotice?: (text: string) => void;
   /** The negotiated video format, once `Welcome` has been read. */
-  __pfOnVideoConfig?: (codec: number, width: number, height: number) => void;
+  __pfOnVideoConfig?: (codec: number, width: number, height: number, depth: number, hdr: boolean) => void;
   /** One access unit. The bytes are copied out of wasm memory before this is called. */
   __pfOnAccessUnit?: (data: Uint8Array, ptsUs: number, key: boolean, flags: number) => void;
   /** One Opus frame, in order, for the page's decoder. */

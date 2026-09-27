@@ -79,6 +79,8 @@ class App {
         void engine.connect(this.targetOf(address));
       },
       pair: (pin) => engine.pair(pin),
+      requestAccess: () => engine.requestAccess(this.streamOptions()),
+      cancelRequest: () => engine.cancelRequest(),
       retry: () => {
         const s = engine.current;
         if ("origin" in s && s.origin) void engine.connect(this.targetOf(s.origin));
@@ -174,6 +176,8 @@ class App {
         return this.show({ kind: "pair", origin: s.origin, mode: "first" });
       case "pairing":
         return this.show({ kind: "pair", origin: s.origin, mode: "first", busy: true });
+      case "awaiting-approval":
+        return this.show({ kind: "waiting", origin: s.origin, name: s.name });
       case "paired": {
         this.show({ kind: "pair", origin: s.origin, mode: "first", busy: true });
         // The host closes after the ceremony, as it does for native clients; streaming is a
@@ -423,16 +427,18 @@ class App {
   }
 
   private play(entry?: LibraryEntry): void {
+    this.engine.startStream({ ...this.streamOptions(), ...(entry ? { launch: entry } : {}) });
+  }
+
+  /** The desktop stream the settings and the window ask for. */
+  private streamOptions(): { width: number; height: number; fps: number; bitrateKbps: number } {
     const [fit, fitHeight] = size(this.uiCanvas);
-    const width = this.prefs.width || fit;
-    const height = this.prefs.height || fitHeight;
-    this.engine.startStream({
-      width,
-      height,
+    return {
+      width: this.prefs.width || fit,
+      height: this.prefs.height || fitHeight,
       fps: this.prefs.fps,
       bitrateKbps: this.prefs.bitrateKbps,
-      ...(entry ? { launch: entry } : {}),
-    });
+    };
   }
 }
 
@@ -552,7 +558,8 @@ try {
   // carries for exactly this case does.
   const shell = new WebShell(document.body);
   shell.mount({
-    connect() {}, pair() {}, retry() {}, back() {}, play() {}, forget() {}, disconnect() {},
+    connect() {}, pair() {}, requestAccess() {}, cancelRequest() {}, retry() {}, back() {}, play() {},
+    forget() {}, disconnect() {},
     setAdding() {}, rename() {}, openSettings() {}, setSettings() {}, toggleCapture() {},
     showDiagnostics() {}, openMenu() {}, fullscreen() {}, cycleStats() {}, toggleMic() {},
   });

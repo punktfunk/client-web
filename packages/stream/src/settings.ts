@@ -21,6 +21,7 @@ export interface Settings {
   width: number;
   height: number;
   fps: number;
+  /** `0` is Automatic: the host picks the rate the link carries and follows it. */
   bitrateKbps: number;
   /** Which video plane to prefer. `auto` takes WebGPU where the engine has it. */
   videoBackend: "auto" | "webgl2" | "webgpu";
@@ -48,7 +49,7 @@ export const DEFAULTS: Settings = {
   width: 0,
   height: 0,
   fps: 60,
-  bitrateKbps: 20000,
+  bitrateKbps: 0,
   videoBackend: "auto",
   audio: true,
   captureInput: true,
@@ -77,7 +78,12 @@ export const settings = {
   },
   set(patch: Partial<Settings>): Settings {
     const next = sane({ ...settings.get(), ...patch });
-    localStorage.setItem(KEY, JSON.stringify(next));
+    // Only a value that differs from the default is a choice worth keeping, so a default that
+    // changes later still reaches everyone who never picked otherwise.
+    const chosen = Object.fromEntries(
+      Object.entries(next).filter(([k, v]) => v !== DEFAULTS[k as keyof Settings]),
+    );
+    localStorage.setItem(KEY, JSON.stringify(chosen));
     return next;
   },
   reset(): Settings {
@@ -100,7 +106,7 @@ function sane(s: Settings): Settings {
     width: even(s.width),
     height: even(s.height),
     fps: Math.min(240, Math.max(1, Math.round(s.fps) || DEFAULTS.fps)),
-    bitrateKbps: Math.min(200_000, Math.max(500, Math.round(s.bitrateKbps) || DEFAULTS.bitrateKbps)),
+    bitrateKbps: s.bitrateKbps > 0 ? Math.min(200_000, Math.max(500, Math.round(s.bitrateKbps))) : 0,
     deadzone: Math.min(0.5, Math.max(0, s.deadzone)),
     statsTier: STATS_TIERS.includes(s.statsTier) ? s.statsTier : DEFAULTS.statsTier,
     advancedStats: s.advancedStats === true,

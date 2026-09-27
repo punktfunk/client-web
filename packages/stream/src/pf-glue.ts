@@ -417,8 +417,8 @@ mergeInto(LibraryManager.library, {
     if (Module.__pfOnLaunchNotice) Module.__pfOnLaunchNotice(UTF8ToString(ptr, len));
   },
 
-  pf_video_config: function (codec: number, width: number, height: number): void {
-    if (Module.__pfOnVideoConfig) Module.__pfOnVideoConfig(codec, width, height);
+  pf_video_config: function (codec: number, width: number, height: number, depth: number, hdr: number): void {
+    if (Module.__pfOnVideoConfig) Module.__pfOnVideoConfig(codec, width, height, depth, hdr !== 0);
   },
 
   // --- audio ----------------------------------------------------------------------------------
