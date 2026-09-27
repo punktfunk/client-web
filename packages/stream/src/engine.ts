@@ -239,6 +239,8 @@ export class Engine {
   /** This session's overlay tier and its last lines; `dropped` as of the last window. */
   private tier: StatsTier = TUNABLE_DEFAULTS.statsTier;
   private hud: HudLine[] = [];
+  /** What the last `streaming` notification showed, so an unchanged frame notifies no one. */
+  private shown = "";
   private lastDropped = 0;
   /** The last launch notice and when it arrived (`performance.now()`). */
   private launchNotice: { text: string; at: number } | null = null;
@@ -990,7 +992,9 @@ export class Engine {
     const now = performance.now();
     this.readAccess(now);
     const frames = this.mod._pf_session_frames();
+    let second = false;
     if (now - this.lastSecond >= 1000) {
+      second = true;
       this.fps = Math.round(((frames - this.lastFrames) * 1000) / (now - this.lastSecond));
       this.lastFrames = frames;
       this.lastSecond = now;
@@ -1000,7 +1004,7 @@ export class Engine {
       this.lastDropped = dropped;
       this.hud = this.readHud();
     }
-    this.set({
+    const state: EngineState = {
       kind: "streaming",
       origin,
       stats: {
@@ -1022,7 +1026,17 @@ export class Engine {
         ...this.accessStats(now),
         mic: this.mic?.state ?? (MicPipe.supported() ? "off" : "unsupported"),
       },
-    });
+    };
+    // A screen redraws on what it shows: every frame here would re-render the page 60–240 times
+    // a second on the thread that also feeds the decoder. The counters move once a second.
+    const s = state.stats;
+    const shown = `${s.width}x${s.height}|${s.pointerCaptured}|${s.mic}|${s.launchNotice}|${s.access}|${s.accessNotice}|${s.backend}|${this.tier}`;
+    if (second || shown !== this.shown || this.state.kind !== "streaming") {
+      this.shown = shown;
+      this.set(state);
+    } else {
+      this.state = state;
+    }
   }
 
   /** The `OpusHead` for the surround the host encodes, or nothing for stereo. */
