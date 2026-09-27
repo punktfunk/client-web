@@ -16,6 +16,9 @@ import {
   hosts,
   originOf,
   type LibraryEntry,
+  linkFor,
+  type PageLink,
+  parseLink,
   type Reach,
   reach,
   type Settings,
@@ -57,6 +60,9 @@ class App {
   /** What a probe last said about each known host, and when. */
   private readonly reachCache = new Map<string, { reach: Reach; at: number }>();
   private probing = false;
+  /** A connect link the page opened with, until it is answered, and the title it asked for. */
+  private link: { target: string | HostTarget; fp?: string; launch?: string } | null = null;
+  private launchOnReady: string | null = null;
   /** The settings sheet renders over whatever is showing, so it is a flag rather than a state. */
   private settingsOpen = false;
   private prefs: Settings = settings.get();
@@ -84,6 +90,8 @@ class App {
       back: () => engine.disconnect(),
       play: (entry) => this.play(entry),
       forget: (origin) => this.forget(origin),
+      followLink: (yes) => this.followLink(yes),
+      copyLink: (origin) => void this.copyLink(origin),
       disconnect: () => engine.disconnect(),
       setAdding: (on) => {
         this.adding = on;
@@ -115,6 +123,7 @@ class App {
     this.applyPrefs();
     this.watchSize();
     engine.onState((s) => this.render(s));
+    this.openLink();
   }
 
   private show(screen: Screen): void {
@@ -130,6 +139,7 @@ class App {
     switch (s.kind) {
       case "idle":
         this.clearLibrary();
+        this.launchOnReady = null;
         return this.home();
       case "bad-address":
         // The field stays in front: what was typed is wrong and this is where it is fixed.
@@ -174,9 +184,18 @@ class App {
         });
       case "forgotten":
         return this.show({ kind: "pair", origin: s.origin, mode: "again" });
-      case "ready":
+      case "ready": {
+        const launch = this.launchOnReady;
+        if (launch) {
+          // The title a link asked for. Not from inside this listener: starting a stream sets the
+          // engine's state again.
+          this.launchOnReady = null;
+          queueMicrotask(() => this.play({ id: launch, title: launch } as LibraryEntry));
+          return;
+        }
         if (this.libraryFor !== s.origin) void this.openLibrary(s);
         return this.redrawLibrary(s);
+      }
       case "starting":
         return this.show({ kind: "connecting", origin: s.origin, phase: "starting" });
       case "streaming":
@@ -199,6 +218,8 @@ class App {
 
   // --- the home screen -------------------------------------------------------------------
   private home(error?: string): void {
+    // A link waiting for its answer stays in front of the probes that redraw this list.
+    if (this.link) return;
     // The server's hosts first, under the name it gives them; then the ones typed here.
     const known = new Map(this.engine.knownHosts().map((h) => [h.origin, h]));
     const listed: HostCard[] = [
@@ -265,6 +286,63 @@ class App {
       );
     } finally {
       this.probing = false;
+    }
+  }
+
+  /**
+   * The link the page was opened with, if any: resolved against the hosts this page knows, and
+   * shown for a yes. Taken off the address bar at once, so a reload does not ask again.
+   */
+  private openLink(): void {
+    const parsed = parseLink(location.search);
+    if (parsed === null) return;
+    history.replaceState(null, "", location.pathname + location.hash);
+    if (typeof parsed === "string") {
+      return this.show({ kind: "error", head: "That link can't be used", text: LINK_ERRORS[parsed] });
+    }
+    const found = this.resolveLink(parsed);
+    if (typeof found === "string") return this.show({ kind: "error", head: "That link can't be used", text: found });
+    const { target, name, address } = found;
+    this.link = { target, ...(parsed.fp ? { fp: parsed.fp } : {}), ...(parsed.launch ? { launch: parsed.launch } : {}) };
+    this.show({ kind: "link", name, address, ...(parsed.launch ? { launch: parsed.launch } : {}) });
+  }
+
+  /** A link's host as this page reaches it: a host it lists or knows by origin or name, else the
+   *  address itself. A name two hosts share is refused rather than guessed. */
+  private resolveLink(link: PageLink): { target: string | HostTarget; name: string; address: string } | string {
+    const known = this.engine.knownHosts();
+    const listed = [...this.configured].map(([origin, c]) => ({ origin, name: c.name as string | undefined }));
+    const all = [...listed, ...known.filter((h) => !this.configured.has(h.origin)).map((h) => ({ origin: h.origin, name: h.label ?? h.name }))];
+    let origin: string | undefined;
+    try {
+      origin = originOf(link.host);
+    } catch {
+      origin = undefined;
+    }
+    const byOrigin = all.find((h) => h.origin === origin || h.origin === link.host.replace(/\/+$/, ""));
+    const byName = all.filter((h) => h.name?.toLowerCase() === link.host.toLowerCase());
+    if (!byOrigin && byName.length > 1) return `More than one host here is called “${link.host}”.`;
+    const hit = byOrigin ?? byName[0];
+    if (hit) return { target: this.targetOf(hit.origin), name: hit.name ?? bare(hit.origin), address: bare(hit.origin) };
+    if (!origin) return `“${link.host}” is not an address or a host this page knows.`;
+    return { target: this.targetOf(link.host), name: link.name ?? bare(origin), address: bare(origin) };
+  }
+
+  private followLink(yes: boolean): void {
+    const link = this.link;
+    this.link = null;
+    if (!yes || !link) return this.home();
+    this.launchOnReady = link.launch ?? null;
+    void this.engine.connect(link.target, link.fp ? { expectFingerprint: link.fp } : {});
+  }
+
+  /** A link to this host, pinned to its fingerprint when this browser has paired with it. */
+  private async copyLink(origin: string): Promise<void> {
+    const fingerprint = this.engine.knownHosts().find((h) => h.origin === origin)?.fingerprint;
+    try {
+      await navigator.clipboard.writeText(linkFor(location.href, origin, fingerprint));
+    } catch (e) {
+      console.warn("punktfunk: copy link", e);
     }
   }
 
@@ -418,6 +496,15 @@ class App {
   }
 }
 
+/** Why a link was refused, as a sentence. */
+const LINK_ERRORS: Record<Exclude<ReturnType<typeof parseLink>, PageLink | null>, string> = {
+  "missing-host": "It does not say which host to connect to.",
+  "too-long": "One of its parts is longer than a real link's.",
+  "control-char": "It carries characters no real link does.",
+  "bad-fingerprint": "Its host fingerprint is not one.",
+  "bad-launch": "Its game id is not a valid one.",
+};
+
 /** The engine speaks in lowercase fragments, as logs do; a screen speaks in sentences. */
 function sentence(message: string): string {
   const m = message.trim();
@@ -535,6 +622,7 @@ try {
   const shell = new WebShell(document.body);
   shell.mount({
     connect() {}, pair() {}, retry() {}, back() {}, play() {}, forget() {}, disconnect() {},
+    followLink() {}, copyLink() {},
     setAdding() {}, rename() {}, openSettings() {}, setSettings() {}, toggleCapture() {},
     showDiagnostics() {},
   });

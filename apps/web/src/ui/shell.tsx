@@ -21,7 +21,7 @@ import { Home } from "./home.tsx";
 import { Hud } from "./hud.tsx";
 import { Library } from "./library.tsx";
 import { SettingsDialog } from "./settings.tsx";
-import { Accept, Connecting, ErrorCard, Pair, Trust } from "./sheets.tsx";
+import { Accept, Connecting, ErrorCard, LinkSheet, Pair, Trust } from "./sheets.tsx";
 import type { Actions, Screen, Ui } from "./types.ts";
 
 export class WebShell implements Ui {
@@ -63,6 +63,7 @@ export class WebShell implements Ui {
 
 const noop: Actions = {
   connect() {}, pair() {}, retry() {}, back() {}, play() {}, forget() {}, disconnect() {},
+  followLink() {}, copyLink() {},
   setAdding() {}, rename() {}, openSettings() {}, setSettings() {}, toggleCapture() {},
   showDiagnostics() {},
 };
@@ -109,6 +110,7 @@ function Screens({ screen, actions }: { screen: Screen; actions: Actions }): JSX
     case "connecting": return <Connecting screen={screen} actions={actions} />;
     case "pair": return <Pair screen={screen} actions={actions} />;
     case "trust": return <Trust screen={screen} actions={actions} />;
+    case "link": return <LinkSheet screen={screen} actions={actions} />;
     case "library": return <Library screen={screen} actions={actions} />;
     case "streaming": return <Hud screen={screen} actions={actions} />;
     case "settings": return <SettingsDialog screen={screen} actions={actions} />;
@@ -124,6 +126,7 @@ function announce(s: Screen): string {
     case "connecting": return `Connecting to ${s.origin}`;
     case "pair": return s.error ?? "Enter the PIN this host is showing";
     case "trust": return "This is not the host that was paired with";
+    case "link": return `A link asks to connect to ${s.name}`;
     case "library": return s.busy ? "Loading the library" : `${s.entries.length} titles`;
     case "streaming": return "Streaming";
     case "settings": return "Settings";

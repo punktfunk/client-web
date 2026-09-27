@@ -19,4 +19,5 @@ export { DEFAULTS, settings, type Settings, type StatsTier } from "./settings.ts
 export type { AudioSnapshot, AudioState } from "./audio.ts";
 export { Host, type HostInfo, type HostStatus, type LibraryEntry, VersionSkew } from "./host.ts";
 export { hosts, originOf, reach, type KnownHost, type Plane, type Reach } from "./pf-connect.ts";
+export { type LinkError, linkFor, type PageLink, parseLink } from "./links.ts";
 export type { VideoPlane, UploadStats } from "./video-surface.ts";

@@ -65,6 +65,7 @@ export const SCREENS = {
   "pair": { kind: "pair", origin: "https://192.168.1.25:47990", mode: "first" },
   "pair-again": { kind: "pair", origin: "https://192.168.1.25:47990", mode: "again" },
   "pair-refused": { kind: "pair", origin: "https://192.168.1.25:47990", mode: "first", error: "That PIN was refused." },
+  "link": { kind: "link", name: "Desk", address: "192.168.1.21", launch: "steam:570" },
   "trust": {
     kind: "trust",
     origin: "https://192.168.1.25:47990",
@@ -93,6 +94,7 @@ export type ScreenName = keyof typeof SCREENS;
 
 export const noop: Actions = {
   connect() {}, pair() {}, retry() {}, back() {}, play() {}, forget() {}, disconnect() {},
+  followLink() {}, copyLink() {},
   setAdding() {}, rename() {}, openSettings() {}, setSettings() {}, toggleCapture() {},
   showDiagnostics() {},
 };

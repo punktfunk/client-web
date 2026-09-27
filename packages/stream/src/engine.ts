@@ -287,7 +287,7 @@ export class Engine {
    * throw: the consumer renders `blocked`, `unreachable`, `untrusted` or `error`, and each
    * says what a person can do about it.
    */
-  async connect(address: string | HostTarget): Promise<void> {
+  async connect(address: string | HostTarget, opts: { expectFingerprint?: string } = {}): Promise<void> {
     let origin: string;
     if (typeof address === "string") {
       try {
@@ -332,7 +332,13 @@ export class Engine {
       });
     }
 
-    const known = pf.hosts.fingerprint(origin);
+    // A link's pin: a known host must be the one it names, and an unknown one must prove it is.
+    const stored = pf.hosts.fingerprint(origin);
+    const expect = opts.expectFingerprint?.toLowerCase();
+    if (stored && expect && stored.toLowerCase() !== expect) {
+      return this.set({ kind: "untrusted", origin, reason: "the link names a different host than the one paired here" });
+    }
+    const known = stored ?? expect;
     if (known) {
       try {
         await pf.verify(this.plane, known);
