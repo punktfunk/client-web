@@ -19,6 +19,15 @@ export { DEFAULTS, settings, type Settings, type StatsTier } from "./settings.ts
 export type { AudioSnapshot, AudioState } from "./audio.ts";
 export { Host, type HostAction, type HostInfo, type HostStatus, type LibraryEntry, VersionSkew } from "./host.ts";
 export { captureLog, pageLog } from "./logs.ts";
+export {
+  CONSOLE_PUSH,
+  CONSOLE_STATE,
+  type ConsoleAction,
+  type ConsoleCmd,
+  type ConsoleEvent,
+  type ConsoleGame,
+  type ConsoleHostRow,
+} from "./console-bridge.ts";
 export { hosts, originOf, reach, type KnownHost, type Plane, type Reach } from "./pf-connect.ts";
 export { type LinkError, linkFor, type PageLink, parseLink } from "./links.ts";
 export type { VideoPlane, UploadStats } from "./video-surface.ts";

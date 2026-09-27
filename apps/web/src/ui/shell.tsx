@@ -68,6 +68,7 @@ const noop: Actions = {
   followLink() {}, copyLink() {},
   setAdding() {}, rename() {}, openSettings() {}, setSettings() {}, toggleCapture() {},
   showDiagnostics() {}, openMenu() {}, fullscreen() {}, cycleStats() {}, toggleMic() {},
+  consoleMode() {},
 };
 
 // --- the root ---------------------------------------------------------------------------
@@ -79,8 +80,10 @@ function Shell({ shell }: { shell: WebShell }): JSX.Element {
 
 /** The whole interface for one `Screen`: the layout, the live region, the screen itself.
  *  Exported so Storybook can draw a screen exactly as the page does, with no `WebShell` behind it. */
-export function ShellFrame({ screen, actions }: { screen: Screen; actions: Actions }): JSX.Element {
+export function ShellFrame({ screen, actions }: { screen: Screen; actions: Actions }): JSX.Element | null {
   const kind = screen.kind;
+  // The console's own canvas is the interface: nothing here may cover it or take its pointer.
+  if (kind === "console") return null;
   const live = kind === "streaming";
   // One screen gives way to the next with a short fade; each then brings its own parts in. The
   // address field is its own screen for this, though it shares `home`'s kind.
@@ -132,6 +135,7 @@ function Screens({ screen, actions }: { screen: Screen; actions: Actions }): JSX
     case "streaming": return <Hud screen={screen} actions={actions} />;
     case "settings": return <SettingsDialog screen={screen} actions={actions} />;
     case "error": return <ErrorCard screen={screen} actions={actions} />;
+    case "console": return <></>;
   }
 }
 
@@ -149,5 +153,6 @@ function announce(s: Screen): string {
     case "streaming": return "Streaming";
     case "settings": return "Settings";
     case "error": return `${s.head}. ${s.text}`;
+    case "console": return "";
   }
 }

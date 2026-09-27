@@ -1,7 +1,7 @@
 // The way in. A machine someone has already streamed from is the common case and gets a card
 // with its state on it; a new one gets the field, which is what `adding` puts in front.
 
-import { Link2, Monitor, Pencil, Plus, Power, Settings, Trash2 } from "lucide-react";
+import { Gamepad2, Link2, Monitor, Pencil, Plus, Power, Settings, Trash2 } from "lucide-react";
 import { type JSX, useState } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -18,6 +18,9 @@ export function Home({ screen, actions }: { screen: HomeScreen; actions: Actions
     <Frame
       bar={
         <TopBar>
+          <Button size="icon" variant="ghost" aria-label="Console mode" title="Console mode — the controller interface" onClick={() => actions.consoleMode(true)}>
+            <Gamepad2 className="size-4" />
+          </Button>
           <Button size="icon" variant="ghost" aria-label="Settings" title="Settings" onClick={() => actions.openSettings(true)}>
             <Settings className="size-4" />
           </Button>

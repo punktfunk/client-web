@@ -130,6 +130,12 @@ class App {
       fullscreen: () => engine.fullscreen(),
       cycleStats: () => engine.cycleStats(),
       toggleMic: () => engine.toggleMic(),
+      consoleMode: (on) => {
+        const url = new URL(location.href);
+        if (on) url.searchParams.set("ui", "console");
+        else url.searchParams.delete("ui");
+        location.assign(url);
+      },
       setAdding: (on) => {
         this.adding = on;
         if (engine.current.kind === "idle") this.render(engine.current);
@@ -815,6 +821,7 @@ try {
     followLink() {}, copyLink() {},
     setAdding() {}, rename() {}, openSettings() {}, setSettings() {}, toggleCapture() {},
     showDiagnostics() {}, openMenu() {}, fullscreen() {}, cycleStats() {}, toggleMic() {},
+    consoleMode() {},
   });
   shell.render({
     kind: "error",

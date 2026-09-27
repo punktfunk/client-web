@@ -102,4 +102,5 @@ export const noop: Actions = {
   followLink() {}, copyLink() {},
   setAdding() {}, rename() {}, openSettings() {}, setSettings() {}, toggleCapture() {},
   showDiagnostics() {}, openMenu() {}, fullscreen() {}, cycleStats() {}, toggleMic() {},
+  consoleMode() {},
 };

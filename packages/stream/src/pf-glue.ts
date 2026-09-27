@@ -428,6 +428,12 @@ mergeInto(LibraryManager.library, {
     Module.__pfOnAudioFrame(HEAPU8.slice(ptr, ptr + len), seq, ptsNs);
   },
 
+  pf_console_event__deps: ["$UTF8ToString"],
+  pf_console_event: function (ptr: number, len: number): void {
+    if (!Module.__pfOnConsole) return;
+    Module.__pfOnConsole(UTF8ToString(ptr, len));
+  },
+
   pf_rumble: function (pad: number, low: number, high: number, lt: number, rt: number, ms: number): void {
     if (!Module.__pfOnRumble) return;
     Module.__pfOnRumble(pad, low, high, lt, rt, ms);

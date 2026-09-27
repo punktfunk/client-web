@@ -3,7 +3,7 @@
 
 import type { LibraryEntry } from "@punktfunk/stream";
 import { cn } from "@unom/ui/lib/utils";
-import { LogOut, Play, Server, Settings } from "lucide-react";
+import { Gamepad2, LogOut, Play, Server, Settings } from "lucide-react";
 import { type JSX, type KeyboardEvent, useRef, useState } from "react";
 import { Stagger } from "@/components/stagger";
 import { Badge } from "@/components/ui/badge";
@@ -43,6 +43,9 @@ export function Library({ screen, actions }: { screen: LibraryScreen; actions: A
     <Frame
       bar={
         <TopBar title={host}>
+          <Button size="icon" variant="ghost" aria-label="Console mode" title="Console mode — the controller interface" onClick={() => actions.consoleMode(true)}>
+            <Gamepad2 className="size-4" />
+          </Button>
           <Button size="icon" variant="ghost" aria-label="Host" title="Host" onClick={() => actions.openTools(true)}>
             <Server className="size-4" />
           </Button>
