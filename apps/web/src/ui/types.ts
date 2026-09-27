@@ -68,6 +68,8 @@ export type Screen =
    * this one — which is a different sentence and the same box.
    */
   | { kind: "pair"; origin: string; mode: "first" | "again"; error?: string; busy?: boolean }
+  /** A request for access, held by the host until someone approves `name` in its console. */
+  | { kind: "waiting"; origin: string; name: string }
   /**
    * The host answered, but it is not the host that was paired with. Its own screen, not an
    * error card: this is either a machine that was reinstalled or someone standing in the way of
@@ -101,6 +103,10 @@ export type Screen =
 export interface Actions {
   connect(address: string): void;
   pair(pin: string): void;
+  /** Ask for access instead of typing a PIN; approval starts the desktop stream. */
+  requestAccess(): void;
+  /** Withdraw that request and go back to the pairing sheet. */
+  cancelRequest(): void;
   /** Re-check a host after its certificate has been accepted. */
   retry(): void;
   back(): void;

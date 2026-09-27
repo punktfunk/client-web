@@ -21,7 +21,7 @@ import { Home } from "./home.tsx";
 import { Hud } from "./hud.tsx";
 import { Library } from "./library.tsx";
 import { SettingsDialog } from "./settings.tsx";
-import { Accept, Connecting, ErrorCard, Pair, Trust } from "./sheets.tsx";
+import { Accept, Connecting, ErrorCard, Pair, Trust, Waiting } from "./sheets.tsx";
 import type { Actions, Screen, Ui } from "./types.ts";
 
 export class WebShell implements Ui {
@@ -62,7 +62,8 @@ export class WebShell implements Ui {
 }
 
 const noop: Actions = {
-  connect() {}, pair() {}, retry() {}, back() {}, play() {}, forget() {}, disconnect() {},
+  connect() {}, pair() {}, requestAccess() {}, cancelRequest() {}, retry() {}, back() {}, play() {},
+  forget() {}, disconnect() {},
   setAdding() {}, rename() {}, openSettings() {}, setSettings() {}, toggleCapture() {},
   showDiagnostics() {},
 };
@@ -108,6 +109,7 @@ function Screens({ screen, actions }: { screen: Screen; actions: Actions }): JSX
     case "accept": return <Accept screen={screen} actions={actions} />;
     case "connecting": return <Connecting screen={screen} actions={actions} />;
     case "pair": return <Pair screen={screen} actions={actions} />;
+    case "waiting": return <Waiting screen={screen} actions={actions} />;
     case "trust": return <Trust screen={screen} actions={actions} />;
     case "library": return <Library screen={screen} actions={actions} />;
     case "streaming": return <Hud screen={screen} actions={actions} />;
@@ -123,6 +125,7 @@ function announce(s: Screen): string {
     case "accept": return "This host's certificate must be accepted once";
     case "connecting": return `Connecting to ${s.origin}`;
     case "pair": return s.error ?? "Enter the PIN this host is showing";
+    case "waiting": return `Waiting for approval of ${s.name} in the host's console`;
     case "trust": return "This is not the host that was paired with";
     case "library": return s.busy ? "Loading the library" : `${s.entries.length} titles`;
     case "streaming": return "Streaming";
