@@ -633,7 +633,7 @@ export class Engine {
         return this.fullscreen(false);
       case "end":
       case "escape-hold":
-        return this.disconnect(true);
+        return this.leave(true);
     }
   }
 
@@ -653,13 +653,31 @@ export class Engine {
 
   /**
    * Leave the host. `quit` ends the title too (End); without it the host keeps the game running
-   * for this device to come back to (Leave).
+   * for this device to come back to (Leave). A PIN or a request for access still waiting on a
+   * reconnect goes with it.
    */
   disconnect(quit = false): void {
     this.stopSession();
     this.mod._pf_wt_close?.(quit ? CLOSE.QUIT : 0);
+    this.pendingPin = null;
+    this.pendingKnock = null;
     this.reset();
     this.set({ kind: "idle" });
+  }
+
+  /**
+   * End the stream and stay with its host: `ready` again, so its library is a click away rather
+   * than a reconnect. `quit` ends the title too. A stream that never had the management API — an
+   * approved request for access — has nothing to stay with, and disconnects.
+   */
+  leave(quit = false): void {
+    const { origin, host } = this;
+    if (!origin || !host) return this.disconnect(quit);
+    this.stopSession();
+    this.pendingStream = null;
+    // `ready` before the close, so the close it answers with finds nothing left to report.
+    this.set({ kind: "ready", origin, host });
+    this.mod._pf_wt_close?.(quit ? CLOSE.QUIT : 0);
   }
 
   /** The hosts this browser knows, most recent first. */
@@ -844,8 +862,9 @@ export class Engine {
         this.knockSince = 0;
         this.stopSession();
         return this.set({ kind: "pair-refused", origin, ...(said ? { reason: said } : {}) });
-      // No connection is open here: a close is the one `cancelRequest` just made.
+      // No connection is open here: a close is the one `cancelRequest` or `leave` just made.
       case "needs-pairing":
+      case "ready":
         return;
       case "pairing":
         // The ceremony's own verdict (`PairResult`) is authoritative; a close with a reason and

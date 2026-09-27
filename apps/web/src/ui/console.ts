@@ -294,6 +294,11 @@ export class ConsoleUi implements Ui {
         return;
       }
       case "library":
+        // A stream left with `leave` comes back to its host's library rather than home.
+        if (was?.kind === "streaming") {
+          this.dialled = false;
+          c.phase(3);
+        }
         this.library(s);
         return;
       case "streaming":
