@@ -33,6 +33,12 @@ export interface SessionStats {
   hud?: HudLine[];
   /** The host's sentence for a launch that did not give the player their game, while it shows. */
   launchNotice?: string;
+  /** This device's access when it is limited or ends. */
+  access?: string;
+  /** A change to that access, or the warning before it ends, while it shows. */
+  accessNotice?: string;
+  /** The microphone going up to the host. */
+  mic?: "off" | "starting" | "on" | "denied" | "unsupported";
 }
 
 /**
@@ -45,6 +51,10 @@ export interface SessionStats {
 export interface HostCard extends KnownHost {
   origin: string;
   reach?: Reach;
+  /** Where the page's server takes a wake request for this host; absent when it cannot wake it. */
+  wake?: string;
+  /** A wake went out and the host has not answered yet. */
+  waking?: boolean;
 }
 
 /**
@@ -68,6 +78,8 @@ export type Screen =
    * this one — which is a different sentence and the same box.
    */
   | { kind: "pair"; origin: string; mode: "first" | "again"; error?: string; busy?: boolean }
+  /** A request for access, held by the host until someone approves `name` in its console. */
+  | { kind: "waiting"; origin: string; name: string }
   /**
    * The host answered, but it is not the host that was paired with. Its own screen, not an
    * error card: this is either a machine that was reinstalled or someone standing in the way of
@@ -86,10 +98,13 @@ export type Screen =
       running?: string;
       /** The host sheet, while it is open: the actions this device may run, and the send-log line. */
       tools?: HostTools;
+      /** That title's library entry, when it has one: streaming it picks the game back up. */
+      resume?: LibraryEntry;
       error?: string;
       busy?: boolean;
     }
-  | { kind: "streaming"; stats: SessionStats; diagnostics: boolean }
+  /** `menu`: the quick menu is open over the picture. */
+  | { kind: "streaming"; stats: SessionStats; diagnostics: boolean; menu: boolean }
   /**
    * The settings sheet. It renders over whatever screen was showing — including a live one —
    * so it carries no route of its own; `openSettings(false)` puts the previous screen back.
@@ -110,6 +125,10 @@ export interface HostTools {
 export interface Actions {
   connect(address: string): void;
   pair(pin: string): void;
+  /** Ask for access instead of typing a PIN; approval starts the desktop stream. */
+  requestAccess(): void;
+  /** Withdraw that request and go back to the pairing sheet. */
+  cancelRequest(): void;
   /** Re-check a host after its certificate has been accepted. */
   retry(): void;
   back(): void;
@@ -121,9 +140,19 @@ export interface Actions {
   openTools(on: boolean): void;
   hostAction(id: string): void;
   sendLog(): void;
+  /** Send a host the magic packet, through the page's server. */
+  wake(origin: string): void;
   /** Name a host something this browser will remember. An empty label drops the name. */
   rename(origin: string, label: string): void;
-  disconnect(): void;
+  /** Leave the host. `quit` ends the title too; without it the game keeps running. */
+  disconnect(quit?: boolean): void;
+  openMenu(on: boolean): void;
+  /** Fullscreen on or off. Only from a gesture: the browser refuses it otherwise. */
+  fullscreen(): void;
+  /** Step the statistics overlay: off, compact, normal, detailed. */
+  cycleStats(): void;
+  /** Turn the microphone on or off. From a gesture: the browser asks for permission. */
+  toggleMic(): void;
   openSettings(on: boolean): void;
   setSettings(patch: Partial<Settings>): void;
   /** Take or release the pointer. Taking it needs a gesture, so this is only ever called from

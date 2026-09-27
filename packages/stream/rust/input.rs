@@ -51,9 +51,10 @@ pub extern "C" fn pf_input(kind: u32, code: u32, x: i32, y: i32, flags: u32) {
     });
 }
 
-/// A pad appeared. `pad` is its slot; the host picks the backend from its own default.
+/// A pad appeared. `pad` is its slot; `kind` is the `GamepadPref` wire byte the host builds its
+/// virtual pad as (`0` leaves it to the host's default).
 #[unsafe(no_mangle)]
-pub extern "C" fn pf_gamepad_arrival(pad: u32) {
+pub extern "C" fn pf_gamepad_arrival(pad: u32, kind: u32) {
     let Ok(pad) = u8::try_from(pad) else { return };
     if usize::from(pad) >= MAX_PADS {
         return;
@@ -62,7 +63,7 @@ pub extern "C" fn pf_gamepad_arrival(pad: u32) {
     send(InputEvent {
         kind: InputKind::GamepadArrival,
         _pad: [0; 3],
-        code: 0,
+        code: kind & 0xff,
         x: 0,
         y: 0,
         flags: encode_gamepad_arrival(pad, 0),

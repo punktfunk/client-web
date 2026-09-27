@@ -38,6 +38,10 @@ pub struct Hosts {
     list: RwLock<Vec<Host>>,
     pins: Mutex<BTreeMap<String, String>>,
     pins_path: PathBuf,
+    /// Wake-capable MACs a host announced, by where it answers. Kept in `wake.json`: a host is
+    /// woken exactly when it is too asleep to announce them.
+    macs: Mutex<BTreeMap<String, Vec<String>>>,
+    macs_path: PathBuf,
 }
 
 impl Hosts {
@@ -49,6 +53,11 @@ impl Hosts {
                 .with_context(|| format!("read {}", pins_path.display()))?,
             Err(_) => BTreeMap::new(),
         };
+        let macs_path = data.join("wake.json");
+        let macs: BTreeMap<String, Vec<String>> = std::fs::read(&macs_path)
+            .ok()
+            .and_then(|b| serde_json::from_slice(&b).ok())
+            .unwrap_or_default();
         let mut list: Vec<Host> = Vec::new();
         for l in listed {
             let mut h = Host {
@@ -72,7 +81,40 @@ impl Hosts {
             list: RwLock::new(list),
             pins: Mutex::new(pins),
             pins_path,
+            macs: Mutex::new(macs),
+            macs_path,
         }))
+    }
+
+    /// The MACs a magic packet for this host goes to; empty when it never announced one.
+    pub fn macs(&self, id: &str) -> Vec<String> {
+        let Some(host) = self.get(id) else {
+            return Vec::new();
+        };
+        self.macs
+            .lock()
+            .unwrap()
+            .get(&host.pin_key())
+            .cloned()
+            .unwrap_or_default()
+    }
+
+    /// Keep what a host announced it wakes on. Only a change is written.
+    fn remember_macs(&self, key: &str, macs: Vec<String>) {
+        if macs.is_empty() {
+            return;
+        }
+        let mut all = self.macs.lock().unwrap();
+        if all.get(key) == Some(&macs) {
+            return;
+        }
+        all.insert(key.to_owned(), macs);
+        if let Err(e) = std::fs::write(
+            &self.macs_path,
+            serde_json::to_vec_pretty(&*all).unwrap_or_default(),
+        ) {
+            tracing::warn!(error = %e, "wake.json was not written; the MACs last until restart");
+        }
     }
 
     pub fn all(&self) -> Vec<Host> {
@@ -126,15 +168,19 @@ impl Hosts {
         }
     }
 
-    /// An mDNS advert. A host already listed, by fingerprint or address, stays as listed.
+    /// An mDNS advert. A host already listed, by fingerprint or address, stays as listed, but
+    /// what it wakes on is kept for it.
     fn found(&self, a: Advert) {
         let mut list = self.list.write().unwrap();
-        if list.iter().any(|h| {
+        if let Some(h) = list.iter().find(|h| {
             h.fullname.is_none()
                 && ((a.pin.is_some() && h.pin == a.pin) || (h.addr == a.addr && h.port == a.port))
         }) {
-            return;
+            let key = h.pin_key();
+            drop(list);
+            return self.remember_macs(&key, a.macs);
         }
+        self.remember_macs(&format!("{}:{}", a.addr, a.port), a.macs.clone());
         if let Some(h) = list
             .iter_mut()
             .find(|h| h.fullname.as_deref() == Some(&a.fullname))
@@ -154,11 +200,14 @@ impl Hosts {
         });
     }
 
+    /// A host stopped announcing. One that can be woken stays listed: asleep is exactly when the
+    /// page needs its card, to wake it.
     fn lost(&self, fullname: &str) {
+        let macs = self.macs.lock().unwrap().clone();
         self.list
             .write()
             .unwrap()
-            .retain(|h| h.fullname.as_deref() != Some(fullname));
+            .retain(|h| h.fullname.as_deref() != Some(fullname) || macs.contains_key(&h.pin_key()));
     }
 }
 
@@ -169,6 +218,8 @@ struct Advert {
     addr: String,
     port: u16,
     pin: Option<[u8; 32]>,
+    /// TXT `mac`: the NICs it wakes on, routed one first.
+    macs: Vec<String>,
 }
 
 /// Browse `_punktfunk._udp` for as long as the server runs, the way the native clients do
@@ -202,6 +253,11 @@ pub fn discover(hosts: Arc<Hosts>) {
                         addr: addr.to_string(),
                         port: val("mgmt").parse().unwrap_or(crate::config::MGMT_PORT),
                         pin: crate::config::parse_fp(&val("fp")).ok(),
+                        macs: val("mac")
+                            .split(',')
+                            .map(|m| m.trim().to_owned())
+                            .filter(|m| punktfunk_core::wol::parse_mac(m).is_some())
+                            .collect(),
                     });
                 }
                 ServiceEvent::ServiceRemoved(_, fullname) => hosts.lost(&fullname),
@@ -284,6 +340,7 @@ mod tests {
             addr: addr.into(),
             port: crate::config::MGMT_PORT,
             pin,
+            macs: Vec::new(),
         };
         hosts.found(advert("desk-too", "10.0.0.9", Some([1; 32]))); // same fingerprint as desk
         hosts.found(advert("couch", "10.0.0.3", Some([2; 32])));
@@ -307,6 +364,36 @@ mod tests {
         hosts.learned("desk", [9; 32]); // a second certificate does not replace the first
         let again = Hosts::new(vec![listed("desk", "10.0.0.2")], &dir, true).unwrap();
         assert_eq!(again.get("desk").unwrap().pin, Some([7; 32]));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn a_host_that_can_be_woken_outlives_its_advert() {
+        let dir = std::env::temp_dir().join(format!("pf-wake-{}", std::process::id()));
+        let hosts = Hosts::new(vec![listed("desk", "10.0.0.2")], &dir, true).unwrap();
+        let advert = |name: &str, addr: &str, macs: &[&str]| Advert {
+            fullname: format!("{name}._punktfunk._udp.local."),
+            name: name.into(),
+            addr: addr.into(),
+            port: crate::config::MGMT_PORT,
+            pin: None,
+            macs: macs.iter().map(|m| (*m).to_owned()).collect(),
+        };
+        // A listed host keeps its entry but learns what it wakes on.
+        hosts.found(advert("desk", "10.0.0.2", &["aa:bb:cc:dd:ee:01"]));
+        hosts.found(advert("couch", "10.0.0.3", &["aa:bb:cc:dd:ee:02"]));
+        hosts.found(advert("attic", "10.0.0.4", &[]));
+        assert_eq!(hosts.macs("desk"), ["aa:bb:cc:dd:ee:01"]);
+
+        // Asleep: the advert goes, the wakeable one stays listed.
+        hosts.lost("couch._punktfunk._udp.local.");
+        hosts.lost("attic._punktfunk._udp.local.");
+        let ids: Vec<_> = hosts.all().into_iter().map(|h| h.id).collect();
+        assert_eq!(ids, ["desk", "couch"]);
+
+        // And its MACs survive a restart of this server.
+        let again = Hosts::new(vec![listed("desk", "10.0.0.2")], &dir, true).unwrap();
+        assert_eq!(again.macs("desk"), ["aa:bb:cc:dd:ee:01"]);
         let _ = std::fs::remove_dir_all(dir);
     }
 }

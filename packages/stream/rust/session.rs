@@ -19,8 +19,8 @@ use crate::transport::WebTransportDatagrams;
 use punktfunk_core::config::{CompositorPref, GamepadPref, Mode, Role};
 use punktfunk_core::hud::{self, StatsSnapshot, StatsVerbosity};
 use punktfunk_core::quic::{
-    AuthChallenge, Hello, PairChallenge, PairResult, Reconfigure, Reconfigured, Refused,
-    RequestKeyframe, RfiRequest, Start, Welcome, MAGIC,
+    AccessUpdate, AuthChallenge, Hello, PairChallenge, PairResult, Reconfigure, Reconfigured,
+    Refused, RequestKeyframe, RfiRequest, Start, Welcome, MAGIC,
 };
 use punktfunk_core::reanchor::{GateVerdict, ReanchorGate};
 use punktfunk_core::session::Session;
@@ -67,6 +67,10 @@ struct Client {
     /// `Welcome::audio_channels`: what the Opus frames carry. The page's decoder is configured
     /// from it.
     audio_channels: u8,
+    /// `Welcome`'s bit depth and whether its colour is HDR: the decoder string and the plane's
+    /// dynamic range follow them.
+    depth: u8,
+    hdr: bool,
     /// Access units delivered, so the page can tell "connected" from "streaming".
     frames: u64,
     /// The stats overlay's window. No clock handshake runs in a browser, so its offset stays
@@ -88,6 +92,11 @@ struct Client {
     /// A lost range not yet asked for (the throttle held it), widened by later gaps.
     pending_rfi: Option<(u32, u32)>,
     last_ask: Option<Instant>,
+    /// This device's grants and seconds of access left, from `Welcome` and then each
+    /// `AccessUpdate`; `access_seq` counts them so the page reads each once.
+    grants: u32,
+    access_secs: u32,
+    access_seq: u32,
 }
 
 fn new_hud() -> hud::Stats {
@@ -105,6 +114,8 @@ impl Client {
             height: 0,
             host_caps: 0,
             audio_channels: 0,
+            depth: 8,
+            hdr: false,
             frames: 0,
             hud: new_hud(),
             receipts: VecDeque::with_capacity(RECEIPTS),
@@ -115,8 +126,30 @@ impl Client {
             next_index: None,
             pending_rfi: None,
             last_ask: None,
+            grants: 0,
+            access_secs: 0,
+            access_seq: 0,
         }
     }
+}
+
+/// How many access adverts this session has had: `Welcome`'s, then each `AccessUpdate`. The
+/// page reads the pair below when it moves.
+#[unsafe(no_mangle)]
+pub extern "C" fn pf_session_access_seq() -> u32 {
+    CLIENT.with(|c| c.borrow().access_seq)
+}
+
+/// The grant mask of the last access advert.
+#[unsafe(no_mangle)]
+pub extern "C" fn pf_session_access_grants() -> u32 {
+    CLIENT.with(|c| c.borrow().grants)
+}
+
+/// Seconds of access left as of the last advert; `0` is permanent.
+#[unsafe(no_mangle)]
+pub extern "C" fn pf_session_access_secs() -> u32 {
+    CLIENT.with(|c| c.borrow().access_secs)
 }
 
 /// Channels in the negotiated audio plane; `0` before `Welcome`.
@@ -148,6 +181,9 @@ pub extern "C" fn pf_session_reset() {
         c.height = 0;
         c.host_caps = 0;
         c.audio_channels = 0;
+        c.grants = 0;
+        c.access_secs = 0;
+        c.access_seq = 0;
         c.hud = new_hud();
         c.receipts.clear();
         c.snap = None;
@@ -186,6 +222,20 @@ pub fn host_caps() -> u8 {
 
 thread_local! {
     static CLIENT: RefCell<Client> = RefCell::new(Client::new());
+    /// What this browser decodes, and whether it can show HDR10, as the next `Hello` offers them.
+    /// The page's to say, not one session's, so a reset leaves them.
+    static CODECS: std::cell::Cell<u8> = const { std::cell::Cell::new(punktfunk_core::quic::CODEC_H264) };
+    static HDR: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// The codecs this browser decodes (`CODEC_*` bits), from the page's `isConfigSupported` probe,
+/// and whether it presents BT.2020 PQ. H.264 is always kept: a GPU-less host has nothing else.
+#[unsafe(no_mangle)]
+pub extern "C" fn pf_session_codecs(mask: u32, hdr: u32) {
+    let supported = punktfunk_core::quic::CODEC_HEVC | punktfunk_core::quic::CODEC_AV1;
+    let offered = (mask as u8 & supported) | punktfunk_core::quic::CODEC_H264;
+    CODECS.with(|c| c.set(offered));
+    HDR.with(|h| h.set(hdr != 0));
 }
 
 unsafe extern "C" {
@@ -195,7 +245,7 @@ unsafe extern "C" {
     /// page copies what it needs before returning, and no pixel comes back.
     fn pf_video_au(ptr: *const u8, len: u32, pts_us: f64, key: i32, flags: u32);
     /// The negotiated format, once `Welcome` has been read.
-    fn pf_video_config(codec: u32, width: u32, height: u32);
+    fn pf_video_config(codec: u32, width: u32, height: u32, depth: u32, hdr: u32);
     /// The host said why it is closing. `reason` is UTF-8, borrowed for the call.
     fn pf_refused(code: u32, reason: *const u8, len: u32);
     /// The host's sentence for a launch that did not give the player their game. UTF-8,
@@ -234,10 +284,11 @@ fn take_msg(inbox: &mut Vec<u8>) -> Option<Vec<u8>> {
 /// a host that will demand a credential. Everything after arrives through [`pf_ctl_recv`].
 ///
 /// `launch` is a library id (`OperatorGameEntry::id`) or null: the host resolves it to a command
-/// on the real-display source and streams the desktop otherwise.
+/// on the real-display source and streams the desktop otherwise. `name` is this device's name.
 ///
 /// # Safety
-/// `launch` is null or points to `launch_len` readable UTF-8 bytes, valid for the call.
+/// `launch` and `name` are each null or point to their length in readable UTF-8 bytes, valid for
+/// the call.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pf_session_hello(
     width: u32,
@@ -246,14 +297,13 @@ pub unsafe extern "C" fn pf_session_hello(
     bitrate_kbps: u32,
     launch: *const u8,
     launch_len: u32,
+    name: *const u8,
+    name_len: u32,
 ) -> i32 {
-    let launch = if launch.is_null() || launch_len == 0 {
-        None
-    } else {
-        // SAFETY: the caller guarantees `launch_len` readable bytes at `launch` for this call.
-        let bytes = unsafe { std::slice::from_raw_parts(launch, launch_len as usize) };
-        std::str::from_utf8(bytes).ok().map(str::to_string)
-    };
+    // SAFETY: the caller guarantees `launch_len` readable bytes at `launch` for this call.
+    let launch = unsafe { utf8_arg(launch, launch_len) };
+    // SAFETY: as above, `name_len` bytes at `name`.
+    let name = unsafe { utf8_arg(name, name_len) };
     CLIENT.with(|c| {
         let mut c = c.borrow_mut();
         let hello = Hello {
@@ -266,18 +316,24 @@ pub unsafe extern "C" fn pf_session_hello(
             compositor: CompositorPref::Auto,
             gamepad: GamepadPref::Auto,
             bitrate_kbps,
-            name: Some("Browser".to_string()),
+            // What a request for access shows in the host's console, before any pairing names it.
+            name: Some(name.unwrap_or_else(|| "Browser".to_string())),
             launch,
             // `STREAMED_AU` is deliberately absent: slice-progressive delivery hands over pieces
             // of an access unit, and `VideoDecoder` wants whole ones.
             // `HOST_TIMING`: the host's own share of each frame, which the overlay reports.
             video_caps: punktfunk_core::quic::VIDEO_CAP_PROBE_SEQ
-                | punktfunk_core::quic::VIDEO_CAP_HOST_TIMING,
-            audio_channels: 2,
-            // H.264 only for now: it is what a GPU-less host can encode, and what every engine
-            // decodes. HEVC and AV1 wait until there is a stream to test them against.
-            video_codecs: punktfunk_core::quic::CODEC_H264,
-            preferred_codec: punktfunk_core::quic::CODEC_H264,
+                | punktfunk_core::quic::VIDEO_CAP_HOST_TIMING
+                | if HDR.with(std::cell::Cell::get) {
+                    punktfunk_core::quic::VIDEO_CAP_10BIT | punktfunk_core::quic::VIDEO_CAP_HDR
+                } else {
+                    0
+                },
+            audio_channels: crate::audio::requested_channels(),
+            // What `VideoDecoder` said it takes; H.264 always.
+            video_codecs: CODECS.with(std::cell::Cell::get),
+            // No preference: the host picks the best codec both sides have.
+            preferred_codec: 0,
             display_hdr: None,
             client_caps: 0,
             max_shard_payload: punktfunk_core::config::max_shard_payload() as u16,
@@ -292,6 +348,19 @@ pub unsafe extern "C" fn pf_session_hello(
         c.phase = Phase::Offered;
         1
     })
+}
+
+/// An optional UTF-8 argument from the page: `None` when absent, empty or not UTF-8.
+///
+/// # Safety
+/// `ptr` must point to `len` readable bytes for this call, or be null.
+unsafe fn utf8_arg(ptr: *const u8, len: u32) -> Option<String> {
+    if ptr.is_null() || len == 0 {
+        return None;
+    }
+    // SAFETY: the caller guarantees `len` readable bytes at `ptr`.
+    let bytes = unsafe { std::slice::from_raw_parts(ptr, len as usize) };
+    std::str::from_utf8(bytes).ok().map(str::to_string)
 }
 
 /// The page has signed the host's nonce. Send the credential; the host answers with `Welcome`.
@@ -391,8 +460,12 @@ pub unsafe extern "C" fn pf_ctl_recv(ptr: *const u8, len: u32) {
                     c.width = r.mode.width;
                     c.height = r.mode.height;
                     // SAFETY: plain integers to a JavaScript function that returns before this does.
-                    unsafe { pf_video_config(u32::from(c.codec), c.width, c.height) };
+                    unsafe { video_config(&c) };
                 }
+            } else if let Ok(u) = AccessUpdate::decode(&body) {
+                c.grants = u.grants;
+                c.access_secs = u.remaining_secs;
+                c.access_seq = c.access_seq.wrapping_add(1);
             } else if let Ok(r) = Refused::decode(&body) {
                 // SAFETY: the string is borrowed for a call into JavaScript that copies it.
                 unsafe { pf_refused(r.code, r.reason.as_ptr(), r.reason.len() as u32) };
@@ -412,7 +485,13 @@ fn on_welcome(c: &mut Client, welcome: Welcome) {
     c.width = welcome.mode.width;
     c.height = welcome.mode.height;
     c.host_caps = welcome.host_caps;
+    c.depth = welcome.bit_depth;
+    c.hdr = welcome.color.is_hdr();
     c.audio_channels = welcome.audio_channels;
+    crate::audio::negotiated(welcome.audio_channels, welcome.audio_layout);
+    c.grants = welcome.grants;
+    c.access_secs = welcome.expires_in_secs;
+    c.access_seq = c.access_seq.wrapping_add(1);
     c.gate = ReanchorGate::new(0);
     c.next_index = None;
     c.pending_rfi = None;
@@ -424,7 +503,7 @@ fn on_welcome(c: &mut Client, welcome: Welcome) {
             // to name — `Start` still marks "begin streaming".
             write_msg(&Start { client_udp_port: 0 }.encode());
             // SAFETY: plain integers to a JavaScript function that returns before this does.
-            unsafe { pf_video_config(u32::from(c.codec), c.width, c.height) };
+            unsafe { video_config(c) };
             println!(
                 "punktfunk-web: session live, codec {} at {}x{}",
                 c.codec, c.width, c.height
@@ -482,7 +561,7 @@ pub extern "C" fn pf_session_pump() -> u32 {
                 receipts.pop_front();
             }
             receipts.push_back((frame.pts_ns / 1000, frame.received_ns));
-            let key = i32::from(is_keyframe(&frame.data, codec));
+            let key = i32::from(crate::keyframe::is_keyframe(&frame.data, codec));
             // SAFETY: the page reads `len` bytes at `ptr` and returns before this does; `frame`
             // owns the buffer for the whole call. R3: what crosses is the encoded access unit,
             // never a decoded pixel.
@@ -675,45 +754,21 @@ pub extern "C" fn pf_session_phase() -> u32 {
     })
 }
 
-/// Does this access unit start a decodable picture?
+/// Point the page's decoder and plane at what the host now sends.
 ///
-/// `EncodedVideoChunk` needs `key` or `delta` and the first chunk must be a key, but the wire
-/// carries no such bit — the native decoders read it from the bitstream, so this does too. The
-/// host sends parameter sets with every IDR, so their presence is the signal: SPS for H.264,
-/// VPS/SPS for HEVC. Anything else is a delta, which is the safe direction — a mislabelled key
-/// corrupts the decoder's state, a mislabelled delta is only dropped.
-fn is_keyframe(au: &[u8], codec: u8) -> bool {
-    let mut i = 0;
-    while i + 3 < au.len() {
-        // Annex B start code, three or four bytes.
-        let payload = if au[i] == 0 && au[i + 1] == 0 && au[i + 2] == 1 {
-            i + 3
-        } else if i + 4 < au.len()
-            && au[i] == 0
-            && au[i + 1] == 0
-            && au[i + 2] == 0
-            && au[i + 3] == 1
-        {
-            i + 4
-        } else {
-            i += 1;
-            continue;
-        };
-        let b = au[payload];
-        let hit = if codec == punktfunk_core::quic::CODEC_HEVC {
-            let t = (b >> 1) & 0x3f;
-            // IDR_W_RADL, IDR_N_LP, CRA, or the VPS/SPS that precede them.
-            matches!(t, 19 | 20 | 21 | 32 | 33)
-        } else {
-            let t = b & 0x1f;
-            matches!(t, 5 | 7) // IDR slice, or the SPS that precedes it
-        };
-        if hit {
-            return true;
-        }
-        i = payload;
-    }
-    false
+/// # Safety
+/// Calls into JavaScript with plain integers; nothing is borrowed across the call.
+unsafe fn video_config(c: &Client) {
+    // SAFETY: plain integers to a JavaScript function that returns before this does.
+    unsafe {
+        pf_video_config(
+            u32::from(c.codec),
+            c.width,
+            c.height,
+            u32::from(c.depth),
+            u32::from(c.hdr),
+        )
+    };
 }
 
 #[cfg(test)]
@@ -731,28 +786,6 @@ mod tests {
         inbox.push(3);
         assert_eq!(take_msg(&mut inbox).as_deref(), Some(&[1u8, 2, 3][..]));
         assert!(inbox.is_empty(), "a taken message is consumed");
-    }
-
-    #[test]
-    fn keyframes_are_read_from_the_bitstream() {
-        let h264 = punktfunk_core::quic::CODEC_H264;
-        // SPS (type 7) then an IDR slice (type 5), the shape the host sends.
-        assert!(is_keyframe(
-            &[0, 0, 0, 1, 0x67, 0x42, 0, 0, 1, 0x65, 0x88],
-            h264
-        ));
-        // A plain P slice (type 1) is not.
-        assert!(!is_keyframe(&[0, 0, 0, 1, 0x41, 0x9a, 0x00], h264));
-        // Three-byte start codes count too.
-        assert!(is_keyframe(&[0, 0, 1, 0x65, 0x88], h264));
-        assert!(!is_keyframe(&[], h264));
-
-        let hevc = punktfunk_core::quic::CODEC_HEVC;
-        // HEVC types live in bits 6..1: VPS = 32 -> 0x40, IDR_W_RADL = 19 -> 0x26.
-        assert!(is_keyframe(&[0, 0, 0, 1, 0x40, 0x01], hevc));
-        assert!(is_keyframe(&[0, 0, 0, 1, 0x26, 0x01], hevc));
-        // TRAIL_R = 1 -> 0x02 is a delta.
-        assert!(!is_keyframe(&[0, 0, 0, 1, 0x02, 0x01], hevc));
     }
 
     #[test]

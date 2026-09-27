@@ -47,7 +47,19 @@ export function Library({ screen, actions }: { screen: LibraryScreen; actions: A
             onChange={(e) => setQuery(e.currentTarget.value)}
           />
         )}
-        <Button autoFocus size="sm" onClick={() => actions.play()}>Stream the desktop</Button>
+        {screen.resume && (
+          <Button autoFocus size="sm" onClick={() => actions.play(screen.resume)}>
+            Resume {screen.resume.title}
+          </Button>
+        )}
+        <Button
+          autoFocus={!screen.resume}
+          size="sm"
+          variant={screen.resume ? "secondary" : "default"}
+          onClick={() => actions.play()}
+        >
+          Stream the desktop
+        </Button>
         <Button size="sm" variant="ghost" onClick={() => actions.openTools(true)}>Host</Button>
         <Button size="sm" variant="ghost" onClick={() => actions.openSettings(true)}>Settings</Button>
         <Button size="sm" variant="ghost" onClick={() => actions.disconnect()}>Disconnect</Button>
