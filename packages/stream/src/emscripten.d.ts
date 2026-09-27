@@ -140,6 +140,8 @@ export interface PunktfunkModule {
   __pfOnAccessUnit?: (data: Uint8Array, ptsUs: number, key: boolean, flags: number) => void;
   /** One Opus frame, in order, for the page's decoder. */
   __pfOnAudioFrame?: (data: Uint8Array, seq: number, ptsNs: number) => void;
+  /** One rumble command from core's policy: four motor levels (0–65535) for `ms`, `0` a stop. */
+  __pfOnRumble?: (pad: number, low: number, high: number, lt: number, rt: number, ms: number) => void;
 }
 
 declare global {

@@ -430,6 +430,47 @@ export function padKind(id: string): number {
   return PAD_KIND.XBOX_360;
 }
 
+/** The slice of `GamepadHapticActuator` this uses; `effects` is not in every DOM lib yet. */
+interface Actuator {
+  readonly effects?: readonly string[];
+  playEffect(type: string, params: Record<string, number>): Promise<unknown>;
+  reset?(): Promise<unknown>;
+}
+
+/**
+ * Play one rumble command from core's policy on the pad the host names. The wire's pad number is
+ * the `Gamepad.index` the page forwards. Levels are the wire's 0–65535; `ms` is how long the level
+ * holds, and `0` is a stop. A pad without an actuator (Firefox, most pads on Safari) stays still.
+ */
+export function playRumble(
+  pads: readonly (Gamepad | null)[],
+  pad: number,
+  low: number,
+  high: number,
+  lt: number,
+  rt: number,
+  ms: number,
+): void {
+  const actuator = (pads[pad] as { vibrationActuator?: Actuator | null } | null | undefined)?.vibrationActuator;
+  if (!actuator) return;
+  if (ms === 0) {
+    void actuator.reset?.().catch(() => {});
+    return;
+  }
+  const level = (v: number) => v / 0xffff;
+  // Trigger motors only where the browser drives them (Chromium, Xbox pads on Windows).
+  const triggers = (lt > 0 || rt > 0) && (actuator.effects?.includes("trigger-rumble") ?? false);
+  // The low-frequency motor is the strong one.
+  void actuator
+    .playEffect(triggers ? "trigger-rumble" : "dual-rumble", {
+      duration: ms,
+      strongMagnitude: level(low),
+      weakMagnitude: level(high),
+      ...(triggers ? { leftTrigger: level(lt), rightTrigger: level(rt) } : {}),
+    })
+    .catch(() => {});
+}
+
 /** `punktfunk_core::config::GamepadPref::to_u8`. */
 const PAD_KIND = {
   XBOX_360: 1,
