@@ -103,10 +103,10 @@ export function Hud({ screen, actions }: { screen: Extract<Screen, { kind: "stre
       {screen.diagnostics && <Diagnostics stats={stats} />}
       {/* The host's word on a launch that did not give the player their game, or on this
           device's access changing or about to end. */}
-      {(stats.launchNotice ?? stats.accessNotice) && (
+      {(screen.notice ?? stats.launchNotice ?? stats.accessNotice) && (
         <div role="status" className="pointer-events-none fixed inset-x-0 bottom-[20%] flex justify-center px-inset animate-in fade-in slide-in-from-bottom-2">
           <span className="max-w-[40rem] rounded-full bg-card/95 px-4 py-2 text-center text-sm">
-            {stats.launchNotice ?? stats.accessNotice}
+            {screen.notice ?? stats.launchNotice ?? stats.accessNotice}
           </span>
         </div>
       )}
@@ -125,11 +125,12 @@ export function Hud({ screen, actions }: { screen: Extract<Screen, { kind: "stre
 
 /**
  * The quick actions every client offers mid-stream, named and ordered as the native dial has them
- * (`overlay_actions.rs`). End asks twice, as there: it closes the title, not only the stream.
+ * (`overlay_actions.rs`). End stream and End game ask twice, as there.
  * `data-pf-keys` keeps the menu's keys on the page rather than the host.
  */
 function QuickMenu({ screen, actions }: { screen: Extract<Screen, { kind: "streaming" }>; actions: Actions }): JSX.Element {
   const [armed, setArmed] = useState(false);
+  const [endArmed, setEndArmed] = useState(false);
   useEffect(() => {
     const close = (e: KeyboardEvent) => {
       if (e.key === "Escape") actions.openMenu(false);
@@ -154,6 +155,17 @@ function QuickMenu({ screen, actions }: { screen: Extract<Screen, { kind: "strea
       >
         {armed ? "End stream? Press again" : "End stream"}
       </Button>
+      {/* Only while this device's launch is on the stream: it closes the game, then the stream. */}
+      {screen.endGame && (
+        <Button
+          role="menuitem"
+          variant={endArmed ? "destructive" : "ghost"}
+          className={item}
+          onClick={() => (endArmed ? actions.endGame() : setEndArmed(true))}
+        >
+          {endArmed ? "End game? Press again" : "End game"}
+        </Button>
+      )}
       <Button role="menuitem" variant="ghost" className={item} onClick={() => actions.disconnect(false)}>
         Disconnect, keep the game running
       </Button>

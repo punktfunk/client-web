@@ -66,7 +66,7 @@ export const noop: Actions = {
   connect() {}, streamDesktop() {}, browse() {}, navigate() {},
   pair() {}, requestAccess() {}, cancelRequest() {}, retry() {}, back() {}, play() {},
   forget() {}, wake() {}, disconnect() {},
-  openTools() {}, hostAction() {}, sendLog() {},
+  openTools() {}, hostAction() {}, endGame() {}, sendLog() {},
   followLink() {}, copyLink() {},
   setAdding() {}, rename() {}, openSettings() {}, setSettings() {}, toggleCapture() {},
   showDiagnostics() {}, openMenu() {}, fullscreen() {}, cycleStats() {}, toggleMic() {},

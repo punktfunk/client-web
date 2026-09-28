@@ -724,6 +724,12 @@ export class Engine {
     this.mod._pf_wt_close?.(quit ? CLOSE.QUIT : 0);
   }
 
+  /** The management API of the host this engine is with, a live stream included: `ready`
+   *  carries it too, but a stream's menu has nothing else to reach it through. */
+  hostApi(): Host | null {
+    return this.host;
+  }
+
   /** The hosts this browser knows, most recent first. */
   knownHosts(): Array<pf.KnownHost & { origin: string }> {
     return pf.hosts.list();

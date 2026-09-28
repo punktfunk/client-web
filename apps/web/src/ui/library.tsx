@@ -5,7 +5,7 @@
 
 import type { LibraryEntry } from "@punktfunk/stream";
 import { cn } from "@unom/ui/lib/utils";
-import { Monitor, Play, Search, Server } from "lucide-react";
+import { CircleX, Monitor, Play, Search, Server } from "lucide-react";
 import { type JSX, type KeyboardEvent, useRef, useState } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -58,12 +58,15 @@ export function Library({ screen, actions }: { screen: LibraryScreen; actions: A
             Resume {screen.resume.title}
           </Button>
         )}
+        {screen.endable && screen.running && <EndGame title={screen.running} onEnd={() => actions.endGame()} />}
         {!screen.offline && (
           <Button size="icon" variant="ghost" aria-label="Host actions" title="Host actions" onClick={() => actions.openTools(true)}>
             <Server className="size-4" />
           </Button>
         )}
       </PageHead>
+
+      {screen.notice && <p role="status" className="text-sm text-muted-foreground">{screen.notice}</p>}
 
       {screen.shelves.length > 1 && <ShelfSwitcher shelves={screen.shelves} current={origin} actions={actions} />}
 
@@ -232,6 +235,28 @@ function Tile({ entry, art, running, onPlay }: { entry: LibraryEntry; art: strin
         {entry.title}
       </span>
     </button>
+  );
+}
+
+/** End the running title this device launched. It asks twice, as the dial does: unsaved progress
+ *  in the game is lost. */
+function EndGame({ title, onEnd }: { title: string; onEnd: () => void }): JSX.Element {
+  const [armed, setArmed] = useState(false);
+  return (
+    <Button
+      size="sm"
+      variant={armed ? "destructive" : "secondary"}
+      title="Unsaved progress in the game is lost."
+      onClick={() => {
+        if (!armed) return setArmed(true);
+        setArmed(false);
+        onEnd();
+      }}
+      onBlur={() => setArmed(false)}
+    >
+      <CircleX className="size-4" />
+      {armed ? `End ${title}? Press again` : "End game"}
+    </Button>
   );
 }
 

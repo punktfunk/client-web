@@ -20,6 +20,7 @@ import {
   type ConsoleGame,
   type ConsoleHostRow,
   type Engine,
+  gameEndNotice,
   type Host,
   type LibraryEntry,
 } from "@punktfunk/stream";
@@ -523,6 +524,9 @@ export class ConsoleUi implements Ui {
       case "RefreshRunning":
         if (origin) this.refreshRunning(origin);
         return;
+      case "EndGame":
+        if (origin) void this.endGame(origin, str("app_id"), str("title"));
+        return;
       default:
         // Presets, the speed test, pad tests, licences and host tools are the native clients';
         // the page offers what it has through the web shell.
@@ -540,10 +544,26 @@ export class ConsoleUi implements Ui {
       .then((st) =>
         this.engine.console.push(
           CONSOLE_PUSH.LIBRARY_RUNNING,
-          st.games.map((g) => ({ app_id: g.app_id ?? null, title: g.title, state: g.state, awaiting_window: !!g.awaiting_window })),
+          st.games.map((g) => ({
+            app_id: g.app_id ?? null,
+            title: g.title,
+            state: g.state,
+            awaiting_window: !!g.awaiting_window,
+            endable: !!g.endable,
+          })),
         ),
       )
       .catch(() => {});
+  }
+
+  /** End a title this device launched, say how it went, then re-read what the host runs so the
+   *  poster's badge follows. */
+  private async endGame(origin: string, appId: string, title: string): Promise<void> {
+    const api = this.hostApi;
+    if (!api || api.origin !== origin || !appId) return;
+    const outcome = await api.host.endGame(appId);
+    this.engine.console.push(CONSOLE_PUSH.NOTICE, gameEndNotice(outcome, title));
+    this.refreshRunning(origin);
   }
 
   /** Wake a host and keep the console's wake card current: seconds while the page's own wake

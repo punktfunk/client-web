@@ -20,6 +20,7 @@ import {
 } from "@punktfunk/host/core";
 import { Effect } from "effect";
 import { SchemaError } from "effect/Schema";
+import { type GameEnd, gameEndOf } from "./game-end.ts";
 
 export { DeviceRefused };
 export type LibraryEntry = api.OperatorGameEntry;
@@ -105,6 +106,19 @@ export class Host {
   }
 
   /**
+   * End a title this device launched, live stream included. By hand like `invoke`: each status
+   * is an answer to tell the player (409, 403, an older host's 404), not an error to decode.
+   */
+  async endGame(appId: string): Promise<GameEnd> {
+    try {
+      const body = JSON.stringify({ app_id: appId, streaming: true });
+      return gameEndOf((await this.post("/api/v1/game/end", body, "application/json")).status);
+    } catch (e) {
+      return { kind: "failed", why: e instanceof Error ? e.message : String(e) };
+    }
+  }
+
+  /**
    * Hand the page's log to the host, which files it under this device for its console. The
    * client does not carry the plain-text body this route takes, so this is by hand too.
    */
@@ -114,7 +128,7 @@ export class Host {
     return ((await res.json()) as { id: string }).id;
   }
 
-  private async post(path: string, body?: string): Promise<Response> {
+  private async post(path: string, body?: string, type = "text/plain; charset=utf-8"): Promise<Response> {
     // Unbound: `window.fetch` called as a method of anything but `window` throws "Illegal invocation".
     const fetch = this.conn.fetch;
     return fetch(`${this.origin}${path}`, {
@@ -122,7 +136,7 @@ export class Host {
       cache: "no-store",
       headers: {
         authorization: await this.conn.credential.header(),
-        ...(body === undefined ? {} : { "content-type": "text/plain; charset=utf-8" }),
+        ...(body === undefined ? {} : { "content-type": type }),
       },
       ...(body === undefined ? {} : { body }),
     });
