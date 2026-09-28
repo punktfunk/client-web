@@ -21,6 +21,7 @@ import {
 import { Effect } from "effect";
 import { SchemaError } from "effect/Schema";
 import { type GameEnd, gameEndOf } from "./game-end.ts";
+import { PAGE_LIMIT, walkPages } from "./pages.ts";
 
 export { DeviceRefused };
 export type LibraryEntry = api.OperatorGameEntry;
@@ -54,8 +55,20 @@ export class Host {
     this.client = Effect.runPromise(httpClientFor(this.conn)).then((http) => api.make(http));
   }
 
-  library(): Promise<ReadonlyArray<LibraryEntry>> {
-    return this.run("library", (c) => c.getLibrary(undefined));
+  /**
+   * The host's catalog, walked a page at a time. A host older than the paged route refuses
+   * it, so the whole list is asked for instead, and its failure is the one reported.
+   */
+  async library(): Promise<ReadonlyArray<LibraryEntry>> {
+    try {
+      return await walkPages((cursor) =>
+        this.run("library", (c) =>
+          c.getLibraryPage({ params: { limit: PAGE_LIMIT, ...(cursor ? { cursor } : {}) } }),
+        ),
+      );
+    } catch {
+      return this.run("library", (c) => c.getLibrary(undefined));
+    }
   }
 
   info(): Promise<HostInfo> {
