@@ -16,7 +16,7 @@ use punktfunk_core::input::{
     encode_gamepad_arrival, encode_gamepad_remove, gamepad, GamepadSnapshot, InputEvent, InputKind,
     MAX_PADS,
 };
-use punktfunk_core::quic::HOST_CAP_GAMEPAD_STATE;
+use punktfunk_core::quic::{InputEdge, HOST_CAP2_INPUT_EDGES, HOST_CAP_GAMEPAD_STATE};
 use std::cell::RefCell;
 
 struct Pads {
@@ -29,8 +29,16 @@ thread_local! {
     static PADS: RefCell<Pads> = const { RefCell::new(Pads { last: [None; MAX_PADS], seq: [0; MAX_PADS] }) };
 }
 
+/// A key edge goes on the control stream toward a host that reads it there, so a release the
+/// network drops is sent again instead of holding the key; everything else is a datagram.
 fn send(ev: InputEvent) {
-    if session::is_live() {
+    if !session::is_live() {
+        return;
+    }
+    let edge = matches!(ev.kind, InputKind::KeyDown | InputKind::KeyUp);
+    if edge && session::host_caps2() & HOST_CAP2_INPUT_EDGES != 0 {
+        session::write_msg(&InputEdge(ev).encode());
+    } else {
         send_datagram(&ev.encode());
     }
 }

@@ -64,6 +64,8 @@ struct Client {
     /// `Welcome::host_caps`: what this host understands beyond the base wire (gamepad snapshots,
     /// text input). Input chooses its vocabulary by it.
     host_caps: u8,
+    /// `Welcome::host_caps2`: key edges on the control stream, among others.
+    host_caps2: u8,
     /// `Welcome::audio_channels`: what the Opus frames carry. The page's decoder is configured
     /// from it.
     audio_channels: u8,
@@ -117,6 +119,7 @@ impl Client {
             width: 0,
             height: 0,
             host_caps: 0,
+            host_caps2: 0,
             audio_channels: 0,
             depth: 8,
             hdr: false,
@@ -186,6 +189,7 @@ pub extern "C" fn pf_session_reset() {
         c.width = 0;
         c.height = 0;
         c.host_caps = 0;
+        c.host_caps2 = 0;
         c.audio_channels = 0;
         c.grants = 0;
         c.access_secs = 0;
@@ -227,6 +231,10 @@ pub extern "C" fn pf_session_reconfigure(width: u32, height: u32, fps: u32) {
 
 pub fn host_caps() -> u8 {
     CLIENT.with(|c| c.borrow().host_caps)
+}
+
+pub fn host_caps2() -> u8 {
+    CLIENT.with(|c| c.borrow().host_caps2)
 }
 
 /// `Welcome::host_caps`, for the page: `HOST_CAP_CURSOR` says whether the host forwards its
@@ -326,7 +334,7 @@ unsafe extern "C" {
 }
 
 /// Frame the way the control plane does everywhere else: `u16` length, then the payload.
-fn write_msg(body: &[u8]) {
+pub(crate) fn write_msg(body: &[u8]) {
     let mut framed = Vec::with_capacity(body.len() + 2);
     framed.extend_from_slice(&(body.len() as u16).to_le_bytes());
     framed.extend_from_slice(body);
@@ -575,6 +583,7 @@ fn on_welcome(c: &mut Client, welcome: Welcome) {
     c.width = welcome.mode.width;
     c.height = welcome.mode.height;
     c.host_caps = welcome.host_caps;
+    c.host_caps2 = welcome.host_caps2;
     c.depth = welcome.bit_depth;
     c.hdr = welcome.color.is_hdr();
     c.audio_channels = welcome.audio_channels;

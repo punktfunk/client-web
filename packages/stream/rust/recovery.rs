@@ -2,7 +2,13 @@
 //! itself is `punktfunk_core::reanchor`; this is the frame-index bookkeeping around it.
 
 use punktfunk_core::packet::RFI_MAX_RANGE;
-use punktfunk_core::reanchor::index_gap;
+
+/// Frames skipped when `got` is ahead of `expected`, else `None`. Indices wrap: a small
+/// forward difference is a gap, the top half of the space is a straggler already passed.
+fn index_gap(expected: u32, got: u32) -> Option<u32> {
+    let ahead = got.wrapping_sub(expected);
+    (ahead != 0 && ahead < u32::MAX / 2).then_some(ahead)
+}
 
 /// What one access unit's frame index says about loss.
 #[derive(Debug, PartialEq, Eq)]
