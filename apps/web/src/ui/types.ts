@@ -111,11 +111,23 @@ type ScreenBody =
       tools?: HostTools;
       /** That title's library entry, when it has one: streaming it picks the game back up. */
       resume?: LibraryEntry;
+      /** The running title is this device's launch, so it may end it. */
+      endable?: boolean;
+      /** What the host said when End game last ran. */
+      notice?: string;
       error?: string;
       busy?: boolean;
     }
-  /** `menu`: the quick menu is open over the picture. */
-  | { kind: "streaming"; stats: SessionStats; diagnostics: boolean; menu: boolean }
+  /** `menu`: the quick menu is open over the picture. `endGame`: the title this device launched
+   *  that the stream plays, which End game ends. `notice`: what the host said when it refused. */
+  | {
+      kind: "streaming";
+      stats: SessionStats;
+      diagnostics: boolean;
+      menu: boolean;
+      endGame?: string;
+      notice?: string;
+    }
   /**
    * The settings sheet. It renders over whatever screen was showing — including a live one —
    * so it carries no route of its own; `openSettings(false)` puts the previous screen back.
@@ -175,6 +187,9 @@ export interface Actions {
   /** The host sheet on the library: its power actions, and sending this page's log. */
   openTools(on: boolean): void;
   hostAction(id: string): void;
+  /** End the title this device launched: the stream's, over a live picture, else the shelf's
+   *  running one. Unsaved progress is lost, so the renderer asks first. */
+  endGame(): void;
   sendLog(): void;
   /** Send a host the magic packet, through the page's server. */
   wake(origin: string): void;

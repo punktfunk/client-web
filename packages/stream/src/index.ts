@@ -18,6 +18,7 @@ export {
 export { DEFAULTS, settings, type Settings, type StatsTier } from "./settings.ts";
 export type { AudioSnapshot, AudioState } from "./audio.ts";
 export { Host, type HostAction, type HostInfo, type HostStatus, type LibraryEntry, VersionSkew } from "./host.ts";
+export { type GameEnd, gameEndNotice, gameEndOf, gameGone } from "./game-end.ts";
 export { captureLog, pageLog } from "./logs.ts";
 export {
   CONSOLE_PUSH,

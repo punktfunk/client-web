@@ -14,6 +14,8 @@ import {
   Engine,
   type Host,
   type EngineState,
+  gameEndNotice,
+  gameGone,
   type HostTarget,
   hosts,
   originOf,
@@ -51,6 +53,9 @@ const SHELF_KEY = "pf.shelf";
 /** A shelf's titles are read again when the tab comes back to it after this long. */
 const LIBRARY_TTL_MS = 60_000;
 
+/** How long the host's refusal of End game stays over the picture. */
+const STREAM_NOTICE_MS = 6_000;
+
 /** The engine's states on the way to a host. Leaving the tab they sit under cancels them. */
 const FLOWS = new Set<EngineState["kind"]>([
   "bad-address", "reaching", "blocked", "unreachable", "untrusted", "connecting", "needs-pairing",
@@ -85,6 +90,15 @@ class App {
   private running: string | undefined;
   /** The running title's library id, which is what `Resume` launches. */
   private runningId: string | undefined;
+  /** The running title is this device's launch, which End game may end. */
+  private runningEndable = false;
+  /** What the host said when End game last ran from the library. */
+  private endNotice: string | undefined;
+  /** The title this device launched that the live stream plays, asked for when the menu opens. */
+  private streamGame: { appId: string; title: string } | null = null;
+  /** What the host said when End game was refused mid-stream, for a few seconds. */
+  private streamNotice: string | undefined;
+  private streamNoticeTimer = 0;
   /** The origin whose running title is being polled. */
   private pollingFor: string | null = null;
   /** What the last stream played (`entry` unset: the desktop), and what to start again once the
@@ -153,6 +167,7 @@ class App {
       copyLink: (origin) => void this.copyLink(origin),
       openTools: (on) => void this.openTools(on),
       hostAction: (id) => void this.hostAction(id),
+      endGame: () => void this.endGame(),
       sendLog: () => void this.sendLog(),
       wake: (origin) => void this.wake(origin),
       disconnect: (quit) => {
@@ -161,6 +176,7 @@ class App {
       },
       openMenu: (on) => {
         this.menuOpen = on;
+        if (on) void this.findStreamGame();
         this.render(engine.current);
       },
       fullscreen: () => engine.fullscreen(),
@@ -203,6 +219,7 @@ class App {
     this.watchSize();
     engine.onMenu(() => {
       this.menuOpen = !this.menuOpen;
+      if (this.menuOpen) void this.findStreamGame();
       this.render(engine.current);
     });
     engine.onState((s) => this.render(s));
@@ -216,7 +233,10 @@ class App {
 
   /** Facts in, words out. */
   private render(s: EngineState): void {
-    if (s.kind !== "streaming") this.menuOpen = false;
+    if (s.kind !== "streaming") {
+      this.menuOpen = false;
+      this.streamGame = null;
+    }
     if (this.settingsOpen) {
       return this.show({ kind: "settings", values: this.prefs, streaming: s.kind === "streaming" });
     }
@@ -317,6 +337,8 @@ class App {
           stats: { origin: s.origin, ...s.stats },
           diagnostics: s.stats.statsTier !== "off",
           menu: this.menuOpen,
+          ...(this.streamGame ? { endGame: this.streamGame.title } : {}),
+          ...(this.streamNotice ? { notice: this.streamNotice } : {}),
         });
       case "error": {
         this.windowed();
@@ -647,9 +669,12 @@ class App {
       }
       try {
         const st = await now.host.status();
-        const live = st.games.find((g) => g.state === "running" || g.state === "launching");
+        // Anything not exited is up, as on every client; this device's own launch leads.
+        const up = st.games.filter((g) => g.state !== "exited");
+        const live = up.find((g) => g.endable && g.app_id) ?? up[0];
         this.running = live?.title;
         this.runningId = live?.app_id ?? undefined;
+        this.runningEndable = !!live?.endable && !!live.app_id;
         this.redrawLibrary();
       } catch {
         // A failed poll is not news; the next one will say.
@@ -682,6 +707,8 @@ class App {
       ...(mine && this.running ? { running: this.running } : {}),
       ...(connected && this.tools ? { tools: this.tools } : {}),
       ...(mine ? this.resumable() : {}),
+      ...(mine && connected && this.running && this.runningEndable ? { endable: true } : {}),
+      ...(mine && this.endNotice ? { notice: this.endNotice } : {}),
       ...(mine && this.libraryError ? { error: `${sentence(this.libraryError)} You can still stream the desktop.` } : {}),
     });
     void this.probe(shelves.map((h) => h.origin));
@@ -754,6 +781,52 @@ class App {
     this.redrawLibrary();
   }
 
+  /** End the title this device launched: the stream's own over a live picture, else the shelf's
+   *  running one. A game that is gone ends the stream as End stream does; a refusal says why. */
+  private async endGame(): Promise<void> {
+    const s = this.engine.current;
+    if (s.kind === "streaming") {
+      const host = this.engine.hostApi();
+      const game = this.streamGame;
+      if (!host || !game) return;
+      this.menuOpen = false;
+      const outcome = await host.endGame(game.appId);
+      if (gameGone(outcome)) return this.engine.leave(true);
+      clearTimeout(this.streamNoticeTimer);
+      this.streamNotice = gameEndNotice(outcome, game.title);
+      this.streamNoticeTimer = window.setTimeout(() => {
+        this.streamNotice = undefined;
+        this.render(this.engine.current);
+      }, STREAM_NOTICE_MS);
+      return this.render(this.engine.current);
+    }
+    const host = this.shelfHost();
+    const [id, title] = [this.runningId, this.running];
+    if (!host || !id || !title) return;
+    const outcome = await host.endGame(id);
+    this.endNotice = gameEndNotice(outcome, title);
+    if (gameGone(outcome)) {
+      this.running = undefined;
+      this.runningId = undefined;
+      this.runningEndable = false;
+    }
+    this.redrawLibrary();
+  }
+
+  /** Ask the host what this stream plays: a row this device may end with a live session. */
+  private async findStreamGame(): Promise<void> {
+    const host = this.engine.hostApi();
+    if (!host || this.engine.current.kind !== "streaming") return;
+    try {
+      const st = await host.status();
+      const g = st.games.find((r) => r.endable && r.session_id !== undefined && r.app_id);
+      this.streamGame = g?.app_id ? { appId: g.app_id, title: g.title } : null;
+    } catch {
+      // Unanswered, the menu keeps what it last knew.
+    }
+    this.render(this.engine.current);
+  }
+
   /** The running title's entry, by library id where the host gave one, else by title. */
   private resumable(): { resume?: LibraryEntry } {
     if (!this.running) return {};
@@ -772,6 +845,8 @@ class App {
     this.libraryError = undefined;
     this.running = undefined;
     this.runningId = undefined;
+    this.runningEndable = false;
+    this.endNotice = undefined;
     this.entries = [];
     for (const url of this.art.values()) {
       if (url.startsWith("blob:")) URL.revokeObjectURL(url);
