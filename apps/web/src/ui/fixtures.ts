@@ -54,6 +54,8 @@ const hosts: HostCard[] = [
 ];
 const shelves = hosts.filter((h) => h.fingerprint);
 const origin = "https://192.168.1.25:47990";
+/** The statistics where a fresh browser puts them. */
+const overlay = { corner: "topTrailing", scale: 1 } as const;
 
 export const SCREENS = {
   "home": { kind: "home", adding: false, hosts },
@@ -78,14 +80,16 @@ export const SCREENS = {
   "library-loading": { kind: "library", origin, shelves, host: "living-room-pc", entries: [], art: new Map(), busy: true },
   "library-offline": { kind: "library", origin, shelves, host: "living-room-pc", entries: [], art: new Map(), offline: true },
   "library-none": { kind: "library", origin: null, shelves: [], entries: [], art: new Map(), offline: true },
-  "streaming": { kind: "streaming", stats, diagnostics: false, menu: false },
-  "streaming-diagnostics": { kind: "streaming", stats, diagnostics: true, menu: false },
-  "streaming-menu": { kind: "streaming", stats, diagnostics: false, menu: true },
+  "streaming": { kind: "streaming", stats, diagnostics: false, menu: false, ...overlay },
+  "streaming-hint": { kind: "streaming", stats, diagnostics: false, menu: false, ...overlay, exitHint: "Ctrl+Alt+Shift+D to leave" },
+  "streaming-diagnostics": { kind: "streaming", stats, diagnostics: true, menu: false, ...overlay },
+  "streaming-menu": { kind: "streaming", stats, diagnostics: false, menu: true, ...overlay },
   "streaming-captured": {
     kind: "streaming",
     stats: { ...stats, pointerCaptured: true },
     diagnostics: false,
     menu: false,
+    ...overlay,
   },
   "settings": { kind: "settings", values: DEFAULTS, streaming: false },
   "settings-streaming": { kind: "settings", values: DEFAULTS, streaming: true },

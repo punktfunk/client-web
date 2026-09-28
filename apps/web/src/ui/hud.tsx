@@ -1,7 +1,7 @@
 // The overlay over a live picture. Out of the way by default — this is the screen someone came
 // for — and brought back by a pointer, a key or a tap, then hidden again.
 
-import type { HudLine } from "@punktfunk/stream";
+import type { HudCorner, HudLine } from "@punktfunk/stream";
 import { cn } from "@unom/ui/lib/utils";
 import { Maximize, Menu, MousePointer2, Settings } from "lucide-react";
 import { type JSX, useEffect, useState } from "react";
@@ -100,7 +100,13 @@ export function Hud({ screen, actions }: { screen: Extract<Screen, { kind: "stre
         </Button>
       </div>
       {screen.menu && <QuickMenu screen={screen} actions={actions} />}
-      {screen.diagnostics && <Diagnostics stats={stats} />}
+      {screen.diagnostics && <Diagnostics stats={stats} corner={screen.corner} scale={screen.scale} />}
+      {/* How to leave, once, as the stream starts; the captured-pointer line below says it then. */}
+      {screen.exitHint && !stats.pointerCaptured && (
+        <div className="pointer-events-none fixed inset-x-0 bottom-[6%] flex justify-center px-inset animate-[pf-exit-hint_6s_forwards]">
+          <span className="rounded-full bg-card/95 px-4 py-2 text-sm">{screen.exitHint}</span>
+        </div>
+      )}
       {/* The host's word on a launch that did not give the player their game, or on this
           device's access changing or about to end. */}
       {(screen.notice ?? stats.launchNotice ?? stats.accessNotice) && (
@@ -213,9 +219,18 @@ const ROLE_CLASS: Record<HudLine["role"], string> = {
   warn: "text-amber-500",
 };
 
+/** Where each corner puts the panel. The top ones clear the toolbar. */
+const CORNER_CLASS: Record<HudCorner, string> = {
+  topLeading: "top-[calc(3.5rem+var(--pf-inset))] left-inset",
+  topTrailing: "top-[calc(3.5rem+var(--pf-inset))] right-inset",
+  bottomLeading: "bottom-inset left-inset",
+  bottomTrailing: "bottom-inset right-inset",
+};
+
 /** The stats overlay every client draws, in this session's tier and vocabulary, then what only a
- *  browser measures. Lines come from the engine formatted; this panel only paints them. */
-function Diagnostics({ stats: s }: { stats: SessionStats }): JSX.Element {
+ *  browser measures. Lines come from the engine formatted; this panel only paints them, in
+ *  `corner` and at `scale` times its size. */
+function Diagnostics({ stats: s, corner, scale }: { stats: SessionStats; corner: HudCorner; scale: number }): JSX.Element {
   const lines = s.hud ?? [];
   const browser = [
     s.backend ?? "",
@@ -228,7 +243,14 @@ function Diagnostics({ stats: s }: { stats: SessionStats }): JSX.Element {
   return (
     <Card
       aria-label="Statistics"
-      className="pointer-events-auto fixed top-[calc(3.5rem+var(--pf-inset))] right-inset bg-card/95 backdrop-blur-none max-h-[60dvh] w-[min(34rem,calc(100vw-2*var(--pf-inset)))] overflow-y-auto px-5 py-4 font-mono text-sm leading-relaxed"
+      className={cn(
+        "pointer-events-auto fixed bg-card/95 backdrop-blur-none max-h-[60dvh] overflow-y-auto px-5 py-4 font-mono leading-relaxed",
+        CORNER_CLASS[corner],
+      )}
+      style={{
+        fontSize: `${0.875 * scale}rem`,
+        width: `min(${34 * scale}rem, calc(100vw - 2 * var(--pf-inset)))`,
+      }}
     >
       {lines.map((l, i) => (
         // Lines have no identity beyond their place in the list.
