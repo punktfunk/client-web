@@ -1,14 +1,16 @@
 // Settings, in the macOS client's tabs: General, Display, Input, Audio, Controllers, About. A
 // page in the frame, or a dialog over a live stream — the same tabs either way. Inside a tab,
 // rows are grouped in cards as the host console groups its own: label and hint on the left, the
-// control on the right, and a choice of four or fewer as buttons side by side.
+// control on the right, and a choice of four or fewer as buttons side by side. Each tab's
+// advanced rows show under Show advanced; hidden, a tab says how many of them are changed.
 
-import { DEFAULTS, type Settings } from "@punktfunk/stream";
+import { ASPECTS, aspectOf, customSize, DEFAULTS, nearest, type Settings, STATS_SCALES } from "@punktfunk/stream";
 import { cn } from "@unom/ui/lib/utils";
 import { type JSX, type ReactNode, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Slider } from "@/components/ui/slider";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -18,16 +20,8 @@ import type { Actions, Screen } from "./types.ts";
 type SettingsScreen = Extract<Screen, { kind: "settings" }>;
 type SetFn = (patch: Partial<Settings>) => void;
 
-/** The sizes offered, and what each means on the wire. `0×0` follows the window, which is what
- *  a browser usually wants — the others pin a stream to something the host encodes well
- *  regardless of how the tab is sized. */
-const SIZES: ReadonlyArray<[label: string, width: number, height: number]> = [
-  ["Follow the window", 0, 0],
-  ["1280 × 720", 1280, 720],
-  ["1920 × 1080", 1920, 1080],
-  ["2560 × 1440", 2560, 1440],
-  ["3840 × 2160", 3840, 2160],
-];
+/** The Resolution list's entry that shows the typed width and height. */
+const CUSTOM = "custom";
 
 const RATES = [30, 60, 90, 120, 144, 165, 240];
 
@@ -71,10 +65,20 @@ export function SettingsDialog({ screen, actions }: { screen: SettingsScreen; ac
   );
 }
 
+/** How many of `keys` hold something other than a fresh browser would. */
+function changed(v: Settings, keys: ReadonlyArray<keyof Settings>): number {
+  return keys.filter((k) => v[k] !== DEFAULTS[k]).length;
+}
+
 function SettingsTabs({ screen, actions }: { screen: SettingsScreen; actions: Actions }): JSX.Element {
   const [tab, setTab] = useState<TabName>(lastTab);
   const v = screen.values;
   const set: SetFn = (patch) => actions.setSettings(patch);
+  const advanced = (keys: ReadonlyArray<keyof Settings>, rows: ReactNode) => (
+    <Advanced show={v.showAdvanced} changed={changed(v, keys)} onShow={() => set({ showAdvanced: true })}>
+      {rows}
+    </Advanced>
+  );
   return (
     <Tabs
       value={tab}
@@ -91,7 +95,7 @@ function SettingsTabs({ screen, actions }: { screen: SettingsScreen; actions: Ac
       <TabsContent value="General" className="flex flex-col gap-5">
         <Group title="Session">
           <Toggle
-            label="Fullscreen while streaming"
+            label="Start streams fullscreen"
             hint="Goes fullscreen when a stream starts from a click, and back to the window when it ends."
             on={v.fullscreen}
             onChange={(on) => set({ fullscreen: on })}
@@ -106,16 +110,6 @@ function SettingsTabs({ screen, actions }: { screen: SettingsScreen; actions: Ac
               onChange={(statsTier) => set({ statsTier })}
             />
           </Row>
-          <Toggle
-            label="Advanced statistics"
-            hint="Off shows the figures Moonlight's overlay also shows. On shows capture to glass as p50/p95 and every stage between."
-            on={v.advancedStats}
-            onChange={(on) => set({ advancedStats: on })}
-          >
-            <a href="https://docs.punktfunk.unom.io/docs/stats" target="_blank" rel="noreferrer" className="text-xs text-muted-foreground underline">
-              What each number means
-            </a>
-          </Toggle>
         </Group>
         {!screen.streaming && (
           <Group title="Interface">
@@ -124,24 +118,61 @@ function SettingsTabs({ screen, actions }: { screen: SettingsScreen; actions: Ac
             </Row>
           </Group>
         )}
+        <Group>
+          <Toggle
+            label="Show advanced"
+            hint="Adds the settings most players never need to change."
+            on={v.showAdvanced}
+            onChange={(on) => set({ showAdvanced: on })}
+          />
+        </Group>
+        {advanced(
+          ["advancedStats", "hudPlacement", "statsScalePct", "exitHint"],
+          <>
+            <Toggle
+              label="Advanced statistics"
+              hint="Off shows the figures Moonlight's overlay also shows. On shows capture to glass as p50/p95 and every stage between."
+              on={v.advancedStats}
+              onChange={(on) => set({ advancedStats: on })}
+            >
+              <a href="https://docs.punktfunk.unom.io/docs/stats" target="_blank" rel="noreferrer" className="text-xs text-muted-foreground underline">
+                What each number means
+              </a>
+            </Toggle>
+            <Row label="Statistics position" hint="The corner the statistics overlay sits in.">
+              <Segmented
+                label="Statistics position"
+                value={v.hudPlacement}
+                options={[
+                  ["topLeading", "Top left"],
+                  ["topTrailing", "Top right"],
+                  ["bottomLeading", "Bottom left"],
+                  ["bottomTrailing", "Bottom right"],
+                ]}
+                onChange={(hudPlacement) => set({ hudPlacement })}
+              />
+            </Row>
+            <Row label="Statistics size" hint="The overlay's size, on top of the page's own." htmlFor="pf-stats-size">
+              <Select value={String(v.statsScalePct)} onValueChange={(value) => set({ statsScalePct: Number(value) })}>
+                <SelectTrigger id="pf-stats-size"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  {STATS_SCALES.map((p) => <SelectItem key={p} value={String(p)}>{p} %</SelectItem>)}
+                </SelectContent>
+              </Select>
+            </Row>
+            <Toggle
+              label="Exit hint"
+              hint="Shows how to leave for a few seconds when a stream starts."
+              on={v.exitHint}
+              onChange={(on) => set({ exitHint: on })}
+            />
+          </>,
+        )}
       </TabsContent>
 
       <TabsContent value="Display" className="flex flex-col gap-5">
         <Group title="Resolution">
-          <Row label="Resolution" htmlFor="pf-size">
-            <Select
-              value={`${v.width}x${v.height}`}
-              onValueChange={(value) => {
-                const [w, h] = value.split("x").map(Number);
-                set({ width: w ?? 0, height: h ?? 0 });
-              }}
-            >
-              <SelectTrigger id="pf-size"><SelectValue /></SelectTrigger>
-              <SelectContent>
-                {SIZES.map(([label, w, h]) => <SelectItem key={label} value={`${w}x${h}`}>{label}</SelectItem>)}
-              </SelectContent>
-            </Select>
-          </Row>
+          <Resolution v={v} set={set} />
           {v.width === 0 && (
             <Toggle
               label="Follow window resizes"
@@ -150,16 +181,16 @@ function SettingsTabs({ screen, actions }: { screen: SettingsScreen; actions: Ac
               onChange={(on) => set({ resizeStream: on })}
             />
           )}
-          <Row label="Frame rate" htmlFor="pf-fps">
+          <Row label="Refresh rate" htmlFor="pf-fps">
             <Select value={String(v.fps)} onValueChange={(value) => set({ fps: Number(value) })}>
               <SelectTrigger id="pf-fps"><SelectValue /></SelectTrigger>
               <SelectContent>
-                {RATES.map((f) => <SelectItem key={f} value={String(f)}>{f} fps</SelectItem>)}
+                {RATES.map((f) => <SelectItem key={f} value={String(f)}>{f} Hz</SelectItem>)}
               </SelectContent>
             </Select>
           </Row>
         </Group>
-        <Group title="Quality">
+        <Group title="Picture">
           <Toggle
             label="Automatic bitrate"
             hint="The host picks the rate this connection carries and follows it as that changes."
@@ -170,21 +201,13 @@ function SettingsTabs({ screen, actions }: { screen: SettingsScreen; actions: Ac
             <Slider
               label="Bitrate"
               min={2}
-              max={150}
+              max={200}
               step={1}
               value={Math.round(v.bitrateKbps / 1000)}
               formatValue={(n) => `${n} Mbps`}
               onValueChange={(n) => set({ bitrateKbps: n * 1000 })}
             />
           )}
-          <Row label="Video codec" hint="Asked for first. The host falls back to one both sides have.">
-            <Segmented
-              label="Video codec"
-              value={v.codec}
-              options={[["auto", "Automatic"], ["hevc", "HEVC"], ["av1", "AV1"], ["h264", "H.264"]]}
-              onChange={(codec) => set({ codec })}
-            />
-          </Row>
           <Toggle
             label="10-bit HDR"
             hint="Used when this browser and display can show it; otherwise the stream stays SDR."
@@ -192,16 +215,27 @@ function SettingsTabs({ screen, actions }: { screen: SettingsScreen; actions: Ac
             onChange={(on) => set({ hdr: on })}
           />
         </Group>
-        <Group title="Renderer">
-          <Row label="Video plane" hint="Automatic uses WebGPU where the browser has it.">
-            <Segmented
-              label="Video plane"
-              value={v.videoBackend}
-              options={[["auto", "Automatic"], ["webgpu", "WebGPU"], ["webgl2", "WebGL2"]]}
-              onChange={(videoBackend) => set({ videoBackend })}
-            />
-          </Row>
-        </Group>
+        {advanced(
+          ["codec", "videoBackend"],
+          <>
+            <Row label="Video codec" hint="Asked for first. The host falls back to one both sides have.">
+              <Segmented
+                label="Video codec"
+                value={v.codec}
+                options={[["auto", "Automatic"], ["hevc", "HEVC"], ["av1", "AV1"], ["h264", "H.264"]]}
+                onChange={(codec) => set({ codec })}
+              />
+            </Row>
+            <Row label="Video plane" hint="Automatic uses WebGPU where the browser has it.">
+              <Segmented
+                label="Video plane"
+                value={v.videoBackend}
+                options={[["auto", "Automatic"], ["webgpu", "WebGPU"], ["webgl2", "WebGL2"]]}
+                onChange={(videoBackend) => set({ videoBackend })}
+              />
+            </Row>
+          </>,
+        )}
       </TabsContent>
 
       <TabsContent value="Input" className="flex flex-col gap-5">
@@ -275,11 +309,123 @@ function SettingsTabs({ screen, actions }: { screen: SettingsScreen; actions: Ac
   );
 }
 
+/**
+ * Aspect ratio over Resolution: the window, the family's sizes, then Custom…, which shows the
+ * typed width and height. A size no family lists reads as Custom, whatever was picked.
+ */
+function Resolution({ v, set }: { v: Settings; set: SetFn }): JSX.Element {
+  // Sticky once picked, so a typed size that equals a listed one stays on Custom.
+  const [customPicked, setCustomPicked] = useState(false);
+  const family = Math.max(0, aspectOf(v.width, v.height));
+  const sizes = ASPECTS[family]?.sizes ?? [];
+  const listed = v.width === 0 || sizes.some(([w, h]) => w === v.width && h === v.height);
+  const custom = v.width !== 0 && (customPicked || !listed);
+  const typed = (w: number, h: number) => {
+    const [cw, ch] = customSize(w, h, v.codec);
+    set({ width: cw, height: ch });
+  };
+  return (
+    <>
+      <Row label="Aspect ratio" hint="Which shapes the Resolution list offers.">
+        <Segmented
+          label="Aspect ratio"
+          value={String(family)}
+          options={ASPECTS.map((a, i) => [String(i), a.label] as const)}
+          onChange={(i) => {
+            setCustomPicked(false);
+            const [w, h] = nearest(Number(i), v.height);
+            set({ width: w, height: h });
+          }}
+        />
+      </Row>
+      <Row label="Resolution" hint="The host makes a display exactly this size — no scaling." htmlFor="pf-size">
+        <Select
+          value={custom ? CUSTOM : `${v.width}x${v.height}`}
+          onValueChange={(value) => {
+            if (value === CUSTOM) {
+              setCustomPicked(true);
+              if (v.width === 0) set({ width: 1920, height: 1080 });
+              return;
+            }
+            setCustomPicked(false);
+            const [w, h] = value.split("x").map(Number);
+            set({ width: w ?? 0, height: h ?? 0 });
+          }}
+        >
+          <SelectTrigger id="pf-size"><SelectValue /></SelectTrigger>
+          <SelectContent>
+            <SelectItem value="0x0">Follow the window</SelectItem>
+            {sizes.map(([w, h]) => <SelectItem key={`${w}x${h}`} value={`${w}x${h}`}>{w} × {h}</SelectItem>)}
+            <SelectItem value={CUSTOM}>{custom ? `Custom (${v.width} × ${v.height})` : "Custom…"}</SelectItem>
+          </SelectContent>
+        </Select>
+      </Row>
+      {custom && (
+        <Row label="Custom size" hint="Width × height in pixels. Applied when a field loses focus.">
+          <div className="flex items-center gap-2">
+            {/* Keyed on the stored side, so a size the rule clamped shows what was kept. */}
+            <SizeField key={`w${v.width}`} label="Width" value={v.width} onCommit={(w) => typed(w, v.height)} />
+            <span aria-hidden="true">×</span>
+            <SizeField key={`h${v.height}`} label="Height" value={v.height} onCommit={(h) => typed(v.width, h)} />
+          </div>
+        </Row>
+      )}
+    </>
+  );
+}
+
+/** One side of a typed size, committed on blur or Enter so a half-typed number is never clamped.
+ *  It then shows the stored side: a new one remounts it by key, one the rule clamped back here. */
+function SizeField({ label, value, onCommit }: { label: string; value: number; onCommit: (n: number) => void }): JSX.Element {
+  const [text, setText] = useState(String(value));
+  const commit = () => {
+    const n = Number.parseInt(text, 10);
+    if (n > 0 && n !== value) onCommit(n);
+    setText(String(value));
+  };
+  return (
+    <Input
+      aria-label={label}
+      className="w-24"
+      type="text"
+      inputMode="numeric"
+      value={text}
+      onChange={(e) => setText(e.target.value.replace(/\D/g, ""))}
+      onBlur={commit}
+      onKeyDown={(e) => { if (e.key === "Enter") commit(); }}
+    />
+  );
+}
+
+/** A tab's advanced rows: their own card under Show advanced, otherwise one button naming how
+ *  many hold a changed value, which shows them. Nothing when none changed. */
+function Advanced({
+  show,
+  changed,
+  onShow,
+  children,
+}: {
+  show: boolean;
+  changed: number;
+  onShow: () => void;
+  children: ReactNode;
+}): JSX.Element | null {
+  if (show) return <Group title="Advanced">{children}</Group>;
+  if (changed === 0) return null;
+  return (
+    <Group>
+      <Row label={changed === 1 ? "1 advanced setting changed" : `${changed} advanced settings changed`}>
+        <Button size="sm" variant="secondary" onClick={onShow}>Show</Button>
+      </Row>
+    </Group>
+  );
+}
+
 /** A card of related rows under a heading, a rule between rows. */
-function Group({ title, children }: { title: string; children: ReactNode }): JSX.Element {
+function Group({ title, children }: { title?: string; children: ReactNode }): JSX.Element {
   return (
     <section className="flex flex-col gap-2">
-      <h2 className="px-1 text-xs font-medium tracking-wide text-muted-foreground uppercase">{title}</h2>
+      {title && <h2 className="px-1 text-xs font-medium tracking-wide text-muted-foreground uppercase">{title}</h2>}
       <Card className="flex flex-col gap-4 p-5 [&>*+*]:border-t [&>*+*]:border-border [&>*+*]:pt-4">{children}</Card>
     </section>
   );

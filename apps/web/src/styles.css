@@ -202,3 +202,14 @@
     radial-gradient(50rem 36rem at 90% 110%, rgb(108 91 243 / 0.14), transparent 62%),
     var(--background);
 }
+
+/* The exit hint: six seconds on screen, the last 0.6 fading, as on every client. */
+@keyframes pf-exit-hint {
+  0%,
+  90% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+  }
+}

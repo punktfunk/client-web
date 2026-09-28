@@ -16,6 +16,13 @@
 export const STATS_TIERS = ["off", "compact", "normal", "detailed"] as const;
 export type StatsTier = (typeof STATS_TIERS)[number];
 
+/** The overlay's corner, as every client stores `hud_placement`. */
+export const HUD_CORNERS = ["topLeading", "topTrailing", "bottomLeading", "bottomTrailing"] as const;
+export type HudCorner = (typeof HUD_CORNERS)[number];
+
+/** The overlay's size in percent — `punktfunk_core::hud::STATS_SCALE_PCTS`. */
+export const STATS_SCALES = [75, 100, 125, 150, 175, 200] as const;
+
 /** Everything a person can choose. `width`/`height` of 0 mean "whatever the window is". */
 export interface Settings {
   width: number;
@@ -51,6 +58,14 @@ export interface Settings {
   invertScroll: boolean;
   /** Go fullscreen when a stream starts from a click, and back when it ends. */
   fullscreen: boolean;
+  /** Where the stats overlay sits. */
+  hudPlacement: HudCorner;
+  /** The stats overlay's size in percent, on top of the page's own. */
+  statsScalePct: number;
+  /** Say how to leave for a few seconds when a stream starts. */
+  exitHint: boolean;
+  /** Settings list their advanced rows. Hiding a row keeps its value. */
+  showAdvanced: boolean;
 }
 
 export const DEFAULTS: Settings = {
@@ -70,6 +85,10 @@ export const DEFAULTS: Settings = {
   hdr: true,
   invertScroll: false,
   fullscreen: true,
+  hudPlacement: "topTrailing",
+  statsScalePct: 100,
+  exitHint: true,
+  showAdvanced: false,
 };
 
 const KEY = "pf.settings";
@@ -127,5 +146,9 @@ function sane(s: Settings): Settings {
     hdr: s.hdr !== false,
     invertScroll: s.invertScroll === true,
     fullscreen: s.fullscreen !== false,
+    hudPlacement: HUD_CORNERS.includes(s.hudPlacement) ? s.hudPlacement : DEFAULTS.hudPlacement,
+    statsScalePct: (STATS_SCALES as readonly number[]).includes(s.statsScalePct) ? s.statsScalePct : DEFAULTS.statsScalePct,
+    exitHint: s.exitHint !== false,
+    showAdvanced: s.showAdvanced === true,
   };
 }

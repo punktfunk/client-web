@@ -15,7 +15,8 @@ export {
   type StreamOptions,
   type TunableOptions,
 } from "./engine.ts";
-export { DEFAULTS, settings, type Settings, type StatsTier } from "./settings.ts";
+export { DEFAULTS, HUD_CORNERS, type HudCorner, settings, STATS_SCALES, type Settings, type StatsTier } from "./settings.ts";
+export { ASPECTS, aspectOf, customSize, nearest } from "./resolutions.ts";
 export type { AudioSnapshot, AudioState } from "./audio.ts";
 export { Host, type HostAction, type HostInfo, type HostStatus, type LibraryEntry, VersionSkew } from "./host.ts";
 export { type GameEnd, gameEndNotice, gameEndOf, gameGone } from "./game-end.ts";

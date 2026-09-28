@@ -2,7 +2,6 @@
 //! itself is `punktfunk_core::reanchor`; this is the frame-index bookkeeping around it.
 
 use punktfunk_core::packet::RFI_MAX_RANGE;
-use punktfunk_core::reanchor::index_gap;
 
 /// What one access unit's frame index says about loss.
 #[derive(Debug, PartialEq, Eq)]
@@ -26,14 +25,16 @@ pub fn on_index(next: &mut Option<u32>, pending: &mut Option<(u32, u32)>, index:
         *next = Some(exp.wrapping_add(1));
         return Step::Deliver;
     }
-    match index_gap(exp, index) {
-        Some(gap) => {
-            let first = pending.map_or(exp, |(first, _)| first);
-            *pending = Some((first, index.wrapping_sub(1)));
-            *next = Some(index.wrapping_add(1));
-            Step::Gap(gap)
-        }
-        None => Step::Straggler,
+    // Half-space wrap, as core's own RFI tracker reads it: a jump under half the index space is
+    // a gap, the top half a straggler.
+    let ahead = index.wrapping_sub(exp);
+    if ahead < u32::MAX / 2 {
+        let first = pending.map_or(exp, |(first, _)| first);
+        *pending = Some((first, index.wrapping_sub(1)));
+        *next = Some(index.wrapping_add(1));
+        Step::Gap(ahead)
+    } else {
+        Step::Straggler
     }
 }
 

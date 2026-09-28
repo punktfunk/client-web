@@ -98,6 +98,10 @@ class App {
   private streamGame: { appId: string; title: string } | null = null;
   /** What the host said when End game was refused mid-stream, for a few seconds. */
   private streamNotice: string | undefined;
+  /** When the live stream began, while its exit hint is up; `0` once the hint is gone. */
+  private hintSince = 0;
+  private hintTimer = 0;
+  private wasStreaming = false;
   private streamNoticeTimer = 0;
   /** The origin whose running title is being polled. */
   private pollingFor: string | null = null;
@@ -237,6 +241,19 @@ class App {
       this.menuOpen = false;
       this.streamGame = null;
     }
+    // The exit hint: armed on the edge into a stream, dropped by its timer or the stream's end.
+    const streaming = s.kind === "streaming";
+    if (streaming && !this.wasStreaming && this.prefs.exitHint) {
+      this.hintSince = Date.now();
+      clearTimeout(this.hintTimer);
+      this.hintTimer = window.setTimeout(() => {
+        this.hintSince = 0;
+        this.render(this.engine.current);
+      }, EXIT_HINT_MS);
+    } else if (!streaming) {
+      this.hintSince = 0;
+    }
+    this.wasStreaming = streaming;
     if (this.settingsOpen) {
       return this.show({ kind: "settings", values: this.prefs, streaming: s.kind === "streaming" });
     }
@@ -337,6 +354,9 @@ class App {
           stats: { origin: s.origin, ...s.stats },
           diagnostics: s.stats.statsTier !== "off",
           menu: this.menuOpen,
+          corner: this.prefs.hudPlacement,
+          scale: this.prefs.statsScalePct / 100,
+          ...(this.hintSince ? { exitHint: exitHintText() } : {}),
           ...(this.streamGame ? { endGame: this.streamGame.title } : {}),
           ...(this.streamNotice ? { notice: this.streamNotice } : {}),
         });
@@ -1084,4 +1104,15 @@ try {
     head: "This browser cannot run the client",
     text: sentence(e instanceof Error ? e.message : String(e)),
   });
+}
+
+/** How long the exit hint stays up; the page's keyframes fade it out over the last tenth. */
+const EXIT_HINT_MS = 6000;
+
+/** How to leave with the input in hand: the pad chord with a controller connected, the dial's
+ *  End stream on a touchscreen, the key otherwise. */
+function exitHintText(): string {
+  if (navigator.getGamepads?.().some((g) => g?.mapping === "standard")) return "Hold L1 + R1 + Start + Select to leave";
+  if (matchMedia("(pointer: coarse)").matches) return "Menu, then End stream, to leave";
+  return "Ctrl+Alt+Shift+D to leave";
 }
