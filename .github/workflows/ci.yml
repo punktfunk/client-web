@@ -29,6 +29,15 @@ jobs:
       # The screens as Storybook renders them, without the wasm: the stories never start the
       # engine, so this proves the shell and its fixtures on every push.
       - run: npm run build-storybook -w punktfunk-web
+      # The same screens as pixels, attached to the run: every story at a desktop and a phone
+      # width, for a person to look at. Not asserted — a cascade's last frame and a font's
+      # arrival make a pixel diff flap.
+      - run: npx playwright install --with-deps chromium
+      - run: npm run screenshots -w punktfunk-web
+      - uses: actions/upload-artifact@v7
+        with:
+          name: punktfunk-web-screens
+          path: apps/web/screenshots/
 
   # The Rust half. Natively: the credential ceremony and the signature encodings, where the
   # client and the host can disagree silently. On wasm: clippy over everything else, which only

@@ -560,13 +560,16 @@ class App {
     void this.engine.connect(link.target, link.fp ? { expectFingerprint: link.fp } : {});
   }
 
-  /** A link to this host, pinned to its fingerprint when this browser has paired with it. */
+  /** A link to this host, pinned to its fingerprint when this browser has paired with it. The
+   *  clipboard gives nothing back to look at, so the interface says what happened. */
   private async copyLink(origin: string): Promise<void> {
     const fingerprint = this.engine.knownHosts().find((h) => h.origin === origin)?.fingerprint;
     try {
       await navigator.clipboard.writeText(linkFor(location.href, origin, fingerprint));
+      this.ui.notify(`Link to ${this.nameOf(origin)} copied.`);
     } catch (e) {
       console.warn("punktfunk: copy link", e);
+      this.ui.notify("Couldn't copy the link — the browser kept the clipboard.", "error");
     }
   }
 

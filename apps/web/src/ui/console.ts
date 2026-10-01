@@ -118,6 +118,12 @@ export class ConsoleUi implements Ui {
     };
   }
 
+  /** The web shell's toaster shows over the canvas too; the console has no line of its own
+   *  for something that is not a screen. */
+  notify(text: string, tone?: "error"): void {
+    this.fallback.notify(text, tone);
+  }
+
   mount(actions: Actions): void {
     this.actions = actions;
     this.fallback.mount(actions);

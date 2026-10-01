@@ -216,9 +216,11 @@ proxied to each host's management API, pinned. `Dockerfile` and `deploy/` packag
 | `src/ui/types.ts` | The `Screen` a UI renders and the `Actions` it may emit. The seam between the two interfaces. |
 | `src/ui/shell.tsx` | The web-native interface, on React: `WebShell` is one external store of `Screen`, a component per kind, one live region. The default. |
 | `src/ui/{home,sheets,library,hud,settings}.tsx` | The screens, one file per shape. `pieces.tsx` is what they share. |
+| `src/components/stagger.tsx` | The console's on-mount cadence, kept in step with its file of the same name: every page is a cascade its cards arrive in one after another, and nothing from `@unom/ui` moves until a `<Stagger root>` above it says so. |
 | `src/ui/console.ts` | The gamepad interface: `pf-console-ui` on a canvas, through `engine.console`. `?ui=console`. |
 | `src/ui/{fixtures.ts,screens.stories.tsx}` | Every `Screen` as a fixture, and the stories both harnesses render from it. |
 | `src/components/ui/*` | `@unom/ui` adapted to this app's tokens once — the management console's arrangement, and its corrections. |
+| `tools/screenshots.mjs` | Every screen as a PNG, from the Storybook build, at a desktop and a phone width. CI attaches them to each run. |
 | `src/styles.css` | Tailwind, and the brand token contract both `@unom/ui` and the shadcn vocabulary read. |
 
 `src/pf-glue.ts` is load-bearing, not a detail, and it has a constraint the others do not:
@@ -253,8 +255,10 @@ stay DOM, and the canvas takes over once a session is live. That is honest about
 shell can and cannot do, and it is why adding the second interface cost one file.
 
 The web shell is the same stack as the host's management console — **React, `@unom/ui` for every
-control, Tailwind on the shared brand tokens** — so a button here and a button there are one
-component on one palette. It carries one `aria-live` region every screen speaks through, focus
+control, Tailwind on the shared brand tokens, and the console's own motion** — so a button here
+and a button there are one component on one palette, and a page here arrives the way a page
+there does: its cards one after another, the sidebar's entries rising in turn, a press answered
+at once. It carries one `aria-live` region every screen speaks through, focus
 lands on the field each screen is about, errors are `role="alert"`, and the library grid takes
 arrow keys — a grid someone can only tab through one tile at a time is not really a grid.
 
@@ -286,12 +290,13 @@ and the SPAKE2 half runs against the host's own role B, which is the divergence 
 npm run check                            # tsc --noEmit in both packages; stripping types does not check them
 npm test                                 # node runs the .ts tests directly, no build step
 npm run storybook -w punktfunk-web       # every screen, from the fixtures, with no engine behind it
+npm run screenshots -w punktfunk-web     # after build-storybook: every screen as a PNG, desktop and phone
 cd packages/stream && cargo test         # the credential ceremony against the host's own SPAKE2 role B
 cargo clippy --target wasm32-unknown-emscripten -- -D warnings   # the Rust that only compiles for wasm
 ./scripts/pack-gate.sh                   # after a build: the packed library in an empty Vite project
 ```
 
-CI runs all of these plus the real build. `pf-connect.test.ts` checks the attestation verifier
+CI runs all of these plus the real build, and attaches every screen's PNG to the run. `pf-connect.test.ts` checks the attestation verifier
 against bytes a real host produced, because the two languages agreeing is the part that fails
 silently. The Storybook build is a gate: the stories stub the lazy wasm import, so the shell
 renders on every push without an emscripten toolchain.

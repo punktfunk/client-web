@@ -225,5 +225,8 @@ export interface Ui {
   /** Called once, before the first `render`. */
   mount(actions: Actions): void;
   render(screen: Screen): void;
+  /** A line for a moment, about something that left no trace on any screen — a link put on the
+   *  clipboard. Not a `Screen`: nothing about where the client is has changed. */
+  notify(text: string, tone?: "error"): void;
   destroy(): void;
 }
