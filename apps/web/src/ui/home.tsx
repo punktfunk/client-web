@@ -4,7 +4,9 @@
 
 import { cn } from "@unom/ui/lib/utils";
 import { LibraryBig, Link2, Monitor, MoreHorizontal, Pencil, Play, Plus, Power, Trash2 } from "lucide-react";
+import { motion } from "motion/react";
 import { type JSX, useState } from "react";
+import { GROUP, ROW_GAP, staggerProps } from "@/components/stagger";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -15,6 +17,16 @@ import { bare, ErrorLine, labelOf, status } from "./pieces.tsx";
 import type { Actions, HostCard, Screen } from "./types.ts";
 
 type HomeScreen = Extract<Screen, { kind: "home" }>;
+
+/**
+ * The console's grid: a column count per width of the LIST, never a track that fits itself to
+ * what is in it. `grid-cols-N` is `repeat(N, minmax(0, 1fr))`, so every card is exactly one
+ * share of the row and the gaps between them are the gap and nothing else — an address that
+ * does not wrap, or a card that would rather size itself, cannot push its column wider than the
+ * next one. Container queries, so the count follows the page and not the window with the
+ * sidebar still in it.
+ */
+const GRID = "m-0 grid list-none grid-cols-1 gap-card p-0 @lg:grid-cols-2 @3xl:grid-cols-3 @5xl:grid-cols-4 @7xl:grid-cols-5";
 
 export function Home({ screen, actions }: { screen: HomeScreen; actions: Actions }): JSX.Element {
   const first = screen.hosts.length === 0;
@@ -33,11 +45,15 @@ export function Home({ screen, actions }: { screen: HomeScreen; actions: Actions
           <AddHostForm screen={screen} actions={actions} />
         </Card>
       ) : (
-        <ul className="m-0 grid list-none grid-cols-[repeat(auto-fill,minmax(16rem,1fr))] gap-4 p-0">
-          {screen.hosts.map((host) => (
-            <HostTile key={host.origin} host={host} actions={actions} />
-          ))}
-        </ul>
+        <div className="@container">
+          {/* Its own cadence, tighter than the page's: a card a beat would make a wall of hosts
+              take seconds to arrive. */}
+          <motion.ul {...staggerProps(ROW_GAP)} className={GRID}>
+            {screen.hosts.map((host) => (
+              <HostTile key={host.origin} host={host} actions={actions} />
+            ))}
+          </motion.ul>
+        </div>
       )}
       {!first && (
         <Dialog open={screen.adding} onOpenChange={(open) => actions.setAdding(open)}>
@@ -84,6 +100,11 @@ function AddHostForm({ screen, actions }: { screen: HomeScreen; actions: Actions
   );
 }
 
+/**
+ * One host. The item is a pass-through group, so the card and the menu button beside it take
+ * one slot in the cascade and arrive together; `grid` with `w-full` on the card, so the card
+ * is the cell's width whatever it would rather be.
+ */
 function HostTile({ host, actions }: { host: HostCard; actions: Actions }): JSX.Element {
   const [editing, setEditing] = useState(false);
   const state = status(host);
@@ -97,8 +118,8 @@ function HostTile({ host, actions }: { host: HostCard; actions: Actions }): JSX.
       setEditing(false);
     };
     return (
-      <li className="flex">
-        <Card className="flex-1 gap-2 p-padding-card">
+      <motion.li variants={GROUP} className="grid min-w-0">
+        <Card className="w-full min-w-0 gap-2 p-padding-card">
           <Input
             autoFocus
             defaultValue={label}
@@ -111,12 +132,12 @@ function HostTile({ host, actions }: { host: HostCard; actions: Actions }): JSX.
           />
           <span className="text-xs text-muted-foreground">Enter to save, Escape to cancel</span>
         </Card>
-      </li>
+      </motion.li>
     );
   }
   return (
-    <li className="relative flex">
-      <Card asChild interactive className="flex-1 items-stretch gap-3 p-4 text-left">
+    <motion.li variants={GROUP} className="relative grid min-w-0">
+      <Card asChild interactive className="w-full min-w-0 items-stretch gap-3 p-4 text-left">
         <button
           type="button"
           disabled={host.waking}
@@ -124,7 +145,7 @@ function HostTile({ host, actions }: { host: HostCard; actions: Actions }): JSX.
           aria-label={`${asleep ? "Wake" : "Stream"} ${label}, ${state.text}`}
           title={bare(host.origin)}
         >
-          <span className="flex items-center gap-3 pr-9">
+          <span className="flex min-w-0 items-center gap-3 pr-9">
             <span
               className={cn(
                 "grid size-11 shrink-0 place-items-center rounded-[10px]",
@@ -144,7 +165,7 @@ function HostTile({ host, actions }: { host: HostCard; actions: Actions }): JSX.
               </span>
             </span>
           </span>
-          <span className="truncate font-mono text-xs text-muted-foreground/70">{host.plane ?? bare(host.origin)}</span>
+          <span className="block min-w-0 truncate font-mono text-xs text-muted-foreground/70">{host.plane ?? bare(host.origin)}</span>
         </button>
       </Card>
       <Menu>
@@ -185,6 +206,6 @@ function HostTile({ host, actions }: { host: HostCard; actions: Actions }): JSX.
           </MenuItem>
         </MenuContent>
       </Menu>
-    </li>
+    </motion.li>
   );
 }

@@ -144,7 +144,7 @@ function QuickMenu({ screen, actions }: { screen: Extract<Screen, { kind: "strea
       role="menu"
       aria-label="Quick actions"
       data-pf-keys="local"
-      className="pointer-events-auto fixed top-[calc(3.5rem+var(--pf-inset))] left-1/2 flex bg-card/95 backdrop-blur-none w-[min(22rem,calc(100vw-2*var(--pf-inset)))] -translate-x-1/2 flex-col gap-1 p-2 animate-in fade-in slide-in-from-top-2"
+      className="pointer-events-auto fixed top-[calc(3.5rem+var(--pf-inset))] left-1/2 flex bg-card/95 w-[min(22rem,calc(100vw-2*var(--pf-inset)))] -translate-x-1/2 flex-col gap-1 p-2 animate-in fade-in slide-in-from-top-2"
     >
       <Button
         role="menuitem"
@@ -228,7 +228,7 @@ function Diagnostics({ stats: s }: { stats: SessionStats }): JSX.Element {
   return (
     <Card
       aria-label="Statistics"
-      className="pointer-events-auto fixed top-[calc(3.5rem+var(--pf-inset))] right-inset bg-card/95 backdrop-blur-none max-h-[60dvh] w-[min(34rem,calc(100vw-2*var(--pf-inset)))] overflow-y-auto px-5 py-4 font-mono text-sm leading-relaxed"
+      className="pointer-events-auto fixed top-[calc(3.5rem+var(--pf-inset))] right-inset bg-card/95 max-h-[60dvh] w-[min(34rem,calc(100vw-2*var(--pf-inset)))] overflow-y-auto px-5 py-4 font-mono text-sm leading-relaxed"
     >
       {lines.map((l, i) => (
         // Lines have no identity beyond their place in the list.

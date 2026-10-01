@@ -5,7 +5,9 @@
 
 import { DEFAULTS, type Settings } from "@punktfunk/stream";
 import { cn } from "@unom/ui/lib/utils";
-import { type JSX, type ReactNode, useState } from "react";
+import { motion } from "motion/react";
+import { Children, isValidElement, type JSX, type ReactNode, useState } from "react";
+import { ROW, ROW_GAP, Stagger } from "@/components/stagger";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -88,7 +90,7 @@ function SettingsTabs({ screen, actions }: { screen: SettingsScreen; actions: Ac
         {TABS.map((t) => <TabsTrigger key={t} value={t}>{t}</TabsTrigger>)}
       </TabsList>
 
-      <TabsContent value="General" className="flex flex-col gap-5">
+      <Panel value="General">
         <Group title="Session">
           <Toggle
             label="Fullscreen while streaming"
@@ -124,9 +126,9 @@ function SettingsTabs({ screen, actions }: { screen: SettingsScreen; actions: Ac
             </Row>
           </Group>
         )}
-      </TabsContent>
+      </Panel>
 
-      <TabsContent value="Display" className="flex flex-col gap-5">
+      <Panel value="Display">
         <Group title="Resolution">
           <Row label="Resolution" htmlFor="pf-size">
             <Select
@@ -202,9 +204,9 @@ function SettingsTabs({ screen, actions }: { screen: SettingsScreen; actions: Ac
             />
           </Row>
         </Group>
-      </TabsContent>
+      </Panel>
 
-      <TabsContent value="Input" className="flex flex-col gap-5">
+      <Panel value="Input">
         <Group title="Keyboard & mouse">
           <Row
             label="Mouse input"
@@ -229,15 +231,15 @@ function SettingsTabs({ screen, actions }: { screen: SettingsScreen; actions: Ac
             onChange={(on) => set({ captureInput: on })}
           />
         </Group>
-      </TabsContent>
+      </Panel>
 
-      <TabsContent value="Audio" className="flex flex-col gap-5">
+      <Panel value="Audio">
         <Group title="Playback">
           <Toggle label="Play the host's audio" on={v.audio} onChange={(on) => set({ audio: on })} />
         </Group>
-      </TabsContent>
+      </Panel>
 
-      <TabsContent value="Controllers" className="flex flex-col gap-5">
+      <Panel value="Controllers">
         <Group title="Sticks">
           <Slider
             label="Stick deadzone"
@@ -249,9 +251,9 @@ function SettingsTabs({ screen, actions }: { screen: SettingsScreen; actions: Ac
             onValueChange={(n) => set({ deadzone: n / 100 })}
           />
         </Group>
-      </TabsContent>
+      </Panel>
 
-      <TabsContent value="About" className="flex flex-col gap-5">
+      <Panel value="About">
         <Group title="punktfunk web">
           <Row label="Version">
             <span className="font-mono text-sm text-muted-foreground">{__PF_VERSION__}</span>
@@ -270,17 +272,37 @@ function SettingsTabs({ screen, actions }: { screen: SettingsScreen; actions: Ac
             <Button size="sm" variant="secondary" onClick={() => set(DEFAULTS)}>Reset</Button>
           </Row>
         </Group>
-      </TabsContent>
+      </Panel>
     </Tabs>
   );
 }
 
-/** A card of related rows under a heading, a rule between rows. */
+/** One tab's panel. Its own cascade: a panel mounts when its tab is picked, long after the page
+ *  around it arrived, so nothing above it is still driving. */
+function Panel({ value, children }: { value: TabName; children: ReactNode }): JSX.Element {
+  return (
+    <TabsContent value={value}>
+      <Stagger root className="flex flex-col gap-5">{children}</Stagger>
+    </TabsContent>
+  );
+}
+
+/** A card of related rows under a heading, a rule between rows. The rows rise in turn behind
+ *  the card, as the console's lists do; `contents` keeps them the card's own flex items, so
+ *  its gap and the rule between them still apply. */
 function Group({ title, children }: { title: string; children: ReactNode }): JSX.Element {
   return (
     <section className="flex flex-col gap-2">
       <h2 className="px-1 text-xs font-medium tracking-wide text-muted-foreground uppercase">{title}</h2>
-      <Card className="flex flex-col gap-4 p-5 [&>*+*]:border-t [&>*+*]:border-border [&>*+*]:pt-4">{children}</Card>
+      <Card className="flex flex-col gap-4 p-5">
+        <Stagger gap={ROW_GAP} className="contents [&>*+*]:border-t [&>*+*]:border-border [&>*+*]:pt-4">
+          {Children.toArray(children).map((child, i) => (
+            <motion.div key={isValidElement(child) ? (child.key ?? i) : i} variants={ROW}>
+              {child}
+            </motion.div>
+          ))}
+        </Stagger>
+      </Card>
     </section>
   );
 }

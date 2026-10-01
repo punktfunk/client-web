@@ -216,6 +216,7 @@ proxied to each host's management API, pinned. `Dockerfile` and `deploy/` packag
 | `src/ui/types.ts` | The `Screen` a UI renders and the `Actions` it may emit. The seam between the two interfaces. |
 | `src/ui/shell.tsx` | The web-native interface, on React: `WebShell` is one external store of `Screen`, a component per kind, one live region. The default. |
 | `src/ui/{home,sheets,library,hud,settings}.tsx` | The screens, one file per shape. `pieces.tsx` is what they share. |
+| `src/components/stagger.tsx` | The console's on-mount cadence, kept in step with its file of the same name: every page is a cascade its cards arrive in one after another, and nothing from `@unom/ui` moves until a `<Stagger root>` above it says so. |
 | `src/ui/console.ts` | The gamepad interface: `pf-console-ui` on a canvas, through `engine.console`. `?ui=console`. |
 | `src/ui/{fixtures.ts,screens.stories.tsx}` | Every `Screen` as a fixture, and the stories both harnesses render from it. |
 | `src/components/ui/*` | `@unom/ui` adapted to this app's tokens once — the management console's arrangement, and its corrections. |
@@ -253,8 +254,10 @@ stay DOM, and the canvas takes over once a session is live. That is honest about
 shell can and cannot do, and it is why adding the second interface cost one file.
 
 The web shell is the same stack as the host's management console — **React, `@unom/ui` for every
-control, Tailwind on the shared brand tokens** — so a button here and a button there are one
-component on one palette. It carries one `aria-live` region every screen speaks through, focus
+control, Tailwind on the shared brand tokens, and the console's own motion** — so a button here
+and a button there are one component on one palette, and a page here arrives the way a page
+there does: its cards one after another, the sidebar's entries rising in turn, a press answered
+at once. It carries one `aria-live` region every screen speaks through, focus
 lands on the field each screen is about, errors are `role="alert"`, and the library grid takes
 arrow keys — a grid someone can only tab through one tile at a time is not really a grid.
 

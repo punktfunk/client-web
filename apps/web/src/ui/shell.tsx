@@ -17,6 +17,7 @@ import { MotionConfig } from "motion/react";
 import { type JSX, useSyncExternalStore } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import "../styles.css";
+import { Stagger } from "@/components/stagger";
 import { Frame } from "./frame.tsx";
 import { Home } from "./home.tsx";
 import { Hud } from "./hud.tsx";
@@ -105,10 +106,12 @@ export function ShellFrame({ screen, actions }: { screen: Screen; actions: Actio
         <div className="pf-aurora" aria-hidden="true" />
         <Announce screen={screen} />
         <Frame tab={tabOf(screen)} host={kind === "library" ? screen.host : undefined} actions={actions}>
-          {/* A new page fades in; the old one does not wait to fade out first. */}
-          <div key={kind} className="flex min-h-full flex-col animate-in fade-in duration-150">
+          {/* A new page fades in; the old one does not wait to fade out first. The page is the
+              root of its own cascade, as the console's `<Section>` is: the cards on it arrive
+              one after another, from the moment the page does. */}
+          <Stagger root key={kind} className="flex min-h-full flex-col animate-in fade-in duration-150">
             <Page screen={screen} actions={actions} />
-          </div>
+          </Stagger>
         </Frame>
       </div>
     </MotionConfig>
