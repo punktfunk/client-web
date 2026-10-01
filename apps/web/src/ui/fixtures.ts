@@ -60,7 +60,6 @@ export const SCREENS = {
   "home-add": { kind: "home", adding: true, hosts },
   "home-first-run": { kind: "home", hosts: [], adding: true },
   "home-error": { kind: "home", hosts: [], adding: true, error: `"nope" is not an address — try something like 192.168.1.25` },
-  "home-copied": { kind: "home", adding: false, hosts, notice: "Link to living-room-pc copied." },
   "connecting": { kind: "connecting", origin: "https://192.168.1.25:47990", phase: "reaching" },
   "starting": { kind: "connecting", origin: "https://192.168.1.25:47990", phase: "starting" },
   "accept": { kind: "accept", origin: "https://192.168.1.25:47990", url: "https://192.168.1.25:47990/api/v1/health" },

@@ -71,15 +71,7 @@ export type Screen = ScreenBody & {
 type ScreenBody =
   /** The way in. Known hosts as cards, and a field for one this browser has not seen —
    *  `adding` is what puts that field in front, and is forced on when there are no cards. */
-  | {
-      kind: "home";
-      hosts: HostCard[];
-      adding: boolean;
-      error?: string;
-      busy?: boolean;
-      /** What an action on a card just did — a link copied — for a moment. */
-      notice?: string;
-    }
+  | { kind: "home"; hosts: HostCard[]; adding: boolean; error?: string; busy?: boolean }
   /** `again`: this host was just sent here, so accepting its certificate did not help. */
   | { kind: "accept"; origin: string; url: string; again?: boolean }
   /** One spinner screen for the three waits, told apart by `phase` so the wording can differ
@@ -233,5 +225,8 @@ export interface Ui {
   /** Called once, before the first `render`. */
   mount(actions: Actions): void;
   render(screen: Screen): void;
+  /** A line for a moment, about something that left no trace on any screen — a link put on the
+   *  clipboard. Not a `Screen`: nothing about where the client is has changed. */
+  notify(text: string, tone?: "error"): void;
   destroy(): void;
 }

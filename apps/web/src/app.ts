@@ -56,9 +56,6 @@ const LIBRARY_TTL_MS = 60_000;
 /** How long the host's refusal of End game stays over the picture. */
 const STREAM_NOTICE_MS = 6_000;
 
-/** How long a card's answer — a link copied — stays on the host list. */
-const HOME_NOTICE_MS = 2_500;
-
 /** The engine's states on the way to a host. Leaving the tab they sit under cancels them. */
 const FLOWS = new Set<EngineState["kind"]>([
   "bad-address", "reaching", "blocked", "unreachable", "untrusted", "connecting", "needs-pairing",
@@ -113,9 +110,6 @@ class App {
   private statusTimer = 0;
   /** Is the add-a-host sheet open? Forced on when there is no card to click instead. */
   private adding = false;
-  /** What a card's action just did, on the host list for a moment. */
-  private homeNotice: string | undefined;
-  private homeNoticeTimer = 0;
   /** What a probe last said about each known host, and when. */
   private readonly reachCache = new Map<string, { reach: Reach; at: number }>();
   /** Hosts a wake went to that have not answered yet. */
@@ -429,7 +423,6 @@ class App {
       // Nothing to click means the field is the only way forward.
       adding: this.adding || cards.length === 0,
       ...(error ? { error } : {}),
-      ...(this.homeNotice ? { notice: this.homeNotice } : {}),
     });
     void this.probe(cards.map((h) => h.origin));
   }
@@ -568,27 +561,16 @@ class App {
   }
 
   /** A link to this host, pinned to its fingerprint when this browser has paired with it. The
-   *  clipboard gives nothing back to look at, so the list says what happened. */
+   *  clipboard gives nothing back to look at, so the interface says what happened. */
   private async copyLink(origin: string): Promise<void> {
     const fingerprint = this.engine.knownHosts().find((h) => h.origin === origin)?.fingerprint;
     try {
       await navigator.clipboard.writeText(linkFor(location.href, origin, fingerprint));
-      this.say(`Link to ${this.nameOf(origin)} copied.`);
+      this.ui.notify(`Link to ${this.nameOf(origin)} copied.`);
     } catch (e) {
       console.warn("punktfunk: copy link", e);
-      this.say("Couldn't copy the link — the browser kept the clipboard.");
+      this.ui.notify("Couldn't copy the link — the browser kept the clipboard.", "error");
     }
-  }
-
-  /** Put a line on the host list for a moment, replacing the one there. */
-  private say(text: string): void {
-    clearTimeout(this.homeNoticeTimer);
-    this.homeNotice = text;
-    this.homeNoticeTimer = window.setTimeout(() => {
-      this.homeNotice = undefined;
-      if (this.screen.kind === "home") this.home();
-    }, HOME_NOTICE_MS);
-    if (this.screen.kind === "home") this.home();
   }
 
   /**

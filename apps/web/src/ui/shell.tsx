@@ -13,6 +13,7 @@
 // `render(screen)` is one external store the tree subscribes to. The DOM follows a value, and
 // the frame loop underneath never waits on it: React commits on its own tick.
 
+import { toast, Toaster } from "@unom/ui/toast";
 import { MotionConfig } from "motion/react";
 import { type JSX, useSyncExternalStore } from "react";
 import { createRoot, type Root } from "react-dom/client";
@@ -58,6 +59,12 @@ export class WebShell implements Ui {
     for (const fn of this.listeners) fn();
   }
 
+  /** The console's toaster: a line in the corner, gone by itself. */
+  notify(text: string, tone?: "error"): void {
+    if (tone === "error") toast.error(text);
+    else toast(text);
+  }
+
   destroy(): void {
     this.root.unmount();
   }
@@ -78,7 +85,14 @@ export const noop: Actions = {
 
 function Shell({ shell }: { shell: WebShell }): JSX.Element {
   const screen = useSyncExternalStore(shell.subscribe, shell.snapshot);
-  return <ShellFrame screen={screen} actions={shell.act} />;
+  return (
+    <>
+      <ShellFrame screen={screen} actions={shell.act} />
+      {/* Outside the frame, so a toast shows over a live picture and over the gamepad console
+          alike, and never comes and goes with a page. */}
+      <Toaster />
+    </>
+  );
 }
 
 /** The whole interface for one `Screen`. Exported so Storybook draws a screen exactly as the
@@ -143,7 +157,7 @@ function Announce({ screen }: { screen: Screen }): JSX.Element {
 
 function announce(s: Screen): string {
   switch (s.kind) {
-    case "home": return s.notice ?? s.error ?? (s.busy ? "Connecting" : `${s.hosts.length} known hosts`);
+    case "home": return s.error ? s.error : s.busy ? "Connecting" : `${s.hosts.length} known hosts`;
     case "accept": return "This host's certificate must be accepted once";
     case "connecting": return `Connecting to ${s.origin}`;
     case "pair": return s.error ?? "Enter the PIN this host is showing";

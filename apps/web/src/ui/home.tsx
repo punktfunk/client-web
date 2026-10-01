@@ -66,13 +66,6 @@ export function Home({ screen, actions }: { screen: HomeScreen; actions: Actions
           </DialogContent>
         </Dialog>
       )}
-      {/* What an action on a card just did — a link copied — for a moment, above the list. The
-          live region in `shell.tsx` reads it out; this is the visible half. */}
-      {screen.notice && (
-        <div className="pointer-events-none fixed inset-x-0 bottom-24 z-10 flex justify-center px-4 animate-in fade-in slide-in-from-bottom-2 sm:bottom-8">
-          <span className="rounded-full bg-card px-4 py-2 text-sm shadow-lg ring-1 ring-accent/40">{screen.notice}</span>
-        </div>
-      )}
     </Body>
   );
 }

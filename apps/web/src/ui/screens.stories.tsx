@@ -25,7 +25,6 @@ export const Home = of(SCREENS["home"]);
 export const HomeAdd = of(SCREENS["home-add"]);
 export const HomeFirstRun = of(SCREENS["home-first-run"]);
 export const HomeError = of(SCREENS["home-error"]);
-export const HomeCopied = of(SCREENS["home-copied"]);
 export const Connecting = of(SCREENS["connecting"]);
 export const Starting = of(SCREENS["starting"]);
 export const Accept = of(SCREENS["accept"]);
