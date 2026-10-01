@@ -4,6 +4,7 @@
 import type { HudLine } from "@punktfunk/stream";
 import { cn } from "@unom/ui/lib/utils";
 import { Maximize, Menu, MousePointer2, Settings } from "lucide-react";
+import { AnimatePresence, motion } from "motion/react";
 import { type JSX, useEffect, useState } from "react";
 import { Badge, type BadgeVariant } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -13,6 +14,13 @@ import type { Actions, Screen, SessionStats } from "./types.ts";
 
 /** How long the pointer must rest before the toolbar hides. */
 const HIDE_AFTER_MS = 2600;
+
+/** What appears over the picture comes and goes the same way: a short fade, nudged from where
+ *  it sits, and out again the way it came. Objects rather than variant labels, so the card
+ *  inside is not handed an entrance of its own to play on top. Short: a stream is live under it. */
+const FADE = { duration: 0.18, ease: "easeOut" } as const;
+const DROP = { initial: { opacity: 0, y: -8 }, animate: { opacity: 1, y: 0 }, exit: { opacity: 0, y: -8 }, transition: FADE };
+const RISE = { initial: { opacity: 0, y: 8 }, animate: { opacity: 1, y: 0 }, exit: { opacity: 0, y: 8 }, transition: FADE };
 
 /** Connection quality, from what the decoder saw.
  *
@@ -46,6 +54,7 @@ export function Hud({ screen, actions }: { screen: Extract<Screen, { kind: "stre
     };
   }, []);
   const q = quality(stats);
+  const notice = screen.notice ?? stats.launchNotice ?? stats.accessNotice;
   const line = [
     stats.width ? `${stats.width}×${stats.height}` : "",
     stats.fps ? `${stats.fps} fps` : "",
@@ -99,26 +108,42 @@ export function Hud({ screen, actions }: { screen: Extract<Screen, { kind: "stre
           <span className="hidden sm:inline">Menu</span>
         </Button>
       </div>
-      {screen.menu && <QuickMenu screen={screen} actions={actions} />}
-      {screen.diagnostics && <Diagnostics stats={stats} />}
-      {/* The host's word on a launch that did not give the player their game, or on this
-          device's access changing or about to end. */}
-      {(screen.notice ?? stats.launchNotice ?? stats.accessNotice) && (
-        <div role="status" className="pointer-events-none fixed inset-x-0 bottom-[20%] flex justify-center px-inset animate-in fade-in slide-in-from-bottom-2">
-          <span className="max-w-[40rem] rounded-full bg-card/95 px-4 py-2 text-center text-sm">
-            {screen.notice ?? stats.launchNotice ?? stats.accessNotice}
-          </span>
-        </div>
-      )}
-      {/* A captured pointer has no cursor, so the way out has to be on screen. The browser
-          releases on Escape itself; this only says so. */}
-      {stats.pointerCaptured && (
-        <div className="pointer-events-none fixed inset-x-0 bottom-[12%] flex justify-center animate-in fade-in slide-in-from-bottom-2">
-          <span className="rounded-full bg-card/95 px-4 py-2 text-sm">
-            Mouse captured — press <kbd className="rounded bg-white/10 px-1.5 py-0.5 font-mono text-xs">Esc</kbd> to release
-          </span>
-        </div>
-      )}
+      <AnimatePresence>
+        {screen.menu && (
+          <motion.div
+            key="menu"
+            {...DROP}
+            className="pointer-events-auto fixed top-[calc(3.5rem+var(--pf-inset))] left-1/2 w-[min(22rem,calc(100vw-2*var(--pf-inset)))] -translate-x-1/2"
+          >
+            <QuickMenu screen={screen} actions={actions} />
+          </motion.div>
+        )}
+        {screen.diagnostics && (
+          <motion.div
+            key="statistics"
+            {...DROP}
+            className="pointer-events-auto fixed top-[calc(3.5rem+var(--pf-inset))] right-inset w-[min(34rem,calc(100vw-2*var(--pf-inset)))]"
+          >
+            <Diagnostics stats={stats} />
+          </motion.div>
+        )}
+        {/* The host's word on a launch that did not give the player their game, or on this
+            device's access changing or about to end. */}
+        {notice && (
+          <motion.div key="notice" {...RISE} role="status" className="pointer-events-none fixed inset-x-0 bottom-[20%] flex justify-center px-inset">
+            <span className="max-w-[40rem] rounded-full bg-card/95 px-4 py-2 text-center text-sm">{notice}</span>
+          </motion.div>
+        )}
+        {/* A captured pointer has no cursor, so the way out has to be on screen. The browser
+            releases on Escape itself; this only says so. */}
+        {stats.pointerCaptured && (
+          <motion.div key="captured" {...RISE} className="pointer-events-none fixed inset-x-0 bottom-[12%] flex justify-center">
+            <span className="rounded-full bg-card/95 px-4 py-2 text-sm">
+              Mouse captured — press <kbd className="rounded bg-white/10 px-1.5 py-0.5 font-mono text-xs">Esc</kbd> to release
+            </span>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </>
   );
 }
@@ -144,7 +169,7 @@ function QuickMenu({ screen, actions }: { screen: Extract<Screen, { kind: "strea
       role="menu"
       aria-label="Quick actions"
       data-pf-keys="local"
-      className="pointer-events-auto fixed top-[calc(3.5rem+var(--pf-inset))] left-1/2 flex bg-card/95 w-[min(22rem,calc(100vw-2*var(--pf-inset)))] -translate-x-1/2 flex-col gap-1 p-2 animate-in fade-in slide-in-from-top-2"
+      className="flex flex-col gap-1 bg-card/95 p-2"
     >
       <Button
         role="menuitem"
@@ -228,7 +253,7 @@ function Diagnostics({ stats: s }: { stats: SessionStats }): JSX.Element {
   return (
     <Card
       aria-label="Statistics"
-      className="pointer-events-auto fixed top-[calc(3.5rem+var(--pf-inset))] right-inset bg-card/95 max-h-[60dvh] w-[min(34rem,calc(100vw-2*var(--pf-inset)))] overflow-y-auto px-5 py-4 font-mono text-sm leading-relaxed"
+      className="max-h-[60dvh] overflow-y-auto bg-card/95 px-5 py-4 font-mono text-sm leading-relaxed"
     >
       {lines.map((l, i) => (
         // Lines have no identity beyond their place in the list.
