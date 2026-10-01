@@ -143,7 +143,7 @@ function Announce({ screen }: { screen: Screen }): JSX.Element {
 
 function announce(s: Screen): string {
   switch (s.kind) {
-    case "home": return s.error ? s.error : s.busy ? "Connecting" : `${s.hosts.length} known hosts`;
+    case "home": return s.notice ?? s.error ?? (s.busy ? "Connecting" : `${s.hosts.length} known hosts`);
     case "accept": return "This host's certificate must be accepted once";
     case "connecting": return `Connecting to ${s.origin}`;
     case "pair": return s.error ?? "Enter the PIN this host is showing";
