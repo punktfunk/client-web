@@ -102,6 +102,10 @@ jobs:
           workspaces: packages/stream
       - run: npm ci
       - run: npm run build
+      # The same page as a Samsung TV package, unsigned: a set only installs a package signed
+      # for its own DUID, so each owner signs their copy (Apps2Samsung, or the CLI route on the
+      # install page), and this job needs no Tizen SDK. The wasm is the one `npm run build` made.
+      - run: npm run build:tizen -w punktfunk-web
       # The packed library, installed into an empty Vite project: the consumer's view.
       - run: ./scripts/pack-gate.sh
       - uses: actions/upload-artifact@v7
@@ -112,6 +116,12 @@ jobs:
         with:
           name: punktfunk-web
           path: apps/web/dist/
+      - uses: actions/upload-artifact@v7
+        with:
+          name: punktfunk-tizen
+          path: apps/web/punktfunk-tizen-*.wgt
+      # The `.wgt` rides the release beside the tarball; its name is what the Apps2Samsung
+      # catalog entry matches (`^punktfunk-tizen-.*\.wgt$`).
       - name: Release
         if: startsWith(github.ref, 'refs/tags/v')
         env:
@@ -119,7 +129,7 @@ jobs:
         run: |
           tarball="punktfunk-client-web-${GITHUB_REF_NAME}.tar.gz"
           tar -czf "$tarball" -C apps/web/dist .
-          gh release create "$GITHUB_REF_NAME" "$tarball" --verify-tag --generate-notes
+          gh release create "$GITHUB_REF_NAME" "$tarball" apps/web/punktfunk-tizen-*.wgt --verify-tag --generate-notes
 
   # The container: the server compiled natively on each architecture's runner, the client from the
   # build job. Pushed to git.unom.io from main (`edge`) and from v* tags (`X.Y.Z` and `latest`);
