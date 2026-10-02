@@ -143,7 +143,14 @@ fn start(opts: CreateOptions) -> anyhow::Result<App> {
     let mut context = gpu::direct_contexts::make_gl(interface, None)
         .ok_or_else(|| anyhow::anyhow!("Skia: DirectContext over WebGL2 failed"))?;
     context.set_resource_cache_limit(GPU_CACHE_BYTES);
-    let (mut opts, entry, store) = opts.into_console(Platform::Web);
+    // A packaged Samsung TV page says so at start; the kit then answers with the page's rows,
+    // a remote's glyphs, and an exit on Back at the root.
+    let platform = if opts.tizen {
+        Platform::Tizen
+    } else {
+        Platform::Web
+    };
+    let (mut opts, entry, store) = opts.into_console(platform);
     // A Vulkan compute codec: a browser has no device to run it on.
     opts.pyrowave_ok = false;
     opts.gpu_cache_bytes = GPU_CACHE_BYTES;
