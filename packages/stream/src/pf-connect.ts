@@ -107,6 +107,61 @@ export async function reachWhy(origin: string, timeoutMs = 4000): Promise<{ reac
  *  a credential behind the warning the user is there to click through. */
 export const acceptUrl = (origin: string): string => `${origin}/api/v1/health`;
 
+/**
+ * A host as a page reaches it when the management API is not on the page's own origin: the API
+ * at `api`, the plane dialled at `plane`, a URL host (an IPv6 address in brackets).
+ *
+ * Two shapes. Through the page's own server (`punktfunk-client-web-server`), `api` is the
+ * server's route for the host. With `tunnel`, `api` is the host's own https origin, which the page
+ * can never `fetch`: the plane's hash comes over plain HTTP on that port ([`bootstrapUrl`]) and
+ * every call after it rides the plane's `/mgmt` tunnel. That is a packaged page's only route.
+ */
+export interface HostTarget {
+  readonly api: string;
+  readonly plane: string;
+  readonly tunnel?: boolean;
+}
+
+/** Where a packaged page reads the plane's hash: plain HTTP on the management port, at the
+ *  plane's address. The host answers this one route in plain text and nothing else. */
+export function bootstrapUrl(api: string, plane: string): string {
+  const port = new URL(api).port || String(DEFAULT_MGMT_PORT);
+  const host = plane.includes(":") && !plane.startsWith("[") ? `[${plane}]` : plane;
+  return `http://${host}:${port}`;
+}
+
+/** What the bootstrap said: the plane, the host's own word that the plane is off, or nothing. */
+export type Bootstrap = { reach: "ok"; plane: Plane } | { reach: "no-plane" } | { reach: "unreachable" };
+
+/**
+ * The bootstrap: the plane's hash, and the only probe a packaged page has. There is no
+ * `blocked` here — nothing to accept — so a failure is the host off, the address wrong, or the
+ * host's own 404 saying its browser plane is off, which is the one answer worth its own word.
+ */
+export async function bootstrap(url: string, timeoutMs = 4000): Promise<Bootstrap> {
+  const abort = new AbortController();
+  const timer = setTimeout(() => abort.abort(), timeoutMs);
+  try {
+    const r = await fetch(`${url}/api/v1/webtransport`, { cache: "no-store", signal: abort.signal });
+    const json = r.headers.get("content-type")?.startsWith("application/json") ?? false;
+    if (r.status === 404 && json) return { reach: "no-plane" };
+    if (!r.ok || !json) return { reach: "unreachable" };
+    return { reach: "ok", plane: (await r.json()) as Plane };
+  } catch {
+    return { reach: "unreachable" };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/** [`reach`] for whatever a page connects to: a tunnel target is probed by its bootstrap, where
+ *  the plane being off reads as `blocked` — there, and not serving pages. */
+export async function reachTarget(target: string | HostTarget): Promise<Reach> {
+  if (typeof target === "string" || !target.tunnel) return reach(typeof target === "string" ? target : target.api);
+  const b = await bootstrap(bootstrapUrl(target.api, target.plane));
+  return b.reach === "ok" ? "ok" : b.reach === "no-plane" ? "blocked" : "unreachable";
+}
+
 /** What the host says about its browser plane. Everything here is public. */
 export async function fetchPlane(origin: string): Promise<Plane> {
   const r = await fetch(`${origin}/api/v1/webtransport`, { cache: "no-store" });

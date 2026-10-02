@@ -19,10 +19,13 @@ import {
   type ConsoleEvent,
   type ConsoleGame,
   type ConsoleHostRow,
+  deviceName,
   type Engine,
   gameEndNotice,
   type Host,
   type LibraryEntry,
+  packaged,
+  tizen,
 } from "@punktfunk/stream";
 import type { Actions, HostCard, Screen, Ui } from "./types.ts";
 
@@ -127,7 +130,9 @@ export class ConsoleUi implements Ui {
   mount(actions: Actions): void {
     this.actions = actions;
     this.fallback.mount(actions);
-    document.body.append(this.live, this.leave);
+    document.body.append(this.live);
+    // A packaged page has no other interface to leave for: no address bar, and a remote.
+    if (!packaged()) document.body.append(this.leave);
     this.leave.addEventListener("click", () => actions.consoleMode(false));
     window.addEventListener("keydown", this.onKey);
     for (const type of ["pointerdown", "pointermove", "pointerup", "pointercancel"]) {
@@ -177,8 +182,10 @@ export class ConsoleUi implements Ui {
       // Deferred to the first frame: the canvas is sized by then, and a console started against
       // a zero-sized canvas comes up with a broken surface.
       this.started = this.engine.console.start({
-        device_name: "Browser",
+        device_name: deviceName(),
         gpu_cache_bytes: 40 << 20,
+        // A TV: no clipboard to copy a link to, no phone sensors to offer rows for.
+        tv: tizen(),
         settings: savedSettings(),
       });
       if (!this.started) {

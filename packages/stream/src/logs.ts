@@ -4,6 +4,8 @@
 // lines of `console.*`, the wasm module's included, from the moment it is installed. Nothing
 // leaves the page until someone sends it.
 
+import { tizenInfo } from "./platform.ts";
+
 const MAX_LINES = 2000;
 /** Under the host's 1 MiB cap, with room for the header. */
 const MAX_BYTES = 900_000;
@@ -27,11 +29,14 @@ export function captureLog(): void {
   window.addEventListener("unhandledrejection", (e) => console.error("unhandled rejection:", e.reason));
 }
 
-/** What the page has logged, under the browser it ran in: what the host files as a client log. */
+/** What the page has logged, under the browser it ran in — and on a Samsung set, the set: what
+ *  the host files as a client log. */
 export function pageLog(): string {
   const body = lines.join("\n");
   const tail = body.length > MAX_BYTES ? body.slice(body.length - MAX_BYTES) : body;
-  return `punktfunk web client\nuser agent: ${navigator.userAgent}\n\n${tail}\n`;
+  const device = tizenInfo();
+  const where = typeof location === "undefined" ? "" : `\npage: ${location.protocol}//${location.host}${location.pathname}`;
+  return `punktfunk web client\nuser agent: ${navigator.userAgent}${device ? `\ndevice: ${device}` : ""}${where}\n\n${tail}\n`;
 }
 
 function text(a: unknown): string {

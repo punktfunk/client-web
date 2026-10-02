@@ -5,6 +5,8 @@ node_modules/
 /packages/stream/wasm/*.js
 /packages/stream/wasm/*.wasm
 /apps/web/dist
+/apps/web/dist-tizen
+/apps/web/*.wgt
 /apps/web/storybook-static
 /apps/web/screenshots
 /target

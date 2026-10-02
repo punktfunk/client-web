@@ -10,7 +10,11 @@
 // Behind punktfunk-client-web-server: `?api=h/<host>&plane=<host address>` reaches a host the
 // server proxies, and `?report=<url>` posts the lines to a collector the server does not serve.
 // `?idle=<s>` sits on `ready` that long first, as a person browsing the library does.
-import { Engine, type EngineState, type HostTarget } from "@punktfunk/stream";
+//
+// `?tunnel=1&host=<address>` reaches the host the way a packaged TV page does: the plane's hash
+// over plain HTTP on its management port, then every call over the plane's `/mgmt` tunnel. No
+// proxy and no certificate to accept — the one route that works from a page the host never served.
+import { Engine, type EngineState, type HostTarget, originOf } from "@punktfunk/stream";
 
 declare const __PF_TRANSPORT_HOST__: string | undefined;
 
@@ -34,9 +38,12 @@ requestAnimationFrame(tick);
 const q = new URLSearchParams(location.search);
 const PIN = q.get("pin") ?? "";
 const API = q.get("api");
-const target: string | HostTarget = API
-  ? { api: new URL(API, location.href).href.replace(/\/+$/, ""), plane: q.get("plane") ?? location.hostname }
-  : location.origin;
+const TUNNEL = q.get("tunnel") === "1";
+const target: string | HostTarget = TUNNEL
+  ? { api: originOf(q.get("host") ?? ""), plane: new URL(originOf(q.get("host") ?? "")).hostname, tunnel: true }
+  : API
+    ? { api: new URL(API, location.href).href.replace(/\/+$/, ""), plane: q.get("plane") ?? location.hostname }
+    : location.origin;
 const key = typeof target === "string" ? target : target.api;
 const SECONDS = Number(q.get("seconds") ?? "8");
 const LAUNCH = q.get("launch") ?? "";

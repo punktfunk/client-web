@@ -25,12 +25,15 @@ import { MicPipe, type MicState } from "./mic.ts";
 import { STATS_TIERS, type StatsTier } from "./settings.ts";
 import type { ConsoleEvent } from "./console-bridge.ts";
 import { HostCursor } from "./cursor.ts";
+import type { HostTarget } from "./pf-connect.ts";
+import { deviceName } from "./platform.ts";
+import { type TunnelFetch, tunnelFetch } from "./tunnel.ts";
 
 export type { AudioSnapshot, AudioState } from "./audio.ts";
 export type { MicState } from "./mic.ts";
 export type { HostInfo, HostStatus, LibraryEntry } from "./host.ts";
 export { VersionSkew } from "./host.ts";
-export { type KnownHost, type Plane, type Reach, hosts, originOf, reach } from "./pf-connect.ts";
+export { type HostTarget, type KnownHost, type Plane, type Reach, hosts, originOf, reach } from "./pf-connect.ts";
 
 /** `pf_cred_phase` and `pf_session_phase`, named. Kept beside the exports they mirror. */
 const CRED = { EMPTY: 0, READY: 1, NEEDS_SIGNATURE: 2, PAIRING: 3, PAIRED: 4, FAILED: 5 } as const;
@@ -205,16 +208,6 @@ export interface EngineOptions {
   readonly transportHost?: string;
 }
 
-/**
- * A host reached through the page's own server (`punktfunk-client-web-server`), which proxies
- * its management API: the API answers at `api`, and the browser still dials the plane at `plane`,
- * a URL host (an IPv6 address in brackets).
- */
-export interface HostTarget {
-  readonly api: string;
-  readonly plane: string;
-}
-
 export interface StreamOptions {
   width: number;
   height: number;
@@ -235,6 +228,9 @@ export class Engine {
   /** Where the plane is dialled for the current connection. */
   private planeHost: string | null = null;
   private plane: pf.Plane | null = null;
+  /** The management API over the plane, for a target that `fetch` cannot reach. Opened once the
+   *  plane is known and checked; closed with the connection. */
+  private tunnel: TunnelFetch | null = null;
   private video: VideoPipe | null = null;
   private input: InputPipe | null = null;
   private audio: AudioPipe | null = null;
@@ -374,20 +370,36 @@ export class Engine {
         : address.plane;
     this.set({ kind: "reaching", origin });
 
-    // Tell "certificate not accepted" apart from "nothing there" before saying anything: the two
-    // are the same opaque error, and only one of them has a fix a person can follow.
-    const { reach: state, said } = await pf.reachWhy(origin);
-    if (state === "unreachable") {
-      return said ? this.set({ kind: "error", origin, message: said }) : this.set({ kind: "unreachable", origin });
-    }
-    if (state === "blocked") {
-      return this.set({ kind: "blocked", origin, acceptUrl: pf.acceptUrl(origin) });
-    }
-
-    try {
-      this.plane = await pf.fetchPlane(origin);
-    } catch (e) {
-      return this.set({ kind: "error", origin, message: message(e) });
+    const tunnel = typeof address === "object" && address.tunnel === true;
+    if (tunnel) {
+      // A packaged page: the bootstrap is the reach probe and the plane in one answer. There is
+      // no certificate to accept, so `blocked` cannot happen; the host's own 404 is the one
+      // failure with a sentence of its own.
+      const b = await pf.bootstrap(pf.bootstrapUrl(origin, this.planeHost));
+      if (b.reach === "unreachable") return this.set({ kind: "unreachable", origin });
+      if (b.reach === "no-plane") {
+        return this.set({
+          kind: "error",
+          origin,
+          message: "browser streaming is off on this host. Turn it on in the host's console, under Host → Settings, then restart the host",
+        });
+      }
+      this.plane = b.plane;
+    } else {
+      // Tell "certificate not accepted" apart from "nothing there" before saying anything: the
+      // two are the same opaque error, and only one of them has a fix a person can follow.
+      const { reach: state, said } = await pf.reachWhy(origin);
+      if (state === "unreachable") {
+        return said ? this.set({ kind: "error", origin, message: said }) : this.set({ kind: "unreachable", origin });
+      }
+      if (state === "blocked") {
+        return this.set({ kind: "blocked", origin, acceptUrl: pf.acceptUrl(origin) });
+      }
+      try {
+        this.plane = await pf.fetchPlane(origin);
+      } catch (e) {
+        return this.set({ kind: "error", origin, message: message(e) });
+      }
     }
     // Pairing keeps the identity the attestation names. Without one, every pairing is lost at once.
     if (!this.plane.cert_hash_sig || !this.plane.host_cert_der) {
@@ -416,6 +428,11 @@ export class Engine {
       }
     }
     pf.hosts.remember(origin, typeof this.target === "object" && this.target ? { plane: this.target.plane } : {});
+    // Every management call from here rides the plane, pinned to the hash just verified. The
+    // tunnel is dialled by the first call, not now: the key may still say this host is unpaired.
+    if (tunnel) {
+      this.tunnel = tunnelFetch(`https://${this.planeHost}:${this.plane.port}/mgmt`, this.plane.cert_hash_sha256);
+    }
     this.set({ kind: "connecting", origin });
     // The key BEFORE the connection: the host may ask for a signature the moment the control
     // stream opens, and a key still coming out of IndexedDB would miss it.
@@ -495,7 +512,7 @@ export class Engine {
 
   /** The name this device pairs and asks for access under. */
   private get deviceName(): string {
-    return this.opts.deviceName ?? engineName();
+    return this.opts.deviceName ?? deviceName();
   }
 
   private sendPairRequest(pin: string): void {
@@ -804,6 +821,8 @@ export class Engine {
     this.mod._pf_session_reset?.();
     this.origin = null;
     this.plane = null;
+    this.tunnel?.close();
+    this.tunnel = null;
     this.host = null;
     this.pairing = false;
     this.settled = false;
@@ -867,7 +886,7 @@ export class Engine {
    * waits for it. Refused: unpaired there. Any other failure leaves streaming possible.
    */
   private checkHost(origin: string, fingerprint: string, device: NonNullable<PunktfunkModule["__pfDevice"]>): void {
-    const host = new Host(origin, fingerprint, device);
+    const host = new Host(origin, fingerprint, device, this.tunnel ?? undefined);
     this.host = host;
     void host.info().then(
       (h) => {
@@ -1175,31 +1194,3 @@ function withStr<T>(mod: PunktfunkModule, strings: string[], f: (...args: number
 
 const message = (e: unknown): string => (e instanceof Error ? e.message : String(e));
 
-/** The browser and the machine it runs on, which is what tells two devices apart in the host's
- *  list. An iPad asks for the desktop site and says `Macintosh`; its touch points give it away. */
-const engineName = (): string => {
-  const ua = navigator.userAgent;
-  const browser = ua.includes("Firefox")
-    ? "Firefox"
-    : ua.includes("Edg/")
-      ? "Edge"
-      : ua.includes("Chrome")
-        ? "Chrome"
-        : "Safari";
-  const os = /iPad/.test(ua) || (/Macintosh/.test(ua) && navigator.maxTouchPoints > 1)
-    ? "iPad"
-    : /iPhone/.test(ua)
-      ? "iPhone"
-      : /Android/.test(ua)
-        ? "Android"
-        : /CrOS/.test(ua)
-          ? "ChromeOS"
-          : /Mac/.test(ua)
-            ? "Mac"
-            : /Windows/.test(ua)
-              ? "Windows"
-              : /Linux/.test(ua)
-                ? "Linux"
-                : "";
-  return os ? `${browser} on ${os}` : browser;
-};

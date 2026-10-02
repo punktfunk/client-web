@@ -21,11 +21,13 @@ import {
   originOf,
   type LibraryEntry,
   linkFor,
+  packaged,
   type PageLink,
   pageLog,
   parseLink,
   type Reach,
   reach,
+  reachTarget,
   type Settings,
   settings,
   VersionSkew,
@@ -55,6 +57,10 @@ const LIBRARY_TTL_MS = 60_000;
 
 /** How long the host's refusal of End game stays over the picture. */
 const STREAM_NOTICE_MS = 6_000;
+
+/** A frame loop that skips this long in a packaged page means the set slept: standby freezes
+ *  the page without a `visibilitychange`, and a stream into a dark panel must end. */
+const STANDBY_GAP_MS = 5_000;
 
 /** The engine's states on the way to a host. Leaving the tab they sit under cancels them. */
 const FLOWS = new Set<EngineState["kind"]>([
@@ -217,6 +223,7 @@ class App {
     });
     this.applyPrefs();
     this.watchSize();
+    if (packaged()) this.watchSleep();
     engine.onMenu(() => {
       this.menuOpen = !this.menuOpen;
       if (this.menuOpen) void this.findStreamGame();
@@ -459,11 +466,13 @@ class App {
   }
 
   /**
-   * How to reach what a card or the address field names. A host the server lists, or one reached
-   * through it before, keeps its route; a typed IP address goes through the server when it
-   * offers that; anything else is dialled directly.
+   * How to reach what a card or the address field names. A packaged page has one way, the
+   * plane's tunnel. Otherwise a host the server lists, or one reached through it before, keeps
+   * its route; a typed IP address goes through the server when it offers that; anything else is
+   * dialled directly.
    */
   private targetOf(address: string): string | HostTarget {
+    if (packaged()) return tunnelTarget(address);
     const listed = this.configured.get(address);
     if (listed) return listed;
     const known = this.engine.knownHosts().find((h) => h.origin === address);
@@ -496,7 +505,7 @@ class App {
     try {
       await Promise.all(
         stale.map(async (origin) => {
-          this.reachCache.set(origin, { reach: await reach(origin), at: Date.now() });
+          this.reachCache.set(origin, { reach: await reachTarget(this.targetOf(origin)), at: Date.now() });
           // Redraw per answer rather than once at the end: the first host to reply should not
           // wait on the slowest, which is the one that will take the full timeout.
           this.redrawLists();
@@ -917,6 +926,29 @@ class App {
     void this.engine.connect(this.targetOf(origin));
   }
 
+  /**
+   * A packaged page is an app the set puts behind Home or into standby, and a stream into a
+   * panel nobody sees must end: the host keeps the game, and the library offers Resume. Home
+   * fires `visibilitychange`; standby fires nothing and freezes the page, so a frame loop that
+   * skips `STANDBY_GAP_MS` is read as the set having slept.
+   */
+  private watchSleep(): void {
+    const asleep = () => {
+      const s = this.engine.current;
+      if (s.kind === "streaming" || s.kind === "starting") this.engine.leave();
+    };
+    document.addEventListener("visibilitychange", () => {
+      if (document.visibilityState === "hidden") asleep();
+    });
+    let last = performance.now();
+    const tick = (now: number) => {
+      if (now - last > STANDBY_GAP_MS) asleep();
+      last = now;
+      requestAnimationFrame(tick);
+    };
+    requestAnimationFrame(tick);
+  }
+
   /** Back to a window, if this page went fullscreen for the stream that just ended. */
   private windowed(): void {
     if (!this.fullscreened) return;
@@ -993,14 +1025,25 @@ function size(canvas: HTMLCanvasElement): [number, number] {
  * Which interface to wear.
  *
  * `?ui=console` asks for the gamepad shell — the same `pf-console-ui` every other client draws,
- * which is what a TV or a controller wants. Anything else gets the web-native one on React,
- * because a browser is usually held by a mouse and a keyboard and the console cannot offer a
- * text field.
+ * which is what a TV or a controller wants, and what a packaged page is: an app on a TV, held by
+ * a remote, with no address bar to ask. Anything else gets the web-native one on React, because
+ * a browser is usually held by a mouse and a keyboard and the console cannot offer a text field.
  */
 function pickUi(engine: Engine, uiCanvas: HTMLCanvasElement): Ui {
   const shell = new WebShell(document.body);
   const wanted = new URLSearchParams(location.search).get("ui");
-  return wanted === "console" ? new ConsoleUi(engine, uiCanvas, shell) : shell;
+  return wanted === "console" || packaged() ? new ConsoleUi(engine, uiCanvas, shell) : shell;
+}
+
+/** A host as a packaged page reaches it: the API over the plane's tunnel, the plane at the
+ *  address typed. An address that is not one stays a string, so the engine says so. */
+function tunnelTarget(address: string): string | HostTarget {
+  try {
+    const api = originOf(address);
+    return { api, plane: new URL(api).hostname, tunnel: true };
+  } catch {
+    return address;
+  }
 }
 
 /** A typed IP address as the page's server reaches it (`/a/<ip:port>/`). Names stay direct: the
