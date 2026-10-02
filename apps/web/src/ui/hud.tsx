@@ -1,11 +1,11 @@
 // The overlay over a live picture. Out of the way by default — this is the screen someone came
 // for — and brought back by a pointer, a key or a tap, then hidden again.
 
-import type { HudLine } from "@punktfunk/stream";
+import { type HudLine, packaged, tvBack } from "@punktfunk/stream";
 import { cn } from "@unom/ui/lib/utils";
 import { Maximize, Menu, MousePointer2, Settings } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
-import { type JSX, useEffect, useState } from "react";
+import { type JSX, type KeyboardEvent as ReactKeyboardEvent, useEffect, useState } from "react";
 import { Badge, type BadgeVariant } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -152,17 +152,33 @@ export function Hud({ screen, actions }: { screen: Extract<Screen, { kind: "stre
  * The quick actions every client offers mid-stream, named and ordered as the native dial has them
  * (`overlay_actions.rs`). End stream and End game ask twice, as there.
  * `data-pf-keys` keeps the menu's keys on the page rather than the host.
+ *
+ * By remote: Back opened it and Back closes it, the arrows move between the rows, Enter picks.
+ * On a TV the row focused first is Disconnect, which keeps the game: a Back-then-Enter by
+ * reflex must not end what someone is playing.
  */
 function QuickMenu({ screen, actions }: { screen: Extract<Screen, { kind: "streaming" }>; actions: Actions }): JSX.Element {
   const [armed, setArmed] = useState(false);
   const [endArmed, setEndArmed] = useState(false);
+  const tv = packaged();
   useEffect(() => {
     const close = (e: KeyboardEvent) => {
-      if (e.key === "Escape") actions.openMenu(false);
+      if (e.key === "Escape" || tvBack(e)) {
+        e.preventDefault();
+        actions.openMenu(false);
+      }
     };
     window.addEventListener("keydown", close);
     return () => window.removeEventListener("keydown", close);
   }, [actions]);
+  const rows = (e: ReactKeyboardEvent<HTMLElement>) => {
+    const step = e.key === "ArrowDown" ? 1 : e.key === "ArrowUp" ? -1 : 0;
+    if (!step) return;
+    e.preventDefault();
+    const items = [...e.currentTarget.querySelectorAll<HTMLElement>("[role=menuitem]:not([disabled])")];
+    const at = items.indexOf(document.activeElement as HTMLElement);
+    items[(at + step + items.length) % items.length]?.focus();
+  };
   const item = "w-full justify-start";
   return (
     <Card
@@ -170,10 +186,11 @@ function QuickMenu({ screen, actions }: { screen: Extract<Screen, { kind: "strea
       aria-label="Quick actions"
       data-pf-keys="local"
       className="flex flex-col gap-1 bg-card/95 p-2"
+      onKeyDown={rows}
     >
       <Button
         role="menuitem"
-        autoFocus
+        autoFocus={!tv}
         variant={armed ? "destructive" : "ghost"}
         className={item}
         onClick={() => (armed ? actions.disconnect(true) : setArmed(true))}
@@ -191,7 +208,7 @@ function QuickMenu({ screen, actions }: { screen: Extract<Screen, { kind: "strea
           {endArmed ? "End game? Press again" : "End game"}
         </Button>
       )}
-      <Button role="menuitem" variant="ghost" className={item} onClick={() => actions.disconnect(false)}>
+      <Button role="menuitem" autoFocus={tv} variant="ghost" className={item} onClick={() => actions.disconnect(false)}>
         Disconnect, keep the game running
       </Button>
       <Button role="menuitem" variant="ghost" className={item} onClick={() => actions.cycleStats()}>
@@ -215,7 +232,7 @@ function QuickMenu({ screen, actions }: { screen: Extract<Screen, { kind: "strea
         {screen.stats.pointerCaptured ? "Release mouse" : "Capture mouse"}
       </Button>
       <p className="px-3 pt-1 pb-0.5 text-xs text-muted-foreground">
-        Ctrl+Alt+Shift+O, or Back+A on a controller
+        {tv ? "Back on the remote, or Back+A on a controller" : "Ctrl+Alt+Shift+O, or Back+A on a controller"}
       </p>
     </Card>
   );

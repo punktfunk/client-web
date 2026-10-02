@@ -21,11 +21,13 @@ import {
   type ConsoleHostRow,
   deviceName,
   type Engine,
+  exitApp,
   gameEndNotice,
   type Host,
   type LibraryEntry,
   packaged,
   tizen,
+  tvBack,
 } from "@punktfunk/stream";
 import type { Actions, HostCard, Screen, Ui } from "./types.ts";
 
@@ -93,6 +95,12 @@ export class ConsoleUi implements Ui {
   private waking: { key: string; origin: string; name: string; then: boolean; since: number; timer: number } | null = null;
   private readonly live: HTMLElement;
   private readonly leave: HTMLButtonElement;
+  /** The set's own keyboard, for the fields the console opens: an offscreen input that the IME
+   *  types into, whose text is fed to the console. Only on a TV; elsewhere the console draws
+   *  its own tray. */
+  private readonly ime: HTMLInputElement | null;
+  /** What the IME field last held, so an `input` event is read as the characters that changed. */
+  private imeText = "";
   private readonly onKey: (e: KeyboardEvent) => void;
   private readonly onPointer: (e: PointerEvent) => void;
   private readonly onWheel: (e: WheelEvent) => void;
@@ -112,6 +120,7 @@ export class ConsoleUi implements Ui {
       className:
         "fixed right-4 bottom-4 z-3 rounded-full border border-border bg-card/80 px-3 py-1.5 text-xs text-muted-foreground opacity-40 backdrop-blur transition-opacity hover:opacity-100 focus-visible:opacity-100",
     });
+    this.ime = tizen() ? imeField() : null;
     this.onKey = (e) => this.key(e);
     this.onPointer = (e) => this.pointer(e);
     this.onWheel = (e) => {
@@ -133,6 +142,11 @@ export class ConsoleUi implements Ui {
     document.body.append(this.live);
     // A packaged page has no other interface to leave for: no address bar, and a remote.
     if (!packaged()) document.body.append(this.leave);
+    if (this.ime) {
+      document.body.append(this.ime);
+      this.ime.addEventListener("input", () => this.imeInput());
+      this.ime.addEventListener("keydown", (e) => this.imeKey(e));
+    }
     this.leave.addEventListener("click", () => actions.consoleMode(false));
     window.addEventListener("keydown", this.onKey);
     for (const type of ["pointerdown", "pointermove", "pointerup", "pointercancel"]) {
@@ -166,6 +180,7 @@ export class ConsoleUi implements Ui {
     window.removeEventListener("keydown", this.onKey);
     this.live.remove();
     this.leave.remove();
+    this.ime?.remove();
     this.fallback.destroy();
   }
 
@@ -184,8 +199,12 @@ export class ConsoleUi implements Ui {
       this.started = this.engine.console.start({
         device_name: deviceName(),
         gpu_cache_bytes: 40 << 20,
-        // A TV: no clipboard to copy a link to, no phone sensors to offer rows for.
+        // A TV: no clipboard to copy a link to, no phone sensors to offer rows for. Its own
+        // keyboard types into the console's fields, so the console draws no tray of its own.
         tv: tizen(),
+        system_keyboard: tizen(),
+        // The console kit's Tizen platform: the page's rows, a remote's glyphs, and an exit.
+        tizen: tizen(),
         settings: savedSettings(),
       });
       if (!this.started) {
@@ -223,6 +242,8 @@ export class ConsoleUi implements Ui {
   // --- input ----------------------------------------------------------------------------------
   private key(e: KeyboardEvent): void {
     if (!this.showing() || e.ctrlKey || e.metaKey || e.altKey) return;
+    // The set's keyboard has the field: its keys are its own (`imeKey`), not the console's.
+    if (this.ime && document.activeElement === this.ime) return;
     if (this.state & CONSOLE_STATE.EDITING && e.key.length === 1) {
       e.preventDefault();
       this.engine.console.text(e.key);
@@ -232,6 +253,52 @@ export class ConsoleUi implements Ui {
     if (key === undefined) return;
     e.preventDefault();
     this.engine.console.key(key, e.shiftKey, e.repeat);
+  }
+
+  /**
+   * The console opened a field. On a TV the set's keyboard takes it: the offscreen input gets
+   * the field's text and focus, which opens the on-screen keyboard, and what is typed there
+   * reaches the console through `imeInput`. Closed, the input lets go.
+   */
+  private editField(field: { text: string; digits: boolean } | null): void {
+    if (!this.ime) return;
+    if (!field) {
+      this.imeText = "";
+      this.ime.value = "";
+      this.ime.blur();
+      return;
+    }
+    this.imeText = field.text;
+    this.ime.value = field.text;
+    // A PIN or a port wants the number pad; an address wants the dot beside the digits.
+    this.ime.inputMode = field.digits ? "numeric" : "decimal";
+    this.ime.focus();
+    this.ime.setSelectionRange(field.text.length, field.text.length);
+  }
+
+  /** The IME changed the field: the console hears the characters that went, then those that
+   *  came. It edits at the caret's end, which is where a remote's keyboard types. */
+  private imeInput(): void {
+    if (!this.ime) return;
+    const next = this.ime.value;
+    const was = this.imeText;
+    let common = 0;
+    while (common < was.length && common < next.length && was[common] === next[common]) common++;
+    for (let i = common; i < was.length; i++) this.engine.console.key(KEYS["Backspace"]!, false, false);
+    if (next.length > common) this.engine.console.text(next.slice(common));
+    this.imeText = next;
+  }
+
+  /** The keys the set's keyboard sends the field itself: Done (`Select`) and Enter confirm,
+   *  Back leaves the field. Everything else is the keyboard's own. */
+  private imeKey(e: KeyboardEvent): void {
+    if (e.key === "Select" || e.key === "Enter") {
+      e.preventDefault();
+      this.engine.console.key(KEYS["Enter"]!, false, false);
+    } else if (tvBack(e)) {
+      e.preventDefault();
+      this.engine.console.key(KEYS["Escape"]!, false, false);
+    }
   }
 
   private at(e: MouseEvent): [number, number] {
@@ -443,6 +510,11 @@ export class ConsoleUi implements Ui {
       this.live.textContent = e.announce;
       return;
     }
+    if ("edit_text" in e) return this.editField(e.edit_text);
+    if ("editing" in e) {
+      if (!e.editing) this.editField(null);
+      return;
+    }
     if ("settings" in e) {
       try {
         localStorage.setItem(SETTINGS_KEY, JSON.stringify(e.settings));
@@ -454,6 +526,11 @@ export class ConsoleUi implements Ui {
   }
 
   private action(a: ConsoleAction): void {
+    // Back at the console's root, on a platform that can quit: the exit prompt said yes.
+    if (a === "Quit") {
+      if (!exitApp()) console.warn("punktfunk: the console asked to quit, and this page cannot");
+      return;
+    }
     if (a === "CancelConnect") {
       this.pendingPlay = null;
       this.pendingPin = null;
@@ -616,6 +693,19 @@ export class ConsoleUi implements Ui {
     for (const [k, o] of this.origins) if (k.startsWith(`${addr}:`)) return o;
     return this.hosts.find((h) => (h.plane ?? new URL(h.origin).hostname) === addr)?.origin;
   }
+}
+
+/** The input the set's keyboard types into. Off screen and out of the tab order, but a real
+ *  field: Samsung's runtime opens its on-screen keyboard for a focused one and nothing else. */
+function imeField(): HTMLInputElement {
+  const input = document.createElement("input");
+  input.type = "text";
+  input.inputMode = "decimal";
+  input.autocomplete = "off";
+  input.tabIndex = -1;
+  input.setAttribute("aria-hidden", "true");
+  input.style.cssText = "position:fixed;left:-100px;top:0;width:1px;height:1px;opacity:0";
+  return input;
 }
 
 /** A library entry as the console's shelf draws it. */
