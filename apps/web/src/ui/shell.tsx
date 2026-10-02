@@ -13,6 +13,7 @@
 // `render(screen)` is one external store the tree subscribes to. The DOM follows a value, and
 // the frame loop underneath never waits on it: React commits on its own tick.
 
+import { packaged } from "@punktfunk/stream";
 import { toast, Toaster } from "@unom/ui/toast";
 import { MotionConfig } from "motion/react";
 import { type JSX, useSyncExternalStore } from "react";
@@ -24,6 +25,7 @@ import { Home } from "./home.tsx";
 import { Hud } from "./hud.tsx";
 import { Library } from "./library.tsx";
 import { SettingsDialog, SettingsPage } from "./settings.tsx";
+import { installRemote } from "./remote.ts";
 import { Accept, Connecting, ErrorCard, LinkSheet, Pair, Trust, Waiting } from "./sheets.tsx";
 import { type Actions, type Screen, tabOf, type Ui } from "./types.ts";
 
@@ -32,12 +34,16 @@ export class WebShell implements Ui {
   private actions: Actions = noop;
   private readonly listeners = new Set<() => void>();
   private readonly root: Root;
+  private readonly remote: (() => void) | null;
 
   constructor(container: HTMLElement) {
     const el = document.createElement("div");
     container.append(el);
     this.root = createRoot(el);
     this.root.render(<Shell shell={this} />);
+    // On a TV the sheets this shell still draws — trust, the stream's menu — are driven by a
+    // remote: arrows between the buttons, Enter, and Back as the sheet's own way back.
+    this.remote = packaged() ? installRemote(() => this.screen, () => this.actions) : null;
   }
 
   /** `useSyncExternalStore`'s two halves. Arrow properties, so they can be passed bare. */
@@ -66,6 +72,7 @@ export class WebShell implements Ui {
   }
 
   destroy(): void {
+    this.remote?.();
     this.root.unmount();
   }
 }
