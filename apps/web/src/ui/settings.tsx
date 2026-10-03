@@ -3,7 +3,7 @@
 // rows are grouped in cards as the host console groups its own: label and hint on the left, the
 // control on the right, and a choice of four or fewer as buttons side by side.
 
-import { DEFAULTS, type Settings } from "@punktfunk/stream";
+import { DEFAULTS, type Settings, tizen } from "@punktfunk/stream";
 import { cn } from "@unom/ui/lib/utils";
 import { motion } from "motion/react";
 import { Children, isValidElement, type JSX, type ReactNode, useState } from "react";
@@ -41,6 +41,22 @@ type TabName = (typeof TABS)[number];
 
 /** The tab last open, for the next time settings open this visit. */
 let lastTab: TabName = "General";
+
+/** What the page binds while streaming, as `pf_client_core::shortcuts` lists it for the console:
+ *  `input.ts` holds the bindings. The Samsung set adds the remote's Back, and has no Esc row
+ *  because Esc still reaches the host there. */
+const CONTROLS: ReadonlyArray<readonly [keys: string, text: string]> = [
+  ["Ctrl+Alt+Shift+Q", "Release the mouse, or capture it again"],
+  ["Esc", "Release the mouse, where the page captured it"],
+  ["Ctrl+Alt+Shift+D", "Disconnect"],
+  ["Ctrl+Alt+Shift+S", "Cycle the statistics overlay"],
+  ["Ctrl+Alt+Shift+O", "Open the quick actions menu"],
+  ["Ctrl+Alt+Shift+V", "Mute or unmute the microphone"],
+  ["Ctrl+Alt+Shift+M", "Switch the mouse mode"],
+  ["F11 or Alt+Enter", "Toggle fullscreen"],
+  ["Select + A", "Open the quick actions menu (controller)"],
+  ["L1 + R1 + Start + Select", "Release input; hold to disconnect (controller)"],
+];
 
 /** Set by `vite.config.ts` from `git describe`. */
 declare const __PF_VERSION__: string;
@@ -254,6 +270,15 @@ function SettingsTabs({ screen, actions }: { screen: SettingsScreen; actions: Ac
       </Panel>
 
       <Panel value="About">
+        <Group title="Stream controls">
+          {(tizen() ? [["Back", "Open the quick actions menu"] as const, ...CONTROLS.filter(([k]) => k !== "Esc")] : CONTROLS).map(
+            ([keys, text]) => (
+              <Row key={keys} label={text}>
+                <kbd className="rounded bg-muted px-1.5 py-0.5 font-mono text-xs">{keys}</kbd>
+              </Row>
+            ),
+          )}
+        </Group>
         <Group title="punktfunk web">
           <Row label="Version">
             <span className="font-mono text-sm text-muted-foreground">{__PF_VERSION__}</span>
