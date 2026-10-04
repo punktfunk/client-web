@@ -43,8 +43,6 @@ mod input;
 #[cfg_attr(not(target_family = "wasm"), allow(dead_code))]
 mod keyframe;
 #[cfg_attr(not(target_family = "wasm"), allow(dead_code))]
-mod launch;
-#[cfg_attr(not(target_family = "wasm"), allow(dead_code))]
 mod recovery;
 #[cfg_attr(not(target_family = "wasm"), allow(dead_code))]
 mod rumble;

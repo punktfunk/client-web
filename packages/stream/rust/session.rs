@@ -6,9 +6,9 @@
 //! socket. Nothing here reimplements the protocol.
 //!
 //! What is new is the control plane's carrier. The native client runs the handshake on a quinn
-//! stream; a browser has a WebTransport stream, so the bytes are the same and the I/O is not.
-//! JavaScript owns the stream, Rust owns the codec: [`pf_ctl_recv`] takes what arrived and
-//! `pf_wt_ctl_send` hands back what to write.
+//! stream; a browser has a WebTransport stream on the host's `/pf2` path, so the `punktfunk/2`
+//! frames are the same and the I/O is not. JavaScript owns the stream, Rust owns the codec:
+//! [`pf_ctl_recv`] takes what arrived and `pf_wt_ctl_send` hands back what to write.
 //!
 //! R3 holds throughout. An access unit leaves as a `(ptr, len)` view for `VideoDecoder`; no
 //! decoded pixel ever enters this heap.
@@ -17,13 +17,18 @@ use crate::credential;
 use crate::recovery::{self, Ask, Step};
 use crate::transport::WebTransportDatagrams;
 use punktfunk_core::config::{CompositorPref, GamepadPref, Mode, Role};
+use punktfunk_core::error::PunktfunkError;
 use punktfunk_core::hud::{self, StatsSnapshot, StatsVerbosity};
+use punktfunk_core::quic::v2::field::split_frame;
+use punktfunk_core::quic::v2::hello::{ClientHello, Ready, ServerHello};
+use punktfunk_core::quic::v2::msg::V2Message;
+use punktfunk_core::quic::v2::registry as reg;
 use punktfunk_core::quic::{
-    AccessUpdate, AuthChallenge, CursorRenderMode, CursorShape, Hello, PairChallenge, PairResult,
-    Reconfigure, Reconfigured, Refused, RequestKeyframe, RfiRequest, Start, Welcome, MAGIC,
+    AccessUpdate, AuthChallenge, CursorRenderMode, CursorShape, Hello, LaunchOutcome,
+    PairChallenge, PairResult, Reconfigure, Reconfigured, Refused, RequestKeyframe, RfiRequest,
 };
 use punktfunk_core::reanchor::{GateVerdict, ReanchorGate};
-use punktfunk_core::session::Session;
+use punktfunk_core::session::{MediaV2, Session};
 use std::cell::RefCell;
 use std::collections::VecDeque;
 use std::sync::{atomic::AtomicI64, Arc};
@@ -41,8 +46,8 @@ const RECEIPTS: usize = 256;
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Phase {
     Idle,
-    /// `Hello` written, waiting for the host's `Welcome` — or, on a host that requires pairing,
-    /// for the `AuthChallenge` it sends first.
+    /// `ClientHello` written, waiting for the host's `ServerHello` — or, on a host that requires
+    /// pairing, for the `AuthChallenge` it sends first.
     Offered,
     /// Streaming: `Session` is up and `poll_frame` yields access units.
     Live,
@@ -51,7 +56,7 @@ enum Phase {
 
 struct Client {
     phase: Phase,
-    /// Control-stream bytes JavaScript has delivered but that do not yet form a whole message.
+    /// Control-stream bytes JavaScript has delivered but that do not yet form a whole frame.
     inbox: Vec<u8>,
     /// Boxed: `Session` carries the reassembly and replay state inline and is far larger
     /// than emscripten's default stack. Constructing a `Client` that embedded one by value
@@ -216,16 +221,13 @@ pub extern "C" fn pf_session_reconfigure(width: u32, height: u32, fps: u32) {
         if c.phase != Phase::Live || (c.width == width && c.height == height) {
             return;
         }
-        write_msg(
-            &Reconfigure {
-                mode: punktfunk_core::config::Mode {
-                    width,
-                    height,
-                    refresh_hz: fps,
-                },
-            }
-            .encode(),
-        );
+        send(&Reconfigure {
+            mode: punktfunk_core::config::Mode {
+                width,
+                height,
+                refresh_hz: fps,
+            },
+        });
     });
 }
 
@@ -251,12 +253,9 @@ pub extern "C" fn pf_cursor_render(client_draws: u32) {
     CLIENT.with(|c| {
         let c = c.borrow();
         if c.phase == Phase::Live && c.host_caps & punktfunk_core::quic::HOST_CAP_CURSOR != 0 {
-            write_msg(
-                &CursorRenderMode {
-                    client_draws: client_draws != 0,
-                }
-                .encode(),
-            );
+            send(&CursorRenderMode {
+                client_draws: client_draws != 0,
+            });
         }
     });
 }
@@ -309,12 +308,12 @@ pub extern "C" fn pf_session_codecs(mask: u32, hdr: u32, preferred: u32) {
 }
 
 unsafe extern "C" {
-    /// Write one length-prefixed control message to the WebTransport stream.
+    /// Write control-stream bytes to the WebTransport stream.
     fn pf_wt_ctl_send(ptr: *const u8, len: u32);
     /// Hand one access unit to the page for `VideoDecoder`. Borrowed for the call only — the
     /// page copies what it needs before returning, and no pixel comes back.
     fn pf_video_au(ptr: *const u8, len: u32, pts_us: f64, key: i32, flags: u32);
-    /// The negotiated format, once `Welcome` has been read.
+    /// The negotiated format, once `ServerHello` has been read.
     fn pf_video_config(codec: u32, width: u32, height: u32, depth: u32, hdr: u32);
     /// The host said why it is closing. `reason` is UTF-8, borrowed for the call.
     fn pf_refused(code: u32, reason: *const u8, len: u32);
@@ -333,35 +332,33 @@ unsafe extern "C" {
     );
 }
 
-/// Frame the way the control plane does everywhere else: `u16` length, then the payload.
-pub(crate) fn write_msg(body: &[u8]) {
-    let mut framed = Vec::with_capacity(body.len() + 2);
-    framed.extend_from_slice(&(body.len() as u16).to_le_bytes());
-    framed.extend_from_slice(body);
+/// Write one whole frame (`type ‖ len ‖ body`) to the control stream.
+pub(crate) fn send_frame(frame: &[u8]) {
     // SAFETY: `pf_wt_ctl_send` copies `len` bytes out of `ptr` before returning; the buffer
     // outlives the call and nothing is written through the pointer.
-    unsafe { pf_wt_ctl_send(framed.as_ptr(), framed.len() as u32) };
+    unsafe { pf_wt_ctl_send(frame.as_ptr(), frame.len() as u32) };
 }
 
-/// Pull one complete message out of the inbox, if there is one.
-fn take_msg(inbox: &mut Vec<u8>) -> Option<Vec<u8>> {
-    if inbox.len() < 2 {
-        return None;
-    }
-    let len = u16::from_le_bytes([inbox[0], inbox[1]]) as usize;
-    if inbox.len() < 2 + len {
-        return None;
-    }
-    let body = inbox[2..2 + len].to_vec();
-    inbox.drain(..2 + len);
-    Some(body)
+pub(crate) fn send<M: V2Message>(msg: &M) {
+    send_frame(&msg.encode_v2());
+}
+
+/// Pull one whole frame out of the inbox, if there is one. `Err` for a frame over its type's
+/// bound: the stream cannot be read past it.
+fn take_frame(inbox: &mut Vec<u8>) -> Result<Option<(u64, Vec<u8>)>, PunktfunkError> {
+    let Some((ty, body, used)) = split_frame(inbox, reg::max_body)? else {
+        return Ok(None);
+    };
+    let body = body.to_vec();
+    inbox.drain(..used);
+    Ok(Some((ty, body)))
 }
 
 /// Open the session: offer a stream of `width` × `height` at `fps`, optionally launching a title.
 ///
 /// Called once the page's control stream is up. The browser always speaks first — a stream it
-/// opened does not reach the host until it writes on it — so `Hello` goes out here even against
-/// a host that will demand a credential. Everything after arrives through [`pf_ctl_recv`].
+/// opened does not reach the host until it writes on it — so `ClientHello` goes out here even
+/// against a host that will demand a credential. Everything after arrives through [`pf_ctl_recv`].
 ///
 /// `launch` is a library id (`OperatorGameEntry::id`) or null: the host resolves it to a command
 /// on the real-display source and streams the desktop otherwise. `name` is this device's name.
@@ -402,11 +399,8 @@ pub unsafe extern "C" fn pf_session_hello(
             // `STREAMED_AU` is deliberately absent: slice-progressive delivery hands over pieces
             // of an access unit, and `VideoDecoder` wants whole ones.
             // `HOST_TIMING`: the host's own share of each frame, which the overlay reports.
-            // `CHACHA20`: wasm has no AES instructions, and ChaCha20 runs about three times as
-            // fast in software on the thread that also draws.
             video_caps: punktfunk_core::quic::VIDEO_CAP_PROBE_SEQ
                 | punktfunk_core::quic::VIDEO_CAP_HOST_TIMING
-                | punktfunk_core::quic::VIDEO_CAP_CHACHA20
                 | if HDR.with(std::cell::Cell::get) {
                     punktfunk_core::quic::VIDEO_CAP_10BIT | punktfunk_core::quic::VIDEO_CAP_HDR
                 } else {
@@ -428,7 +422,13 @@ pub unsafe extern "C" fn pf_session_hello(
             // The video plane letterboxes a frame whose shape differs from the window.
             video_fit: punktfunk_core::video_fit::VideoFit::Fit.wire(),
         };
-        write_msg(&hello.encode());
+        // No media suites: WebTransport already encrypts, so the media arrives unsealed.
+        send(&ClientHello {
+            hello,
+            start_ext: Vec::new(),
+            resume: None,
+            suites: Vec::new(),
+        });
         c.fps = fps;
         c.phase = Phase::Offered;
         1
@@ -448,7 +448,8 @@ unsafe fn utf8_arg(ptr: *const u8, len: u32) -> Option<String> {
     std::str::from_utf8(bytes).ok().map(str::to_string)
 }
 
-/// The page has signed the host's nonce. Send the credential; the host answers with `Welcome`.
+/// The page has signed the host's nonce. Send the credential; the host answers with
+/// `ServerHello`.
 ///
 /// # Safety
 /// `sig` must point to 64 readable bytes: WebCrypto's raw `r || s` for P-256.
@@ -464,7 +465,7 @@ pub unsafe extern "C" fn pf_cred_signed(sig: *const u8, len: u32) -> i32 {
     let Some(response) = credential::auth_response(&raw) else {
         return 0;
     };
-    write_msg(&response);
+    send_frame(&response);
     1
 }
 
@@ -494,11 +495,11 @@ pub unsafe extern "C" fn pf_pair_begin(
     let Some(req) = credential::pair_begin(&pin, &name) else {
         return 0;
     };
-    write_msg(&req);
+    send_frame(&req);
     1
 }
 
-/// Control-stream bytes from the browser. Copied in, then parsed as messages complete.
+/// Control-stream bytes from the browser. Copied in, then parsed as frames complete.
 ///
 /// # Safety
 /// `ptr` must point to `len` readable bytes for the duration of the call. The page passes a view
@@ -514,47 +515,94 @@ pub unsafe extern "C" fn pf_ctl_recv(ptr: *const u8, len: u32) {
     CLIENT.with(|c| {
         let mut c = c.borrow_mut();
         c.inbox.extend_from_slice(bytes);
-        while let Some(body) = take_msg(&mut c.inbox) {
-            if c.phase == Phase::Offered && body.starts_with(MAGIC) {
-                match Welcome::decode(&body) {
-                    Ok(welcome) => on_welcome(&mut c, welcome),
-                    Err(e) => {
-                        println!("punktfunk-web: welcome rejected: {e:?}");
-                        c.phase = Phase::Failed;
-                    }
+        loop {
+            match take_frame(&mut c.inbox) {
+                Ok(Some((ty, body))) => on_frame(&mut c, ty, &body),
+                Ok(None) => break,
+                Err(e) => {
+                    println!("punktfunk-web: control stream unreadable: {e:?}");
+                    c.inbox.clear();
+                    c.phase = Phase::Failed;
+                    break;
                 }
-                continue;
             }
-            // The credential plane. Each decode checks its own magic and type byte, so trying
-            // them in turn cannot confuse one message for another.
-            if let Ok(ch) = AuthChallenge::decode(&body) {
+        }
+    });
+}
+
+/// The whole of a stream the host opened: one frame saying why it is about to close.
+///
+/// # Safety
+/// As [`pf_ctl_recv`].
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pf_uni_recv(ptr: *const u8, len: u32) {
+    if ptr.is_null() || len == 0 {
+        return;
+    }
+    // SAFETY: the caller guarantees `len` readable bytes at `ptr`; nothing is held past the call.
+    let bytes = unsafe { std::slice::from_raw_parts(ptr, len as usize) };
+    if let Ok(Some((ty, body, _))) = split_frame(bytes, reg::max_body) {
+        CLIENT.with(|c| on_frame(&mut c.borrow_mut(), ty, body));
+    }
+}
+
+/// One frame from the host. A type this page does not read is skipped.
+fn on_frame(c: &mut Client, ty: u64, body: &[u8]) {
+    match ty {
+        ServerHello::TYPE if c.phase == Phase::Offered => match ServerHello::from_body(body) {
+            Ok(server) => on_server_hello(c, server),
+            Err(e) => {
+                println!("punktfunk-web: server hello rejected: {e:?}");
+                c.phase = Phase::Failed;
+            }
+        },
+        AuthChallenge::TYPE => {
+            if let Ok(ch) = AuthChallenge::from_body(body) {
                 // The page signs and calls back into `pf_cred_signed`; nothing to send here.
                 credential::on_challenge(&ch.nonce);
-            } else if let Ok(ch) = PairChallenge::decode(&body) {
+            }
+        }
+        PairChallenge::TYPE => {
+            if let Ok(ch) = PairChallenge::from_body(body) {
                 match credential::on_pair_challenge(&ch) {
-                    Some(proof) => write_msg(&proof),
+                    Some(proof) => send_frame(&proof),
                     None => println!("punktfunk-web: pairing rejected (wrong PIN, or a MITM)"),
                 }
-            } else if let Ok(r) = PairResult::decode(&body) {
+            }
+        }
+        PairResult::TYPE => {
+            if let Ok(r) = PairResult::from_body(body) {
                 credential::on_pair_result(&r);
-            } else if let Ok(r) = Reconfigured::decode(&body) {
-                // The host switched (or refused) the mode. On accept, re-point the page's decoder
-                // at the new size; the next IDR carries matching parameter sets. On refusal the
-                // active mode is unchanged, so there is nothing to do.
+            }
+        }
+        Reconfigured::TYPE => {
+            // The host switched (or refused) the mode. On accept, re-point the page's decoder at
+            // the new size; the next IDR carries matching parameter sets. On refusal the active
+            // mode is unchanged, so there is nothing to do.
+            if let Ok(r) = Reconfigured::from_body(body) {
                 if r.accepted {
                     c.width = r.mode.width;
                     c.height = r.mode.height;
                     // SAFETY: plain integers to a JavaScript function that returns before this does.
-                    unsafe { video_config(&c) };
+                    unsafe { video_config(c) };
                 }
-            } else if let Ok(u) = AccessUpdate::decode(&body) {
+            }
+        }
+        AccessUpdate::TYPE => {
+            if let Ok(u) = AccessUpdate::from_body(body) {
                 c.grants = u.grants;
                 c.access_secs = u.remaining_secs;
                 c.access_seq = c.access_seq.wrapping_add(1);
-            } else if let Ok(r) = Refused::decode(&body) {
+            }
+        }
+        Refused::TYPE => {
+            if let Ok(r) = Refused::from_body(body) {
                 // SAFETY: the string is borrowed for a call into JavaScript that copies it.
                 unsafe { pf_refused(r.code, r.reason.as_ptr(), r.reason.len() as u32) };
-            } else if let Ok(shape) = CursorShape::decode(&body) {
+            }
+        }
+        CursorShape::TYPE => {
+            if let Ok(shape) = CursorShape::from_body(body) {
                 // SAFETY: the bitmap is borrowed for a call into JavaScript that copies it.
                 unsafe {
                     pf_cursor_shape(
@@ -567,16 +615,26 @@ pub unsafe extern "C" fn pf_ctl_recv(ptr: *const u8, len: u32) {
                         shape.rgba.len() as u32,
                     )
                 };
-            } else if let Some(text) = crate::launch::notice(&body) {
+            }
+        }
+        LaunchOutcome::TYPE => {
+            if let Some(text) = LaunchOutcome::from_body(body)
+                .ok()
+                .as_ref()
+                .and_then(LaunchOutcome::notice)
+            {
                 // SAFETY: the string is borrowed for a call into JavaScript that copies it.
                 unsafe { pf_launch_notice(text.as_ptr(), text.len() as u32) };
             }
         }
-    });
+        // `Pending` repeats while the host's console decides; the page shows its own wait.
+        _ => {}
+    }
 }
 
-/// The host accepted: build the session the `Welcome` describes and say we are starting.
-fn on_welcome(c: &mut Client, welcome: Welcome) {
+/// The host accepted: build the session the `ServerHello` describes and say we are ready.
+fn on_server_hello(c: &mut Client, server: ServerHello) {
+    let welcome = server.welcome;
     let cfg = welcome.session_config(Role::Client);
     crate::audio::reset();
     c.codec = welcome.codec;
@@ -594,13 +652,17 @@ fn on_welcome(c: &mut Client, welcome: Welcome) {
     c.gate = ReanchorGate::new(0);
     c.next_index = None;
     c.pending_rfi = None;
-    match Session::new(cfg, Box::new(WebTransportDatagrams)) {
+    // The media arrives unsealed: WebTransport already encrypts it.
+    let media = MediaV2 {
+        clock_origin_ns: server.clock_origin_ns,
+        keys: None,
+        clock: None,
+    };
+    match Session::new_v2(cfg, media, Box::new(WebTransportDatagrams)) {
         Ok(session) => {
             c.session = Some(Box::new(session));
             c.phase = Phase::Live;
-            // The browser has one connection, so there is no second plane to punch and no port
-            // to name — `Start` still marks "begin streaming".
-            write_msg(&Start { client_udp_port: 0 }.encode());
+            send(&Ready {});
             // SAFETY: plain integers to a JavaScript function that returns before this does.
             unsafe { video_config(c) };
             println!(
@@ -691,14 +753,11 @@ pub extern "C" fn pf_session_pump() -> u32 {
             if let Some(ask) = recovery::take_ask(want_keyframe, pending_rfi) {
                 *last_ask = Some(now);
                 match ask {
-                    Ask::Keyframe => write_msg(&RequestKeyframe.encode()),
-                    Ask::Rfi(first_frame, last_frame) => write_msg(
-                        &RfiRequest {
-                            first_frame,
-                            last_frame,
-                        }
-                        .encode(),
-                    ),
+                    Ask::Keyframe => send(&RequestKeyframe),
+                    Ask::Rfi(first_frame, last_frame) => send(&RfiRequest {
+                        first_frame,
+                        last_frame,
+                    }),
                 }
             }
         }
@@ -729,7 +788,7 @@ pub extern "C" fn pf_gate_no_output() {
         let now = Instant::now();
         if c.gate.on_no_output(now) && c.phase == Phase::Live {
             c.last_ask = Some(now);
-            write_msg(&RequestKeyframe.encode());
+            send(&RequestKeyframe);
         }
     });
 }
@@ -744,7 +803,7 @@ pub extern "C" fn pf_request_keyframe() {
         c.pending_rfi = None;
         if c.phase == Phase::Live {
             c.last_ask = Some(now);
-            write_msg(&RequestKeyframe.encode());
+            send(&RequestKeyframe);
         }
     });
 }
@@ -877,24 +936,53 @@ mod tests {
     use super::*;
 
     #[test]
-    fn framing_waits_for_a_whole_message() {
+    fn framing_waits_for_a_whole_frame() {
+        let frame = RequestKeyframe.encode_v2();
         let mut inbox = Vec::new();
-        assert!(take_msg(&mut inbox).is_none(), "empty");
-        inbox.extend_from_slice(&[3, 0]);
-        assert!(take_msg(&mut inbox).is_none(), "length but no body");
-        inbox.extend_from_slice(&[1, 2]);
-        assert!(take_msg(&mut inbox).is_none(), "body still short");
-        inbox.push(3);
-        assert_eq!(take_msg(&mut inbox).as_deref(), Some(&[1u8, 2, 3][..]));
-        assert!(inbox.is_empty(), "a taken message is consumed");
+        assert!(take_frame(&mut inbox).unwrap().is_none(), "empty");
+        for &b in &frame[..frame.len() - 1] {
+            inbox.push(b);
+            assert!(
+                take_frame(&mut inbox).unwrap().is_none(),
+                "a frame still short"
+            );
+        }
+        inbox.push(frame[frame.len() - 1]);
+        let (ty, _) = take_frame(&mut inbox).unwrap().unwrap();
+        assert_eq!(ty, RequestKeyframe::TYPE);
+        assert!(inbox.is_empty(), "a taken frame is consumed");
     }
 
     #[test]
-    fn two_messages_in_one_chunk_both_come_out() {
-        // A stream hands over arbitrary chunk boundaries, so several messages can arrive at once.
-        let mut inbox = vec![2, 0, 0xaa, 0xbb, 1, 0, 0xcc];
-        assert_eq!(take_msg(&mut inbox).as_deref(), Some(&[0xaa, 0xbb][..]));
-        assert_eq!(take_msg(&mut inbox).as_deref(), Some(&[0xcc][..]));
-        assert!(take_msg(&mut inbox).is_none());
+    fn two_frames_in_one_chunk_both_come_out() {
+        // A stream hands over arbitrary chunk boundaries, so several frames can arrive at once.
+        let mut inbox = RequestKeyframe.encode_v2();
+        inbox.extend(
+            RfiRequest {
+                first_frame: 4,
+                last_frame: 9,
+            }
+            .encode_v2(),
+        );
+        assert_eq!(
+            take_frame(&mut inbox).unwrap().unwrap().0,
+            RequestKeyframe::TYPE
+        );
+        let (ty, body) = take_frame(&mut inbox).unwrap().unwrap();
+        assert_eq!(ty, RfiRequest::TYPE);
+        assert_eq!(RfiRequest::from_body(&body).unwrap().last_frame, 9);
+        assert!(take_frame(&mut inbox).unwrap().is_none());
+    }
+
+    /// A length past the type's bound fails the stream before the body is held.
+    #[test]
+    fn an_oversized_frame_is_refused() {
+        let mut inbox = Vec::new();
+        punktfunk_core::quic::v2::field::put_varint(&mut inbox, reg::MSG_CURSOR_SHAPE);
+        punktfunk_core::quic::v2::field::put_varint(
+            &mut inbox,
+            reg::max_body(reg::MSG_CURSOR_SHAPE) as u64 + 1,
+        );
+        assert!(take_frame(&mut inbox).is_err());
     }
 }

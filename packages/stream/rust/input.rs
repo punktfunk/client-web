@@ -16,7 +16,8 @@ use punktfunk_core::input::{
     encode_gamepad_arrival, encode_gamepad_remove, gamepad, GamepadSnapshot, InputEvent, InputKind,
     MAX_PADS,
 };
-use punktfunk_core::quic::{InputEdge, HOST_CAP2_INPUT_EDGES, HOST_CAP_GAMEPAD_STATE};
+use punktfunk_core::quic::v2::msg::encode_input_event;
+use punktfunk_core::quic::{HOST_CAP2_INPUT_EDGES, HOST_CAP_GAMEPAD_STATE};
 use std::cell::RefCell;
 
 struct Pads {
@@ -37,7 +38,7 @@ fn send(ev: InputEvent) {
     }
     let edge = matches!(ev.kind, InputKind::KeyDown | InputKind::KeyUp);
     if edge && session::host_caps2() & HOST_CAP2_INPUT_EDGES != 0 {
-        session::write_msg(&InputEdge(ev).encode());
+        session::send_frame(&encode_input_event(&ev));
     } else {
         send_datagram(&ev.encode());
     }

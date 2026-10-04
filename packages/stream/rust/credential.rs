@@ -10,6 +10,7 @@
 //! pin to connect. Afterwards each session opens with a host nonce the page signs, bound to that
 //! same hash — see `design/web-client-implementation-plan.md` Phase 3.
 
+use punktfunk_core::quic::v2::msg::V2Message;
 use punktfunk_core::quic::{
     auth_signed_message, pake, AuthResponse, PairChallenge, PairProof, PairRequest, PairResult,
 };
@@ -183,7 +184,7 @@ pub fn on_challenge(nonce: &[u8; 32]) {
     });
 }
 
-/// The page's raw `r || s` signature over [`signing_message`], as an encoded `AuthResponse`.
+/// The page's raw `r || s` signature over [`signing_message`], as an `AuthResponse` frame.
 ///
 /// Returns `None` when nothing was waiting on a signature, so a page that calls this twice
 /// cannot put a second credential on the wire.
@@ -200,13 +201,13 @@ pub fn auth_response(raw_sig: &[u8; 64]) -> Option<Vec<u8>> {
                 device_key: c.spki.clone(),
                 signature: crate::ecdsa::raw_to_der(raw_sig),
             }
-            .encode(),
+            .encode_v2(),
         )
     })
 }
 
 /// Start pairing: SPAKE2 role A over the PIN, bound to this device key and this connection's
-/// certificate. Returns the `PairRequest` to send, or `None` without a key.
+/// certificate. Returns the `PairRequest` frame to send, or `None` without a key.
 pub fn pair_begin(pin: &str, name: &str) -> Option<Vec<u8>> {
     CRED.with(|c| {
         let mut c = c.borrow_mut();
@@ -222,12 +223,12 @@ pub fn pair_begin(pin: &str, name: &str) -> Option<Vec<u8>> {
                 spake_a,
                 device_key: c.spki.clone(),
             }
-            .encode(),
+            .encode_v2(),
         )
     })
 }
 
-/// The host's SPAKE2 message and confirmation. Returns the `PairProof` to send back.
+/// The host's SPAKE2 message and confirmation. Returns the `PairProof` frame to send back.
 ///
 /// The host's MAC is checked first and a mismatch ends this here: it means a wrong PIN or a man
 /// in the middle, and either way we must not prove our own key to whoever is on the other end.
@@ -247,7 +248,7 @@ pub fn on_pair_challenge(ch: &PairChallenge) -> Option<Vec<u8>> {
             PairProof {
                 confirm: confirms.client,
             }
-            .encode(),
+            .encode_v2(),
         )
     })
 }
@@ -263,6 +264,15 @@ pub fn on_pair_result(r: &PairResult) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The message one whole frame carries.
+    fn body<M: V2Message>(frame: &[u8]) -> M {
+        let (ty, body, _) = punktfunk_core::quic::v2::field::split_frame(frame, |_| usize::MAX)
+            .unwrap()
+            .unwrap();
+        assert_eq!(ty, M::TYPE);
+        M::from_body(body).unwrap()
+    }
 
     fn load(spki: &[u8], host_fp: [u8; 32]) {
         CRED.with(|c| {
@@ -284,7 +294,7 @@ mod tests {
         let host_fp = [0x42u8; 32];
         load(spki, host_fp);
 
-        let req = PairRequest::decode(&pair_begin("1234", "Browser").unwrap()).unwrap();
+        let req = body::<PairRequest>(&pair_begin("1234", "Browser").unwrap());
         assert_eq!(
             req.device_key, spki,
             "the host derives our identity from this"
@@ -295,14 +305,13 @@ mod tests {
         let client_fp = sha256(&req.device_key);
         let (host, spake_b) = pake::start(false, "1234", &client_fp, &host_fp);
         let hc = host.finish(&req.spake_a).unwrap();
-        let proof = PairProof::decode(
+        let proof = body::<PairProof>(
             &on_pair_challenge(&PairChallenge {
                 spake_b,
                 confirm: hc.host,
             })
             .unwrap(),
-        )
-        .unwrap();
+        );
         assert!(pake::verify(&hc.client, &proof.confirm), "host accepts us");
         on_pair_result(&PairResult { ok: true });
         assert_eq!(phase(), Cred::Paired);
@@ -313,7 +322,7 @@ mod tests {
     #[test]
     fn a_bad_host_confirmation_is_never_answered() {
         load(b"a device key", [0x42; 32]);
-        let req = PairRequest::decode(&pair_begin("1234", "Browser").unwrap()).unwrap();
+        let req = body::<PairRequest>(&pair_begin("1234", "Browser").unwrap());
         let (host, spake_b) = pake::start(false, "9999", &sha256(&req.device_key), &[0x42; 32]);
         let hc = host.finish(&req.spake_a).unwrap();
         assert!(
@@ -342,7 +351,7 @@ mod tests {
             "both sides must sign the same bytes"
         );
 
-        let sent = AuthResponse::decode(&auth_response(&[7; 64]).unwrap()).unwrap();
+        let sent = body::<AuthResponse>(&auth_response(&[7; 64]).unwrap());
         assert_eq!(sent.device_key, spki);
         assert_eq!(
             crate::ecdsa::der_to_raw(&sent.signature),

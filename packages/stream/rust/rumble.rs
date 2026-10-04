@@ -7,7 +7,7 @@
 //! polling goes quiet on its own.
 
 use punktfunk_core::input::{GamepadSnapshot, MAX_PADS};
-use punktfunk_core::quic::{decode_rumble_envelope, RUMBLE_MAGIC};
+use punktfunk_core::quic::decode_rumble_envelope;
 use punktfunk_core::rumble::{RumbleCommand, RumbleEngine};
 use std::time::Instant;
 
@@ -61,11 +61,6 @@ impl Rumble {
         }
         *self = Rumble::default();
     }
-}
-
-/// Is this datagram rumble? The ring's commit asks before publishing a slot.
-pub fn is_rumble(first: u8) -> bool {
-    first == RUMBLE_MAGIC
 }
 
 #[cfg(target_family = "wasm")]
