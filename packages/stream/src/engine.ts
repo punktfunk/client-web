@@ -851,7 +851,8 @@ export class Engine {
   /** Open the plane. Only after `onDeviceReady`: the wasm side must already hold the key's SPKI. */
   private dial(): void {
     if (!this.origin || !this.plane) return;
-    const url = `https://${this.planeHost}:${this.plane.port}/stream`;
+    // `/pf2` is the host's `punktfunk/2` session; a host older than 0.43 has no such path.
+    const url = `https://${this.planeHost}:${this.plane.port}/pf2`;
     const ok = withStr(this.mod, [url, this.plane.cert_hash_sha256], (u, _ul, h) =>
       this.mod._pf_wt_connect(u, h),
     );

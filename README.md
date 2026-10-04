@@ -12,7 +12,7 @@
 ---
 
 Point a tab at a punktfunk host and stream your desktop or a game. No install, no extension, no
-plugin: WebTransport carries the same `punktfunk/1` datagrams a native client gets, WebCodecs
+plugin: WebTransport carries the same `punktfunk/2` media a native client gets, WebCodecs
 decodes them, and the picture lands on a canvas — a decoded frame goes straight into a texture and
 never enters the wasm heap.
 

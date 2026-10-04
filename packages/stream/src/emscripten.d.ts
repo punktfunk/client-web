@@ -32,6 +32,7 @@ export interface PunktfunkModule {
   _pf_wt_close(code?: number): void;
   _pf_wt_ctl_open(): number;
   _pf_ctl_recv(ptr: number, len: number): void;
+  _pf_uni_recv(ptr: number, len: number): void;
 
   // --- the session -----------------------------------------------------------------------
   _pf_session_codecs?(mask: number, hdr: number, preferred: number): void;

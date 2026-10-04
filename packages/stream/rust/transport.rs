@@ -16,6 +16,8 @@
 //! rather than an `unsafe impl` promising something the platform cannot break anyway.
 
 use punktfunk_core::packet::MAX_DATAGRAM_BYTES;
+use punktfunk_core::quic::v2::dgram::{self, Dgram};
+use punktfunk_core::quic::v2::registry::DGRAM_MEDIA;
 use punktfunk_core::transport::Transport;
 use std::cell::RefCell;
 use std::io;
@@ -120,11 +122,10 @@ pub extern "C" fn pf_rx_claim() -> i32 {
 
 /// Publish the slot `pf_rx_claim` handed out. `len` is clamped to the slot.
 ///
-/// Everything on the flow that is not video is demuxed here, by its first byte, before the slot
-/// is published: the session pump treats every ring entry as a sealed video datagram, and an
-/// audio frame handed to it would fail to open and vanish. Audio goes to [`crate::audio`],
-/// rumble to [`crate::rumble`], host timing and the host pointer's state to [`crate::session`],
-/// and the slot is reused.
+/// Every datagram opens with its `punktfunk/2` kind. Only media is published, moved to the
+/// slot's start so the session pump reads a bare packet. Audio goes to [`crate::audio`], rumble
+/// to [`crate::rumble`], host timing and the host pointer's state to [`crate::session`], and the
+/// slot is reused for the next datagram.
 #[unsafe(no_mangle)]
 pub extern "C" fn pf_rx_commit(slot: i32, len: u32) {
     RING.with(|r| {
@@ -137,26 +138,36 @@ pub extern "C" fn pf_rx_commit(slot: i32, len: u32) {
         }
         let len = len.min(SLOT_BYTES as u32) as usize;
         let start = slot * SLOT_BYTES;
-        if len > 0 && crate::audio::is_audio(r.buf[start]) {
-            crate::audio::on_datagram(&r.buf[start..start + len]);
+        let media_at = match dgram::decode(&r.buf[start..start + len]) {
+            Some(Dgram::Media(packet)) => Some(len - packet.len()),
+            Some(Dgram::Audio(payload)) => {
+                crate::audio::on_datagram(payload);
+                None
+            }
+            Some(Dgram::HostEvent(payload)) => {
+                on_host_event(payload);
+                None
+            }
+            // Input, feedback and clock samples go the other way; a newer kind is skipped.
+            _ => None,
+        };
+        let Some(at) = media_at else {
             return;
-        }
-        if len > 0 && crate::rumble::is_rumble(r.buf[start]) {
-            crate::rumble::on_datagram(&r.buf[start..start + len]);
-            return;
-        }
-        // The host's per-frame timing rides the same plane; it feeds the stats overlay.
-        if len > 0 && r.buf[start] == punktfunk_core::quic::HOST_TIMING_MAGIC {
-            crate::session::on_host_timing(&r.buf[start..start + len]);
-            return;
-        }
-        if len > 0 && r.buf[start] == punktfunk_core::quic::CURSOR_STATE_MAGIC {
-            crate::session::on_cursor_state(&r.buf[start..start + len]);
-            return;
-        }
-        r.lens[slot] = len as u32;
+        };
+        r.buf.copy_within(start + at..start + len, start);
+        r.lens[slot] = (len - at) as u32;
         r.head = (r.head + 1) % RING_SLOTS;
     });
+}
+
+/// One host event: rumble, or the host timing and pointer state the overlay and cursor read.
+fn on_host_event(payload: &[u8]) {
+    match payload.first() {
+        Some(&punktfunk_core::quic::RUMBLE_MAGIC) => crate::rumble::on_datagram(payload),
+        Some(&punktfunk_core::quic::HOST_TIMING_MAGIC) => crate::session::on_host_timing(payload),
+        Some(&punktfunk_core::quic::CURSOR_STATE_MAGIC) => crate::session::on_cursor_state(payload),
+        _ => {}
+    }
 }
 
 /// Datagrams dropped because the ring was full. Read by the page for the §5.4 measurement.
@@ -172,15 +183,21 @@ pub extern "C" fn pf_rx_dropped() -> u32 {
 #[derive(Clone, Copy, Default)]
 pub struct WebTransportDatagrams;
 
-/// One datagram to the host, on the session's connection. `false` when nothing is connected or
-/// the write was refused — the lossy contract every datagram plane has.
-pub fn send_datagram(packet: &[u8]) -> bool {
+/// One input or mic datagram to the host, under the kind its tag byte names. `false` when nothing
+/// is connected, the write was refused, or the tag has no kind — the lossy contract every
+/// datagram plane has.
+pub fn send_datagram(datagram: &[u8]) -> bool {
+    dgram::wrap(datagram).is_some_and(|framed| send_raw(&framed))
+}
+
+fn send_raw(framed: &[u8]) -> bool {
     // SAFETY: `pf_wt_send` reads `len` bytes at `ptr` and returns before this call does; the
     // slice outlives it. It writes nothing through the pointer.
-    unsafe { pf_wt_send(packet.as_ptr(), packet.len() as u32) == 1 }
+    unsafe { pf_wt_send(framed.as_ptr(), framed.len() as u32) == 1 }
 }
 
 impl Transport for WebTransportDatagrams {
+    /// A media packet, under `DGRAM_MEDIA`.
     fn send(&self, packet: &[u8]) -> io::Result<bool> {
         if packet.len() > SLOT_BYTES {
             return Err(io::Error::new(
@@ -188,7 +205,7 @@ impl Transport for WebTransportDatagrams {
                 "datagram over the protocol's maximum",
             ));
         }
-        Ok(send_datagram(packet))
+        Ok(send_raw(&dgram::encode(DGRAM_MEDIA, packet)))
     }
 
     /// `Ok(None)` when the ring is empty — the contract the pump relies on to never block.
@@ -276,8 +293,13 @@ mod tests {
         RING.with(|r| r.borrow_mut().dropped = 0);
     }
 
-    /// Write through the same entry points JavaScript uses, then read through the trait.
+    /// Write through the same entry points JavaScript uses, then read through the trait. `bytes`
+    /// is a media packet; it arrives under `DGRAM_MEDIA`, as the host sends it.
     fn push(bytes: &[u8]) -> bool {
+        push_raw(&dgram::encode(DGRAM_MEDIA, bytes))
+    }
+
+    fn push_raw(datagram: &[u8]) -> bool {
         let slot = pf_rx_claim();
         if slot < 0 {
             return false;
@@ -285,10 +307,26 @@ mod tests {
         RING.with(|r| {
             let mut r = r.borrow_mut();
             let offset = slot as usize * SLOT_BYTES;
-            r.buf[offset..offset + bytes.len()].copy_from_slice(bytes);
+            r.buf[offset..offset + datagram.len()].copy_from_slice(datagram);
         });
-        pf_rx_commit(slot, bytes.len() as u32);
+        pf_rx_commit(slot, datagram.len() as u32);
         true
+    }
+
+    /// Only media reaches the pump: a datagram of another kind, or none, leaves the ring as it was.
+    #[test]
+    fn only_media_is_published() {
+        drain();
+        assert!(push_raw(&dgram::encode(
+            punktfunk_core::quic::v2::registry::DGRAM_CLOCK,
+            &[1, 2, 3]
+        )));
+        assert!(push_raw(&[0x40]), "a kind this build does not know");
+        assert!(push_raw(&[]));
+        assert!(push(&[9, 9]));
+        let t = WebTransportDatagrams;
+        assert_eq!(t.recv().unwrap().as_deref(), Some(&[9u8, 9][..]));
+        assert!(t.recv().unwrap().is_none());
     }
 
     #[test]
