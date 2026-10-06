@@ -303,7 +303,10 @@ export class ConsoleUi implements Ui {
    *  reads its settings again only when the player changes one. */
   private startSettings(): Record<string, unknown> {
     const saved = savedSettings();
-    return this.boot ? { ...saved, [REDUCED_KEY]: this.boot.reduced } : saved;
+    if (this.boot) return { ...saved, [REDUCED_KEY]: this.boot.reduced };
+    // A set's graphics chip is far slower than its panel, as on the kit's other TV hosts. The
+    // kit learns this default at the next pin; until then the page says it.
+    return tizen() ? { [REDUCED_KEY]: true, ...saved } : saved;
   }
 
   // --- what a frame costs ---------------------------------------------------------------------
