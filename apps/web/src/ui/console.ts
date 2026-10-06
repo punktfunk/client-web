@@ -26,9 +26,11 @@ import {
   type Host,
   type LibraryEntry,
   packaged,
+  remoteKey,
   tizen,
   tvBack,
 } from "@punktfunk/stream";
+import { FrameMeter, type Row, type Step, Sweep, table } from "./console-cost.ts";
 import type { Actions, HostCard, Screen, Ui } from "./types.ts";
 
 /** Index into the console's key table (`KEYS` in `rust/host.rs`). Anything absent stays the
@@ -52,6 +54,37 @@ const KEYS: Record<string, number> = {
 
 /** Where the console's settings persist: the native snapshot, as the shell saved it. */
 const SETTINGS_KEY = "punktfunk.console.settings";
+
+/** The kit's settings key for its reduced interface, on every platform but webOS. */
+const REDUCED_KEY = "android.reduce_ui_resolution";
+
+/** How much drawing one cost line in the page's log covers. */
+const COST_WINDOW_MS = 60_000;
+
+/** Set by `vite.config.ts` from `PF_BENCH=1`. */
+declare const __PF_BENCH__: boolean;
+
+/**
+ * A measuring page: built as one, or opened with `?bench`. It prices the console on the first
+ * screen as a desktop draws it, reloads, prices it reduced, and shows both over the console.
+ * F9 or the remote's red key then prices whatever screen is showing.
+ */
+const MEASURING =
+  (typeof __PF_BENCH__ !== "undefined" && __PF_BENCH__) || new URLSearchParams(location.search).has("bench");
+
+/** Where a measuring page keeps its place across its own reload: this tab only. */
+const BOOT_KEY = "pf.bench";
+
+/** A measuring page's place: the interface this load draws, and the rows the last one counted.
+ *  `swept` once both have been, so a later reload does not start over. */
+interface Boot {
+  reduced: boolean;
+  rows: Row[];
+  swept: boolean;
+}
+
+/** The remote's red key, once the set has been asked for it. */
+const RED_KEY = 403;
 
 /** The screens the console cannot draw; everything else is the console's. */
 const WEB_SCREENS = new Set<Screen["kind"]>(["accept", "trust", "link", "streaming"]);
@@ -104,6 +137,14 @@ export class ConsoleUi implements Ui {
   private readonly onKey: (e: KeyboardEvent) => void;
   private readonly onPointer: (e: PointerEvent) => void;
   private readonly onWheel: (e: WheelEvent) => void;
+  /** What console frames cost, closed into a line a minute for the page's log. */
+  private readonly meter = new FrameMeter();
+  /** A measuring page's place, the sweep it is running, and the panel the table goes on. */
+  private readonly boot: Boot | null = MEASURING ? readBoot() : null;
+  private sweep: Sweep | null = null;
+  private readonly panel: HTMLPreElement | null;
+  /** The drawing buffer's share of the canvas, each way: a sweep's step may draw smaller. */
+  private scale = 1;
 
   constructor(
     private readonly engine: Engine,
@@ -121,6 +162,13 @@ export class ConsoleUi implements Ui {
         "fixed right-4 bottom-4 z-3 rounded-full border border-border bg-card/80 px-3 py-1.5 text-xs text-muted-foreground opacity-40 backdrop-blur transition-opacity hover:opacity-100 focus-visible:opacity-100",
     });
     this.ime = tizen() ? imeField() : null;
+    this.panel = MEASURING
+      ? Object.assign(document.createElement("pre"), {
+          hidden: true,
+          className:
+            "pointer-events-none fixed top-4 left-4 z-3 m-0 rounded-md bg-black/85 px-4 py-3 font-mono text-sm leading-relaxed text-white",
+        })
+      : null;
     this.onKey = (e) => this.key(e);
     this.onPointer = (e) => this.pointer(e);
     this.onWheel = (e) => {
@@ -146,6 +194,10 @@ export class ConsoleUi implements Ui {
       document.body.append(this.ime);
       this.ime.addEventListener("input", () => this.imeInput());
       this.ime.addEventListener("keydown", (e) => this.imeKey(e));
+    }
+    if (this.panel) {
+      document.body.append(this.panel);
+      remoteKey("ColorF0Red");
     }
     this.leave.addEventListener("click", () => actions.consoleMode(false));
     window.addEventListener("keydown", this.onKey);
@@ -181,12 +233,13 @@ export class ConsoleUi implements Ui {
     this.live.remove();
     this.leave.remove();
     this.ime?.remove();
+    this.panel?.remove();
     this.fallback.destroy();
   }
 
   // --- drawing ------------------------------------------------------------------------------
   private frame(): void {
-    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    const dpr = Math.min(window.devicePixelRatio || 1, 2) * this.scale;
     const width = Math.max(1, Math.round(this.canvas.clientWidth * dpr));
     const height = Math.max(1, Math.round(this.canvas.clientHeight * dpr));
     if (this.canvas.width !== width || this.canvas.height !== height) {
@@ -205,7 +258,7 @@ export class ConsoleUi implements Ui {
         system_keyboard: tizen(),
         // The console kit's Tizen platform: the page's rows, a remote's glyphs, and an exit.
         tizen: tizen(),
-        settings: savedSettings(),
+        settings: this.startSettings(),
       });
       if (!this.started) {
         console.error("punktfunk: the console could not start; the web shell stays up");
@@ -213,9 +266,14 @@ export class ConsoleUi implements Ui {
         return;
       }
       if (this.screen) this.render(this.screen);
+      // Once the first screen has settled, and unasked: a set may have no key to ask with.
+      if (this.boot && !this.boot.swept) setTimeout(() => this.measure(), 3000);
     }
     if (this.showing()) this.pad();
-    this.engine.console.frame(width, height);
+    const before = performance.now();
+    const drew = this.engine.console.frame(width, height);
+    const now = performance.now();
+    if (drew) this.cost(now - before, now, width, height);
     this.state = this.engine.console.state();
     // A launch hold covers the stream until the game is up: the page's own overlay waits.
     const holding = !!(this.state & CONSOLE_STATE.HOLDS_LAUNCH);
@@ -230,6 +288,89 @@ export class ConsoleUi implements Ui {
     this.canvas.style.pointerEvents = showing ? "auto" : "none";
     this.canvas.style.visibility = showing ? "" : "hidden";
     this.leave.hidden = !showing;
+    if (!showing) {
+      // A window across a stream would count its minutes as frames not drawn.
+      this.meter.reset();
+      if (this.sweep?.step) {
+        this.sweep = null;
+        this.drawAs(undefined);
+      }
+      if (this.panel) this.panel.hidden = true;
+    }
+  }
+
+  /** What the console starts from. The reduced interface is a start-time fact: the console
+   *  reads its settings again only when the player changes one. */
+  private startSettings(): Record<string, unknown> {
+    const saved = savedSettings();
+    return this.boot ? { ...saved, [REDUCED_KEY]: this.boot.reduced } : saved;
+  }
+
+  // --- what a frame costs ---------------------------------------------------------------------
+  /** One drawn frame's time: into the sweep while one runs, else into the minute's line. */
+  private cost(ms: number, now: number, width: number, height: number): void {
+    const sweep = this.sweep;
+    if (sweep?.step) {
+      if (!sweep.frame(ms, now)) return;
+      this.drawAs(sweep.step);
+      if (!sweep.step) this.swept(sweep.rows);
+      return;
+    }
+    const w = this.meter.add(ms, now, COST_WINDOW_MS);
+    if (!w) return;
+    console.info(
+      `punktfunk: console ${width}x${height}: ${w.frames} frames in ${w.seconds.toFixed(1)} s, ` +
+        `main thread ${w.meanMs.toFixed(1)} ms mean, ${w.peakMs.toFixed(1)} ms peak`,
+    );
+  }
+
+  /** Price the screen that is showing, step by step. A running sweep finishes first. */
+  private measure(): void {
+    if (!this.boot || !this.showing() || this.sweep?.step) return;
+    this.sweep = new Sweep(performance.now());
+    this.drawAs(this.sweep.step);
+  }
+
+  /** Draw as a sweep's step says; with none, as the console draws by itself. */
+  private drawAs(step: Step | undefined): void {
+    this.engine.console.leaveOut(step ? !step.blur : false, step ? !step.motion : false);
+    this.scale = step?.scale ?? 1;
+    if (step && this.panel) {
+      this.panel.textContent = `measuring: ${this.tier()}, ${step.name}`;
+      this.panel.hidden = false;
+    }
+  }
+
+  /** The interface this load draws, as a sweep's rows name it. */
+  private tier(): string {
+    return this.boot?.reduced ? "reduced" : "full";
+  }
+
+  /**
+   * A finished sweep. The first load's is the full interface: its rows are kept and the page
+   * loads again reduced. After that a table goes over the console, and into the page's log for
+   * a sent one.
+   */
+  private swept(rows: readonly Row[]): void {
+    const boot = this.boot;
+    if (!boot) return;
+    const mine = rows.map((r) => ({ ...r, step: `${this.tier()}: ${r.step}` }));
+    if (!boot.swept && !boot.reduced) {
+      writeBoot({ reduced: true, rows: mine, swept: false });
+      location.reload();
+      return;
+    }
+    const all = boot.swept ? mine : [...boot.rows, ...mine];
+    boot.swept = true;
+    boot.rows = [];
+    writeBoot(boot);
+    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    const size = `${Math.round(this.canvas.clientWidth * dpr)}x${Math.round(this.canvas.clientHeight * dpr)}`;
+    const lines = table(`${this.screen?.kind ?? "console"} at ${size}`, all);
+    for (const line of lines) console.info(`punktfunk: console sweep: ${line}`);
+    if (!this.panel) return;
+    this.panel.textContent = lines.join("\n");
+    this.panel.hidden = false;
   }
 
   /** The console is on screen: before and between streams, and over one it is holding. */
@@ -242,6 +383,13 @@ export class ConsoleUi implements Ui {
   // --- input ----------------------------------------------------------------------------------
   private key(e: KeyboardEvent): void {
     if (!this.showing() || e.ctrlKey || e.metaKey || e.altKey) return;
+    if (MEASURING && (e.code === "F9" || e.keyCode === RED_KEY)) {
+      e.preventDefault();
+      if (!e.repeat) this.measure();
+      return;
+    }
+    // A table that has been read gives the console its corner back at the next key.
+    if (this.panel && !this.sweep?.step) this.panel.hidden = true;
     // The set's keyboard has the field: its keys are its own (`imeKey`), not the console's.
     if (this.ime && document.activeElement === this.ime) return;
     if (this.state & CONSOLE_STATE.EDITING && e.key.length === 1) {
@@ -722,6 +870,25 @@ function game(e: LibraryEntry, running: string | undefined): ConsoleGame {
     genres: [...(e.genres ?? [])],
     running: e.title === running,
   };
+}
+
+/** A measuring page's place, or the start: the full interface, nothing counted. */
+function readBoot(): Boot {
+  try {
+    const boot = JSON.parse(sessionStorage.getItem(BOOT_KEY) ?? "") as Boot;
+    if (typeof boot.reduced === "boolean" && Array.isArray(boot.rows)) return boot;
+  } catch {
+    // Nothing kept, or no storage: the start.
+  }
+  return { reduced: false, rows: [], swept: false };
+}
+
+function writeBoot(boot: Boot): void {
+  try {
+    sessionStorage.setItem(BOOT_KEY, JSON.stringify(boot));
+  } catch {
+    // No storage: the reload starts over, and the full interface is priced twice.
+  }
 }
 
 /** The settings the console saved last visit, or its defaults. */

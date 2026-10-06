@@ -28,6 +28,8 @@ export default defineConfig({
   // typed is used — exactly as designed.
   define: {
     __PF_VERSION__: JSON.stringify(version()),
+    // A page that measures what the console's tiers cost on the device it runs on.
+    __PF_BENCH__: JSON.stringify(process.env["PF_BENCH"] === "1"),
     __PF_TRANSPORT_HOST__: JSON.stringify(devHost ? new URL(devHost).hostname : undefined),
   },
   resolve: {
