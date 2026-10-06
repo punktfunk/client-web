@@ -16,9 +16,11 @@ use pf_client_core::menu_nav::{MenuNav, MenuSample};
 use pf_console_ui::bridge::{
     CreateOptions, EntryJson, Event, Pads, PadsJson, PresetJson, Published,
 };
+use pf_console_ui::os_theme::set_os_reduce_motion;
 use pf_console_ui::{
-    decode_poster_off_thread, Console, ConsoleHandles, HostRow, InputSource, Key, LibraryGame,
-    LibraryPhase, PairPhase, Platform, SnapshotStore, Stale, Viewport, WakeStatus,
+    decode_poster_off_thread, set_style_override, BackdropStyle, Console, ConsoleHandles, HostRow,
+    InputSource, Key, LibraryGame, LibraryPhase, PairPhase, Platform, SnapshotStore, Stale,
+    Viewport, WakeStatus,
 };
 use skia_safe::gpu::{self, DirectContext, SurfaceOrigin};
 use skia_safe::{Color, ColorType, Surface};
@@ -175,9 +177,10 @@ fn start(opts: CreateOptions) -> anyhow::Result<App> {
 }
 
 /// Draw one frame at the canvas's current device-pixel size. Called from `requestAnimationFrame`.
+/// `1` when a frame was drawn: an idle console skips some, and one behind a stream draws none.
 #[unsafe(no_mangle)]
-pub extern "C" fn pf_frame(width: i32, height: i32) {
-    with_app((), |app| app.draw(width, height));
+pub extern "C" fn pf_frame(width: i32, height: i32) -> i32 {
+    with_app(0, |app| i32::from(app.draw(width, height)))
 }
 
 /// One key, as `console.ts` mapped it from `KeyboardEvent.code`. `key` indexes [`KEYS`]; anything
@@ -295,6 +298,14 @@ pub extern "C" fn pf_console_state() -> u32 {
                 | u32::from(app.console.at_root()) << 3
         })
     })
+}
+
+/// What the page's cost sweep leaves out while it prices it: bit 0 the blur behind pinned
+/// chrome, bit 1 motion, which stills the backdrop. `0` puts both back.
+#[unsafe(no_mangle)]
+pub extern "C" fn pf_console_leave_out(what: u32) {
+    set_style_override((what & 1 != 0).then_some(BackdropStyle::Off));
+    set_os_reduce_motion((what & 2 != 0).then_some(true));
 }
 
 // `pf_console_push` kinds, each with the JSON it takes. The numbers are Apple's.
@@ -419,9 +430,10 @@ const KEYS: [Key; 13] = [
 ];
 
 impl App {
-    fn draw(&mut self, width: i32, height: i32) {
+    /// One frame, unless there is nothing to draw it on or no need to. `true` when it drew.
+    fn draw(&mut self, width: i32, height: i32) -> bool {
         if width <= 0 || height <= 0 {
-            return;
+            return false;
         }
         self.decode_art();
         if self.surface.is_none() || self.size != (width, height) {
@@ -431,7 +443,7 @@ impl App {
             self.cleared = false;
         }
         let Some(surface) = self.surface.as_mut() else {
-            return;
+            return false;
         };
         // Off screen for a stream: clear once so the picture shows, then leave the canvas be.
         if self.console.in_stream() && !self.console.holds_launch() {
@@ -440,12 +452,12 @@ impl App {
                 self.gpu.flush_and_submit();
                 self.cleared = true;
             }
-            return;
+            return false;
         }
         self.cleared = false;
         let now = Instant::now();
         if self.console.idle() && self.drawn.is_some_and(|at| now - at < IDLE_FRAME) {
-            return;
+            return false;
         }
         let viewport = Viewport::plain(width as u32, height as u32);
         let (label, pref, pads) = &self.pads;
@@ -453,6 +465,7 @@ impl App {
             .frame(surface.canvas(), &viewport, label.as_deref(), *pref, pads);
         self.gpu.flush_and_submit();
         self.drawn = Some(now);
+        true
     }
 
     /// A few queued covers, at the scale the shelf asked for. Nothing until a shelf has drawn.

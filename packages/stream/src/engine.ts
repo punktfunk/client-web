@@ -764,8 +764,9 @@ export class Engine {
      *  canvas no WebGL2, or the options did not parse. */
     start: (options: unknown): boolean =>
       withStr(this.mod, [JSON.stringify(options)], (p, n) => this.mod._pf_start(p, n)) === 1,
-    /** Draw one frame. The console has its own loop; the engine's is for the session. */
-    frame: (width: number, height: number): void => this.mod._pf_frame(width, height),
+    /** Draw one frame. The console has its own loop; the engine's is for the session. `false`
+     *  when it drew none: an idle console skips some, and one behind a stream draws nothing. */
+    frame: (width: number, height: number): boolean => this.mod._pf_frame(width, height) === 1,
     /** A key by its index in the console's table — see `KEYS` in `apps/web/src/ui/console.ts`.
      *  `true` when the console used it. */
     key: (index: number, shift: boolean, repeat: boolean): boolean =>
@@ -782,6 +783,10 @@ export class Engine {
       withStr(this.mod, [message], (p, n) => this.mod._pf_console_phase(phase, p, n)),
     /** What the console shows; see `CONSOLE_STATE`. */
     state: (): number => this.mod._pf_console_state(),
+    /** Draw without the blur behind pinned chrome, without motion (a still backdrop), or both.
+     *  For a cost sweep, which prices each; `(false, false)` puts them back. */
+    leaveOut: (blur: boolean, motion: boolean): void =>
+      this.mod._pf_console_leave_out((blur ? 1 : 0) | (motion ? 2 : 0)),
     /** One model update; `kind` is a `CONSOLE_PUSH` value. */
     push: (kind: number, value: unknown): void =>
       withStr(this.mod, [JSON.stringify(value ?? null)], (p, n) => this.mod._pf_console_push(kind, p, n)),
