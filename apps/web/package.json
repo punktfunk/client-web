@@ -8,6 +8,7 @@
     "dev": "vite",
     "build": "vite build",
     "check": "tsc --noEmit",
+    "test": "node --experimental-transform-types --disable-warning=ExperimentalWarning --test 'src/**/*.test.ts'",
     "storybook": "storybook dev -p 6006",
     "build-storybook": "storybook build",
     "screenshots": "node tools/screenshots.mjs"

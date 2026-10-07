@@ -30,7 +30,7 @@ export {
   type ConsoleHostRow,
 } from "./console-bridge.ts";
 export { bootstrap, bootstrapUrl, hosts, originOf, reach, reachTarget, type Bootstrap, type KnownHost, type Plane, type Reach } from "./pf-connect.ts";
-export { deviceName, exitApp, packaged, tizen, tizenInfo } from "./platform.ts";
+export { deviceName, exitApp, packaged, remoteKey, tizen, tizenInfo } from "./platform.ts";
 export { tunnelFetch, type TunnelFetch } from "./tunnel.ts";
 export { tvBack } from "./input.ts";
 export { type LinkError, linkFor, type PageLink, parseLink } from "./links.ts";

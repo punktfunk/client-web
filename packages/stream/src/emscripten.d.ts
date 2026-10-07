@@ -15,8 +15,8 @@ export interface PunktfunkModule {
   // --- the console -----------------------------------------------------------------------
   /** Bring up GL, Skia and the shell on a canvas already sized in device pixels. `0` on failure. */
   _pf_start(optionsPtr: number, optionsLen: number): number;
-  /** Draw one frame at this size. */
-  _pf_frame(width: number, height: number): void;
+  /** Draw one frame at this size. `1` when one was drawn. */
+  _pf_frame(width: number, height: number): number;
   /** Index into the console's key table (`KEYS` in `src/host.rs`). */
   _pf_key(key: number, shift: number, repeat: number): number;
   _pf_console_text(ptr: number, len: number): void;
@@ -24,6 +24,9 @@ export interface PunktfunkModule {
   _pf_console_pad(buttons: number, lx: number, ly: number): void;
   _pf_console_phase(phase: number, ptr: number, len: number): void;
   _pf_console_state(): number;
+  /** What a cost sweep leaves out: bit 0 the blur behind chrome, bit 1 motion, bit 2 the idle
+   *  frame cap. `0` restores. */
+  _pf_console_leave_out(what: number): void;
   _pf_console_push(kind: number, ptr: number, len: number): void;
   _pf_console_art(idPtr: number, idLen: number, bytesPtr: number, len: number): void;
 

@@ -10,6 +10,7 @@
 interface TizenGlobals {
   tizen?: {
     application?: { getCurrentApplication(): { exit(): void } };
+    tvinputdevice?: { registerKey(name: string): void };
     systeminfo?: { getCapability(key: string): unknown };
   };
   webapis?: {
@@ -80,6 +81,14 @@ export function exitApp(): boolean {
   if (!app) return false;
   tizenCall(() => app.exit());
   return true;
+}
+
+/** Ask the set for a remote key it keeps to itself until asked: a colour key, a digit. `false`
+ *  off a set, or when the set refuses the name. */
+export function remoteKey(name: string): boolean {
+  const input = globals().tizen?.tvinputdevice;
+  if (!input) return false;
+  return tizenCall(() => (input.registerKey(name), true)) ?? false;
 }
 
 /**
