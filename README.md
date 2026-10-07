@@ -219,6 +219,7 @@ proxied to each host's management API, pinned. `Dockerfile` and `deploy/` packag
 | `src/components/stagger.tsx` | The console's on-mount cadence, kept in step with its file of the same name: every page is a cascade its cards arrive in one after another, and nothing from `@unom/ui` moves until a `<Stagger root>` above it says so. |
 | `src/ui/console.ts` | The gamepad interface: `pf-console-ui` on a canvas, through `engine.console`. `?ui=console`. |
 | `src/ui/console-cost.ts` | What a console frame costs: the line a minute in the page's log, and the sweep a measuring page runs. |
+| `src/ui/cover.ts` | A cover decoded and sized by the browser, handed to the console as a BMP: its decode is then a copy, not 100 ms of JPEG in wasm on the render thread. |
 | `src/ui/{fixtures.ts,screens.stories.tsx}` | Every `Screen` as a fixture, and the stories both harnesses render from it. |
 | `src/components/ui/*` | `@unom/ui` adapted to this app's tokens once — the management console's arrangement, and its corrections. |
 | `tools/screenshots.mjs` | Every screen as a PNG, from the Storybook build, at a desktop and a phone width. CI attaches them to each run. |
@@ -260,8 +261,10 @@ drawn, and the main thread's time in each. A measuring page prices it — `?ui=c
 build with `PF_BENCH=1`, which is how a packaged page becomes one. It counts the first screen as a
 desktop draws it, reloads, and counts it with the kit's reduced interface; each also without the
 blur behind pinned chrome, with a still backdrop, and at two-thirds size. The table goes over
-the console and into the page's log. F9, or the red key on a Samsung remote, prices whatever
-screen is showing.
+the console and into the page's log. After that, a screen that has shown for fifteen seconds
+with no cover arriving and no key pressed is priced again, settled; F9, or the red key on a Samsung remote,
+prices whatever screen is showing. Built with `PF_BENCH_REPORT=<url>`, the page also posts each
+table there as plain text.
 
 The web shell is the same stack as the host's management console — **React, `@unom/ui` for every
 control, Tailwind on the shared brand tokens, and the console's own motion** — so a button here

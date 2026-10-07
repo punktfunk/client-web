@@ -783,10 +783,10 @@ export class Engine {
       withStr(this.mod, [message], (p, n) => this.mod._pf_console_phase(phase, p, n)),
     /** What the console shows; see `CONSOLE_STATE`. */
     state: (): number => this.mod._pf_console_state(),
-    /** Draw without the blur behind pinned chrome, without motion (a still backdrop), or both.
-     *  For a cost sweep, which prices each; `(false, false)` puts them back. */
-    leaveOut: (blur: boolean, motion: boolean): void =>
-      this.mod._pf_console_leave_out((blur ? 1 : 0) | (motion ? 2 : 0)),
+    /** Draw without the blur behind pinned chrome, without motion (a still backdrop), or without
+     *  the idle frame cap. For a cost sweep, which prices each; all `false` puts them back. */
+    leaveOut: (blur: boolean, motion: boolean, cap = false): void =>
+      this.mod._pf_console_leave_out((blur ? 1 : 0) | (motion ? 2 : 0) | (cap ? 4 : 0)),
     /** One model update; `kind` is a `CONSOLE_PUSH` value. */
     push: (kind: number, value: unknown): void =>
       withStr(this.mod, [JSON.stringify(value ?? null)], (p, n) => this.mod._pf_console_push(kind, p, n)),

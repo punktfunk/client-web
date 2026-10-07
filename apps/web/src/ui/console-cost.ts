@@ -69,13 +69,16 @@ export const STEPS: readonly Step[] = [
 ];
 
 /**
- * A step's measurement. A frame rate well under `1000 / cpuMs` is a frame the main thread was
- * not the limit of: the GPU was.
+ * A step's measurement, per frame: the main thread drawing (`cpuMs`), the main thread busy
+ * with anything else long enough to delay a frame (`otherMs`), and the rest of the interval
+ * (`waitMs`), which is the GPU or the compositor making the page wait.
  */
 export interface Row {
   step: string;
   fps: number;
   cpuMs: number;
+  otherMs: number;
+  waitMs: number;
 }
 
 /** A step settles, then is counted. */
@@ -89,6 +92,7 @@ export class Sweep {
   private settled = false;
   private since: number;
   private readonly meter = new FrameMeter();
+  private other = 0;
 
   constructor(now: number, steps: readonly Step[] = STEPS) {
     this.steps = steps;
@@ -100,17 +104,29 @@ export class Sweep {
     return this.steps[this.at];
   }
 
-  /** One drawn frame that took `ms`. `true` when the step to draw as has changed. */
-  frame(ms: number, now: number): boolean {
+  /** One drawn frame that took `ms`, with `otherMs` of long tasks that were not it since the
+   *  last one. `true` when the step to draw as has changed. */
+  frame(ms: number, now: number, otherMs = 0): boolean {
     const step = this.step;
     if (!step) return false;
     if (!this.settled) {
       this.settled = now - this.since >= SETTLE_MS;
+      this.other = 0;
       return false;
     }
+    this.other += otherMs;
     const ran = this.meter.add(ms, now, RUN_MS);
     if (!ran) return false;
-    this.rows.push({ step: step.name, fps: ran.fps, cpuMs: ran.meanMs });
+    const other = this.other / ran.frames;
+    const interval = ran.fps > 0 ? 1000 / ran.fps : 0;
+    this.rows.push({
+      step: step.name,
+      fps: ran.fps,
+      cpuMs: ran.meanMs,
+      otherMs: other,
+      waitMs: Math.max(0, interval - ran.meanMs - other),
+    });
+    this.other = 0;
     this.at++;
     this.settled = false;
     this.since = now;
@@ -124,7 +140,7 @@ export function table(heading: string, rows: readonly Row[]): string[] {
   const num = (n: number) => n.toFixed(1).padStart(8);
   return [
     heading,
-    `${"".padEnd(wide)}${"fps".padStart(8)}${"cpu ms".padStart(8)}`,
-    ...rows.map((r) => `${r.step.padEnd(wide)}${num(r.fps)}${num(r.cpuMs)}`),
+    `${"".padEnd(wide)}${"fps".padStart(8)}${"cpu ms".padStart(8)}${"other".padStart(8)}${"wait".padStart(8)}`,
+    ...rows.map((r) => `${r.step.padEnd(wide)}${num(r.fps)}${num(r.cpuMs)}${num(r.otherMs)}${num(r.waitMs)}`),
   ];
 }

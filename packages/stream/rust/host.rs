@@ -20,7 +20,7 @@ use pf_console_ui::os_theme::set_os_reduce_motion;
 use pf_console_ui::{
     decode_poster_off_thread, set_style_override, BackdropStyle, Console, ConsoleHandles, HostRow,
     InputSource, Key, LibraryGame, LibraryPhase, PairPhase, Platform, SnapshotStore, Stale,
-    Viewport, WakeStatus,
+    Viewport, WakeStatus, MIN_GPU_CACHE_BYTES,
 };
 use skia_safe::gpu::{self, DirectContext, SurfaceOrigin};
 use skia_safe::{Color, ColorType, Surface};
@@ -33,10 +33,10 @@ use std::time::{Duration, Instant};
 /// The UI canvas is the transparent one: video composites underneath it (plan §1 R1).
 const GL_RGBA8: u32 = 0x8058;
 
-/// Skia's resource budget. A quarter of the desktop's 160 MB: the page shares one heap with the
-/// decoder and the browser, and plan §5.5 makes the wasm ceiling a thing we measure rather than
-/// assume. Raise it only against that measurement.
-const GPU_CACHE_BYTES: usize = 40 << 20;
+/// Skia's resource budget: the kit's floor. Under it a full shelf thrashes — the cache evicts the
+/// covers the next frame draws, and that frame decodes them again on the render thread. At 40 MB
+/// a Samsung set drew a filled library at a frame every few seconds. A ceiling, not an allocation.
+const GPU_CACHE_BYTES: usize = MIN_GPU_CACHE_BYTES;
 
 /// A frame at most this often once the console is idle, as on Apple.
 const IDLE_FRAME: Duration = Duration::from_micros(33_333);
@@ -63,6 +63,8 @@ struct App {
     drawn: Option<Instant>,
     /// The canvas was cleared for a stream and holds nothing of the console.
     cleared: bool,
+    /// A cost sweep is counting: an idle console draws every frame it is asked for.
+    uncapped: bool,
     store: Arc<SnapshotStore>,
     handles: ConsoleHandles,
     published: Published,
@@ -167,6 +169,7 @@ fn start(opts: CreateOptions) -> anyhow::Result<App> {
         size: (0, 0),
         drawn: None,
         cleared: false,
+        uncapped: false,
         store,
         handles,
         published,
@@ -301,11 +304,13 @@ pub extern "C" fn pf_console_state() -> u32 {
 }
 
 /// What the page's cost sweep leaves out while it prices it: bit 0 the blur behind pinned
-/// chrome, bit 1 motion, which stills the backdrop. `0` puts both back.
+/// chrome, bit 1 motion, which stills the backdrop, bit 2 the idle frame cap, so the rate it
+/// counts is the device's. `0` puts all three back.
 #[unsafe(no_mangle)]
 pub extern "C" fn pf_console_leave_out(what: u32) {
     set_style_override((what & 1 != 0).then_some(BackdropStyle::Off));
     set_os_reduce_motion((what & 2 != 0).then_some(true));
+    with_app((), |app| app.uncapped = what & 4 != 0);
 }
 
 // `pf_console_push` kinds, each with the JSON it takes. The numbers are Apple's.
@@ -456,7 +461,10 @@ impl App {
         }
         self.cleared = false;
         let now = Instant::now();
-        if self.console.idle() && self.drawn.is_some_and(|at| now - at < IDLE_FRAME) {
+        if !self.uncapped
+            && self.console.idle()
+            && self.drawn.is_some_and(|at| now - at < IDLE_FRAME)
+        {
             return false;
         }
         let viewport = Viewport::plain(width as u32, height as u32);

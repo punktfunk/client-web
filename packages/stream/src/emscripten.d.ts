@@ -24,7 +24,8 @@ export interface PunktfunkModule {
   _pf_console_pad(buttons: number, lx: number, ly: number): void;
   _pf_console_phase(phase: number, ptr: number, len: number): void;
   _pf_console_state(): number;
-  /** What a cost sweep leaves out: bit 0 the blur behind chrome, bit 1 motion. `0` restores. */
+  /** What a cost sweep leaves out: bit 0 the blur behind chrome, bit 1 motion, bit 2 the idle
+   *  frame cap. `0` restores. */
   _pf_console_leave_out(what: number): void;
   _pf_console_push(kind: number, ptr: number, len: number): void;
   _pf_console_art(idPtr: number, idLen: number, bytesPtr: number, len: number): void;

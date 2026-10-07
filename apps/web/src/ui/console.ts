@@ -26,11 +26,13 @@ import {
   type Host,
   type LibraryEntry,
   packaged,
+  pageLog,
   remoteKey,
   tizen,
   tvBack,
 } from "@punktfunk/stream";
 import { FrameMeter, type Row, type Step, Sweep, table } from "./console-cost.ts";
+import { coverBytes } from "./cover.ts";
 import type { Actions, HostCard, Screen, Ui } from "./types.ts";
 
 /** Index into the console's key table (`KEYS` in `rust/host.rs`). Anything absent stays the
@@ -72,6 +74,11 @@ declare const __PF_BENCH__: boolean;
 const MEASURING =
   (typeof __PF_BENCH__ !== "undefined" && __PF_BENCH__) || new URLSearchParams(location.search).has("bench");
 
+/** Set by `vite.config.ts` from `PF_BENCH_REPORT`: a URL a measuring page also posts its
+ *  tables to, for a set whose screen nobody at the desk can read. */
+declare const __PF_BENCH_REPORT__: string | undefined;
+const REPORT_URL = typeof __PF_BENCH_REPORT__ === "undefined" ? undefined : __PF_BENCH_REPORT__;
+
 /** Where a measuring page keeps its place across its own reload: this tab only. */
 const BOOT_KEY = "pf.bench";
 
@@ -86,11 +93,20 @@ interface Boot {
 /** The remote's red key, once the set has been asked for it. */
 const RED_KEY = 403;
 
+/** A screen that has shown this long with no cover arriving and no change is settled, and a
+ *  measuring page prices it once more: a remote with no spare key still gets every screen. */
+const QUIET_MS = 15_000;
+
 /** The screens the console cannot draw; everything else is the console's. */
 const WEB_SCREENS = new Set<Screen["kind"]>(["accept", "trust", "link", "streaming"]);
 
 /** How long a wake is waited on before the console hears it did not come back. */
 const WAKE_TIMEOUT_S = 60;
+
+/** Covers handed to the console a frame — what its host decodes in one — and covers the browser
+ *  decodes at once. */
+const COVERS_PER_FRAME = 3;
+const COVERS_DECODING = 4;
 
 /** A standard-mapping pad's buttons, in the order `pf_console_pad` reads its bits: A, B, X, Y,
  *  L1, R1, then the D-pad's up, down, left, right. */
@@ -143,6 +159,23 @@ export class ConsoleUi implements Ui {
   private readonly boot: Boot | null = MEASURING ? readBoot() : null;
   private sweep: Sweep | null = null;
   private readonly panel: HTMLPreElement | null;
+  /** Why the running sweep runs, as its heading says. */
+  private why = "at start";
+  /** When the last cover was handed over, when the player last moved, and when the last settled
+   *  sweep began: one settled sweep per rest, where a rest is quiet on all three. */
+  private artAt = 0;
+  private inputAt = 0;
+  private settledAt = -1;
+  /** Covers the browser has decoded, waiting to go over a few a frame, with the shelf each is
+   *  for; and the decodes still to run, a few at once. */
+  private readonly covers: Array<[string, string, Uint8Array]> = [];
+  private readonly toDecode: Array<() => Promise<void>> = [];
+  private decoding = 0;
+  /** The main thread's long tasks that were not a console frame, in ms since the last frame
+   *  counted, told apart from the frames by when they ran. */
+  private other = 0;
+  private readonly frames: Array<{ start: number; end: number }> = [];
+  private observer: PerformanceObserver | null = null;
   /** The drawing buffer's share of the canvas, each way: a sweep's step may draw smaller. */
   private scale = 1;
 
@@ -169,6 +202,21 @@ export class ConsoleUi implements Ui {
             "pointer-events-none fixed top-4 left-4 z-3 m-0 rounded-md bg-black/85 px-4 py-3 font-mono text-sm leading-relaxed text-white",
         })
       : null;
+    if (MEASURING && "PerformanceObserver" in window) {
+      try {
+        this.observer = new PerformanceObserver((list) => {
+          for (const t of list.getEntries()) {
+            const end = t.startTime + t.duration;
+            // The task that ran a console frame counts only for what it did beside that frame.
+            const frame = this.frames.find((f) => f.start < end && t.startTime < f.end);
+            this.other += frame ? Math.max(0, t.duration - (frame.end - frame.start)) : t.duration;
+          }
+        });
+        this.observer.observe({ type: "longtask", buffered: false });
+      } catch {
+        this.observer = null;
+      }
+    }
     this.onKey = (e) => this.key(e);
     this.onPointer = (e) => this.pointer(e);
     this.onWheel = (e) => {
@@ -220,6 +268,8 @@ export class ConsoleUi implements Ui {
   render(screen: Screen): void {
     const was = this.screen;
     this.screen = screen;
+    // A page-level change of screen counts as a move, as a key does.
+    if (was?.kind !== screen.kind) this.inputAt = performance.now();
     const web = (WEB_SCREENS.has(screen.kind) && !this.held) || !this.started;
     this.fallback.render(web ? screen : { kind: "console" });
     if (!this.started) return;
@@ -234,6 +284,7 @@ export class ConsoleUi implements Ui {
     this.leave.remove();
     this.ime?.remove();
     this.panel?.remove();
+    this.observer?.disconnect();
     this.fallback.destroy();
   }
 
@@ -251,7 +302,8 @@ export class ConsoleUi implements Ui {
       // a zero-sized canvas comes up with a broken surface.
       this.started = this.engine.console.start({
         device_name: deviceName(),
-        gpu_cache_bytes: 40 << 20,
+        // The host sets the budget itself, at the kit's floor; this is the kit's record of it.
+        gpu_cache_bytes: 96 << 20,
         // A TV: no clipboard to copy a link to, no phone sensors to offer rows for. Its own
         // keyboard types into the console's fields, so the console draws no tray of its own.
         tv: tizen(),
@@ -267,12 +319,26 @@ export class ConsoleUi implements Ui {
       }
       if (this.screen) this.render(this.screen);
       // Once the first screen has settled, and unasked: a set may have no key to ask with.
-      if (this.boot && !this.boot.swept) setTimeout(() => this.measure(), 3000);
+      if (this.boot && !this.boot.swept) setTimeout(() => this.measure("at start"), 3000);
     }
     if (this.showing()) this.pad();
+    // Covers go over at the rate the console takes them in a frame, so its queue stays short.
+    // Timed with the frame: the copy into wasm is this page's own cost of a cover.
     const before = performance.now();
+    for (let n = 0; n < COVERS_PER_FRAME && this.covers.length > 0; n++) {
+      const [shelf, id, bytes] = this.covers.shift()!;
+      if (shelf !== this.shelf) continue;
+      this.artAt = before;
+      this.engine.console.art(id, bytes);
+    }
+    // Room again for the next decodes.
+    if (this.toDecode.length > 0) this.decodeNext();
     const drew = this.engine.console.frame(width, height);
     const now = performance.now();
+    if (drew && this.observer) {
+      this.frames.push({ start: before, end: now });
+      if (this.frames.length > 16) this.frames.shift();
+    }
     if (drew) this.cost(now - before, now, width, height);
     this.state = this.engine.console.state();
     // A launch hold covers the stream until the game is up: the page's own overlay waits.
@@ -296,6 +362,8 @@ export class ConsoleUi implements Ui {
         this.drawAs(undefined);
       }
       if (this.panel) this.panel.hidden = true;
+    } else if (this.boot?.swept && !this.sweep?.step) {
+      this.measureSettled(now);
     }
   }
 
@@ -314,7 +382,9 @@ export class ConsoleUi implements Ui {
   private cost(ms: number, now: number, width: number, height: number): void {
     const sweep = this.sweep;
     if (sweep?.step) {
-      if (!sweep.frame(ms, now)) return;
+      const other = this.other;
+      this.other = 0;
+      if (!sweep.frame(ms, now, other)) return;
       this.drawAs(sweep.step);
       if (!sweep.step) this.swept(sweep.rows);
       return;
@@ -328,15 +398,26 @@ export class ConsoleUi implements Ui {
   }
 
   /** Price the screen that is showing, step by step. A running sweep finishes first. */
-  private measure(): void {
+  private measure(why: string): void {
     if (!this.boot || !this.showing() || this.sweep?.step) return;
+    this.why = why;
     this.sweep = new Sweep(performance.now());
     this.drawAs(this.sweep.step);
   }
 
-  /** Draw as a sweep's step says; with none, as the console draws by itself. */
+  /** Price the screen once more once it has settled: no cover and no input for a while, and
+   *  not since the player last moved. The page cannot see where the console went, so the rest
+   *  after each move is what names a screen; the heading says whether it is the root. */
+  private measureSettled(now: number): void {
+    if (this.settledAt > this.inputAt || now - this.artAt < QUIET_MS || now - this.inputAt < QUIET_MS) return;
+    this.settledAt = now;
+    this.measure(`settled${this.state & CONSOLE_STATE.AT_ROOT ? " at the root" : ""}`);
+  }
+
+  /** Draw as a sweep's step says; with none, as the console draws by itself. A sweep also
+   *  lifts the idle frame cap, so its rate is the device's. */
   private drawAs(step: Step | undefined): void {
-    this.engine.console.leaveOut(step ? !step.blur : false, step ? !step.motion : false);
+    this.engine.console.leaveOut(step ? !step.blur : false, step ? !step.motion : false, !!step);
     this.scale = step?.scale ?? 1;
     if (step && this.panel) {
       this.panel.textContent = `measuring: ${this.tier()}, ${step.name}`;
@@ -358,19 +439,29 @@ export class ConsoleUi implements Ui {
     const boot = this.boot;
     if (!boot) return;
     const mine = rows.map((r) => ({ ...r, step: `${this.tier()}: ${r.step}` }));
-    if (!boot.swept && !boot.reduced) {
+    const first = !boot.swept && !boot.reduced;
+    const all = boot.swept || first ? mine : [...boot.rows, ...mine];
+    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    const size = `${Math.round(this.canvas.clientWidth * dpr)}x${Math.round(this.canvas.clientHeight * dpr)}`;
+    const lines = table(`${this.screen?.kind ?? "console"}, ${this.why}, at ${size}`, all);
+    for (const line of lines) console.info(`punktfunk: console sweep: ${line}`);
+    // A beacon, so the first load's half is not lost to the reload that follows it. The log's
+    // tail goes with it: what the page and the wasm said while the rows were counted.
+    if (REPORT_URL) {
+      const tail = pageLog().split("\n").slice(-40).join("\n");
+      // Chromium's own heap figure, where it has one: the page's memory on a 2 GB set.
+      const heap = (performance as unknown as { memory?: { usedJSHeapSize: number } }).memory?.usedJSHeapSize;
+      const state = `heap ${heap ? Math.round(heap / 1e6) : "?"} MB, covers queued ${this.covers.length}, to decode ${this.toDecode.length}`;
+      navigator.sendBeacon?.(REPORT_URL, [navigator.userAgent, ...lines, state, "--- log", tail].join("\n"));
+    }
+    if (first) {
       writeBoot({ reduced: true, rows: mine, swept: false });
       location.reload();
       return;
     }
-    const all = boot.swept ? mine : [...boot.rows, ...mine];
     boot.swept = true;
     boot.rows = [];
     writeBoot(boot);
-    const dpr = Math.min(window.devicePixelRatio || 1, 2);
-    const size = `${Math.round(this.canvas.clientWidth * dpr)}x${Math.round(this.canvas.clientHeight * dpr)}`;
-    const lines = table(`${this.screen?.kind ?? "console"} at ${size}`, all);
-    for (const line of lines) console.info(`punktfunk: console sweep: ${line}`);
     if (!this.panel) return;
     this.panel.textContent = lines.join("\n");
     this.panel.hidden = false;
@@ -388,7 +479,7 @@ export class ConsoleUi implements Ui {
     if (!this.showing() || e.ctrlKey || e.metaKey || e.altKey) return;
     if (MEASURING && (e.code === "F9" || e.keyCode === RED_KEY)) {
       e.preventDefault();
-      if (!e.repeat) this.measure();
+      if (!e.repeat) this.measure("on request");
       return;
     }
     // A table that has been read gives the console its corner back at the next key.
@@ -403,6 +494,7 @@ export class ConsoleUi implements Ui {
     const key = KEYS[e.code];
     if (key === undefined) return;
     e.preventDefault();
+    this.inputAt = performance.now();
     this.engine.console.key(key, e.shiftKey, e.repeat);
   }
 
@@ -490,6 +582,7 @@ export class ConsoleUi implements Ui {
         ly = Math.round(y * 32767);
       }
     }
+    if (buttons || lx || ly) this.inputAt = performance.now();
     this.engine.console.pad(buttons, lx, ly);
   }
 
@@ -599,12 +692,35 @@ export class ConsoleUi implements Ui {
     for (const [id, url] of s.art) {
       if (this.artSent.has(id)) continue;
       this.artSent.add(id);
-      void fetch(url)
-        .then((r) => r.arrayBuffer())
-        .then((b) => {
-          if (this.shelf === origin) c.art(id, new Uint8Array(b));
-        })
-        .catch(() => this.artSent.delete(id));
+      this.toDecode.push(async () => {
+        try {
+          const blob = await (await fetch(url)).blob();
+          // Decoded and sized by the browser where it can; the encoded bytes otherwise.
+          const bytes = (await coverBytes(blob)) ?? new Uint8Array(await blob.arrayBuffer());
+          if (this.shelf === origin) this.covers.push([origin, id, bytes]);
+        } catch {
+          this.artSent.delete(id);
+        }
+      });
+    }
+    this.decodeNext();
+  }
+
+  /** Run the waiting cover decodes, [`COVERS_DECODING`] at once, and none while the console
+   *  is behind on taking them: a decode is faster than a slow frame, and a library's worth of
+   *  bitmaps waiting in the heap is what put a 2 GB set into seconds-long pauses. */
+  private decodeNext(): void {
+    while (
+      this.decoding < COVERS_DECODING &&
+      this.toDecode.length > 0 &&
+      this.covers.length + this.decoding < COVERS_PER_FRAME * 3
+    ) {
+      const job = this.toDecode.shift()!;
+      this.decoding++;
+      void job().finally(() => {
+        this.decoding--;
+        this.decodeNext();
+      });
     }
   }
 
@@ -875,7 +991,9 @@ function game(e: LibraryEntry, running: string | undefined): ConsoleGame {
   };
 }
 
-/** A measuring page's place, or the start: the full interface, nothing counted. */
+/** A measuring page's place, or the start. `?bench=full` starts on the full interface and
+ *  reloads into the reduced one after its first sweep; otherwise the page starts reduced, which
+ *  is what a set draws, and never reloads. */
 function readBoot(): Boot {
   try {
     const boot = JSON.parse(sessionStorage.getItem(BOOT_KEY) ?? "") as Boot;
@@ -883,7 +1001,8 @@ function readBoot(): Boot {
   } catch {
     // Nothing kept, or no storage: the start.
   }
-  return { reduced: false, rows: [], swept: false };
+  const full = new URLSearchParams(location.search).get("bench") === "full";
+  return { reduced: !full, rows: [], swept: false };
 }
 
 function writeBoot(boot: Boot): void {

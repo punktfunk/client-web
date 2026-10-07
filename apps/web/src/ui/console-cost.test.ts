@@ -25,12 +25,13 @@ test("a sweep walks every step once and prices each", () => {
     now += 250;
     const name = sweep.step.name;
     if (seen.at(-1) !== name) seen.push(name);
-    sweep.frame(40, now);
+    sweep.frame(40, now, 10);
   }
   assert.deepEqual(seen, STEPS.map((s) => s.name));
-  assert.deepEqual(sweep.rows, STEPS.map((s) => ({ step: s.name, fps: 4, cpuMs: 40 })));
+  // 250 ms a frame: 40 drawing, 10 in other long tasks, the rest waiting.
+  assert.deepEqual(sweep.rows, STEPS.map((s) => ({ step: s.name, fps: 4, cpuMs: 40, otherMs: 10, waitMs: 200 })));
   assert.equal(sweep.frame(40, now + 250), false);
   const lines = table("hosts", sweep.rows);
   assert.equal(lines.length, STEPS.length + 2);
-  assert.match(lines[2] ?? "", /^as started\s+4\.0\s+40\.0$/);
+  assert.match(lines[2] ?? "", /^as started\s+4\.0\s+40\.0\s+10\.0\s+200\.0$/);
 });
