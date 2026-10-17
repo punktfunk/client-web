@@ -43,7 +43,7 @@ command -v emcc >/dev/null || {
 # That archive is published, so a build downloads it (punktfunk's ci/skia-binaries.sh pins its
 # digest). A key nobody published 404s, skia-bindings then builds from source (30+ minutes), and
 # the result is packed into the cache below. A cached archive always wins, so rebuilds work offline.
-skia_key="a25a0fdb7d90429aa2d1-wasm32-unknown-emscripten-gl-jpegd-jpege-pdf-textlayout"
+skia_key="b7f043e0b1e2a850e702-wasm32-unknown-emscripten-ganesh-gl-jpegd-jpege-pdf-textlayout"
 cache="${PF_SKIA_WASM_CACHE:-${XDG_CACHE_HOME:-$HOME/.cache}/punktfunk/skia-wasm}"
 archive="$cache/skia-binaries-$skia_key.tar.gz"
 # Match what rustc emits for this target. Applies to every emcc the build runs, which is what we
@@ -53,7 +53,7 @@ if [ -f "$archive" ]; then
   export SKIA_BINARIES_URL="file://$cache/skia-binaries-{key}.tar.gz"
 else
   # Not inline in `${…:-…}`: the `}` of `{key}` would end the expansion there.
-  published='https://git.unom.io/api/packages/unom/generic/skia-binaries/0.99.0/skia-binaries-{key}.tar.gz'
+  published='https://git.unom.io/api/packages/unom/generic/skia-binaries/0.153.3/skia-binaries-{key}.tar.gz'
   export SKIA_BINARIES_URL="${SKIA_BINARIES_URL:-$published}"
 fi
 

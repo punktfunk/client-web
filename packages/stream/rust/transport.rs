@@ -190,6 +190,11 @@ pub fn send_datagram(datagram: &[u8]) -> bool {
     dgram::wrap(datagram).is_some_and(|framed| send_raw(&framed))
 }
 
+/// The client's feedback datagram: how the host hears a recovery ask.
+pub fn send_feedback(fb: &dgram::Feedback) -> bool {
+    send_raw(&fb.encode())
+}
+
 fn send_raw(framed: &[u8]) -> bool {
     // SAFETY: `pf_wt_send` reads `len` bytes at `ptr` and returns before this call does; the
     // slice outlives it. It writes nothing through the pointer.

@@ -14,18 +14,19 @@
 //! decoded pixel ever enters this heap.
 
 use crate::credential;
-use crate::recovery::{self, Ask, Step};
-use crate::transport::WebTransportDatagrams;
+use crate::recovery::{self, Ask, Asks, Step};
+use crate::transport::{send_feedback, WebTransportDatagrams};
 use punktfunk_core::config::{CompositorPref, GamepadPref, Mode, Role};
 use punktfunk_core::error::PunktfunkError;
 use punktfunk_core::hud::{self, StatsSnapshot, StatsVerbosity};
+use punktfunk_core::quic::v2::features::FeatureSet;
 use punktfunk_core::quic::v2::field::split_frame;
 use punktfunk_core::quic::v2::hello::{ClientHello, Ready, ServerHello};
 use punktfunk_core::quic::v2::msg::V2Message;
 use punktfunk_core::quic::v2::registry as reg;
 use punktfunk_core::quic::{
-    AccessUpdate, AuthChallenge, CursorRenderMode, CursorShape, Hello, LaunchOutcome,
-    PairChallenge, PairResult, Reconfigure, Reconfigured, Refused, RequestKeyframe, RfiRequest,
+    AccessUpdate, AuthChallenge, CursorRenderMode, CursorShape, Hello, LaunchOutcome, LinkFacts,
+    PairChallenge, PairResult, Reconfigure, Reconfigured, Refused,
 };
 use punktfunk_core::reanchor::{GateVerdict, ReanchorGate};
 use punktfunk_core::session::{MediaV2, Session};
@@ -98,6 +99,8 @@ struct Client {
     next_index: Option<u32>,
     /// A lost range not yet asked for (the throttle held it), widened by later gaps.
     pending_rfi: Option<(u32, u32)>,
+    /// The recovery ask the host has not answered yet, repeated as feedback datagrams.
+    asks: Asks,
     last_ask: Option<Instant>,
     /// This device's grants and seconds of access left, from `Welcome` and then each
     /// `AccessUpdate`; `access_seq` counts them so the page reads each once.
@@ -137,6 +140,7 @@ impl Client {
             gate: ReanchorGate::new(0),
             next_index: None,
             pending_rfi: None,
+            asks: Asks::default(),
             last_ask: None,
             grants: 0,
             access_secs: 0,
@@ -384,7 +388,6 @@ pub unsafe extern "C" fn pf_session_hello(
     CLIENT.with(|c| {
         let mut c = c.borrow_mut();
         let hello = Hello {
-            abi_version: punktfunk_core::WIRE_VERSION,
             mode: Mode {
                 width,
                 height,
@@ -425,9 +428,17 @@ pub unsafe extern "C" fn pf_session_hello(
         // No media suites: WebTransport already encrypts, so the media arrives unsealed.
         send(&ClientHello {
             hello,
-            start_ext: Vec::new(),
+            client_label: None,
+            abr_features: 0,
+            preset: None,
+            link: LinkFacts::default(),
+            probe_only: false,
+            pyrowave_bpp_x100: 0,
             resume: None,
             suites: Vec::new(),
+            features: FeatureSet::default(),
+            profile: None,
+            access_only: false,
         });
         c.fps = fps;
         c.phase = Phase::Offered;
@@ -652,13 +663,14 @@ fn on_server_hello(c: &mut Client, server: ServerHello) {
     c.gate = ReanchorGate::new(0);
     c.next_index = None;
     c.pending_rfi = None;
+    c.asks = Asks::default();
     // The media arrives unsealed: WebTransport already encrypts it.
     let media = MediaV2 {
         clock_origin_ns: server.clock_origin_ns,
         keys: None,
         clock: None,
     };
-    match Session::new_v2(cfg, media, Box::new(WebTransportDatagrams)) {
+    match Session::new(cfg, media, Box::new(WebTransportDatagrams)) {
         Ok(session) => {
             c.session = Some(Box::new(session));
             c.phase = Phase::Live;
@@ -698,6 +710,7 @@ pub extern "C" fn pf_session_pump() -> u32 {
             next_index,
             pending_rfi,
             last_ask,
+            asks,
             ..
         } = &mut *c;
         let codec = *codec;
@@ -719,6 +732,7 @@ pub extern "C" fn pf_session_pump() -> u32 {
                 Step::Gap(gap) => gate.arm_expecting_drops(Instant::now(), u64::from(gap)),
                 Step::Straggler => continue,
             }
+            asks.on_frame(frame.frame_index, frame.flags);
             hud.note_received(frame.pts_ns, frame.received_ns, frame.data.len(), true);
             if receipts.len() >= RECEIPTS {
                 receipts.pop_front();
@@ -752,14 +766,11 @@ pub extern "C" fn pf_session_pump() -> u32 {
         if !throttled {
             if let Some(ask) = recovery::take_ask(want_keyframe, pending_rfi) {
                 *last_ask = Some(now);
-                match ask {
-                    Ask::Keyframe => send(&RequestKeyframe),
-                    Ask::Rfi(first_frame, last_frame) => send(&RfiRequest {
-                        first_frame,
-                        last_frame,
-                    }),
-                }
+                send_feedback(&asks.ask(ask, now));
             }
+        }
+        if let Some(again) = asks.resend(now) {
+            send_feedback(&again);
         }
         delivered
     })
@@ -788,7 +799,7 @@ pub extern "C" fn pf_gate_no_output() {
         let now = Instant::now();
         if c.gate.on_no_output(now) && c.phase == Phase::Live {
             c.last_ask = Some(now);
-            send(&RequestKeyframe);
+            send_feedback(&c.asks.ask(Ask::Keyframe, now));
         }
     });
 }
@@ -803,7 +814,7 @@ pub extern "C" fn pf_request_keyframe() {
         c.pending_rfi = None;
         if c.phase == Phase::Live {
             c.last_ask = Some(now);
-            send(&RequestKeyframe);
+            send_feedback(&c.asks.ask(Ask::Keyframe, now));
         }
     });
 }
@@ -937,7 +948,7 @@ mod tests {
 
     #[test]
     fn framing_waits_for_a_whole_frame() {
-        let frame = RequestKeyframe.encode_v2();
+        let frame = Ready {}.encode_v2();
         let mut inbox = Vec::new();
         assert!(take_frame(&mut inbox).unwrap().is_none(), "empty");
         for &b in &frame[..frame.len() - 1] {
@@ -949,28 +960,23 @@ mod tests {
         }
         inbox.push(frame[frame.len() - 1]);
         let (ty, _) = take_frame(&mut inbox).unwrap().unwrap();
-        assert_eq!(ty, RequestKeyframe::TYPE);
+        assert_eq!(ty, Ready::TYPE);
         assert!(inbox.is_empty(), "a taken frame is consumed");
     }
 
     #[test]
     fn two_frames_in_one_chunk_both_come_out() {
         // A stream hands over arbitrary chunk boundaries, so several frames can arrive at once.
-        let mut inbox = RequestKeyframe.encode_v2();
-        inbox.extend(
-            RfiRequest {
-                first_frame: 4,
-                last_frame: 9,
-            }
-            .encode_v2(),
-        );
-        assert_eq!(
-            take_frame(&mut inbox).unwrap().unwrap().0,
-            RequestKeyframe::TYPE
-        );
+        let mut inbox = Ready {}.encode_v2();
+        let notice = Refused {
+            code: 0x41,
+            reason: "busy".into(),
+        };
+        inbox.extend(notice.encode_v2());
+        assert_eq!(take_frame(&mut inbox).unwrap().unwrap().0, Ready::TYPE);
         let (ty, body) = take_frame(&mut inbox).unwrap().unwrap();
-        assert_eq!(ty, RfiRequest::TYPE);
-        assert_eq!(RfiRequest::from_body(&body).unwrap().last_frame, 9);
+        assert_eq!(ty, Refused::TYPE);
+        assert_eq!(Refused::from_body(&body).unwrap(), notice);
         assert!(take_frame(&mut inbox).unwrap().is_none());
     }
 

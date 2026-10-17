@@ -48,7 +48,7 @@ jobs:
       run:
         working-directory: packages/stream
     env:
-      SKIA_BINARIES_URL: https://git.unom.io/api/packages/unom/generic/skia-binaries/0.99.0/skia-binaries-{key}.tar.gz
+      SKIA_BINARIES_URL: https://git.unom.io/api/packages/unom/generic/skia-binaries/0.153.3/skia-binaries-{key}.tar.gz
     steps:
       - uses: actions/checkout@v7
       # rust-toolchain.toml: the pinned rustc, rustfmt, clippy and the wasm target.

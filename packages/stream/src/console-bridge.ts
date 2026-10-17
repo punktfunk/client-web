@@ -87,6 +87,22 @@ export type ConsoleAction =
   | "ShowStream"
   | "Quit";
 
+/** The command a push answers (`pf_console_ui::RequestKey`), copied verbatim from its `req`.
+ *  The console drops a pairing, wake or library push under any other key. */
+export interface ConsoleReq {
+  host: string;
+  epoch: number;
+}
+
+/** No command: work the page started on its own. */
+export const NO_REQ: ConsoleReq = { host: "", epoch: 0 };
+
+/** A command's `req`, or {@link NO_REQ} when it carries none. */
+export function reqOf(body: Record<string, unknown>): ConsoleReq {
+  const r = body["req"] as Partial<ConsoleReq> | undefined;
+  return typeof r?.host === "string" && typeof r.epoch === "number" ? { host: r.host, epoch: r.epoch } : NO_REQ;
+}
+
 /** `pf_console_ui::ConsoleCmd`: a struct variant by name, or a unit one as a string. */
 export type ConsoleCmd = string | Record<string, Record<string, unknown>>;
 

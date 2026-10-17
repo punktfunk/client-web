@@ -14,13 +14,13 @@
 use pf_client_core::console::{PointerButton, PointerInput, SessionPhase};
 use pf_client_core::menu_nav::{MenuNav, MenuSample};
 use pf_console_ui::bridge::{
-    CreateOptions, EntryJson, Event, Pads, PadsJson, PresetJson, Published,
+    CreateOptions, EntryJson, Event, GamesPush, Pads, PadsJson, PhasePush, PresetJson, Published,
 };
 use pf_console_ui::os_theme::set_os_reduce_motion;
 use pf_console_ui::{
     decode_poster_off_thread, set_style_override, BackdropStyle, Console, ConsoleHandles, HostRow,
-    InputSource, Key, LibraryGame, LibraryPhase, PairPhase, Platform, SnapshotStore, Stale,
-    Viewport, WakeStatus, MIN_GPU_CACHE_BYTES,
+    InputSource, Key, PairStatus, Platform, SnapshotStore, Stale, Viewport, WakeStatus,
+    MIN_GPU_CACHE_BYTES,
 };
 use skia_safe::gpu::{self, DirectContext, SurfaceOrigin};
 use skia_safe::{Color, ColorType, Surface};
@@ -317,17 +317,19 @@ pub extern "C" fn pf_console_leave_out(what: u32) {
 
 /// `[HostRow]` — the home carousel.
 const PUSH_HOSTS: u32 = 0;
-/// `"Idle"`, `"Busy"`, `{"Failed": "why"}` or `{"Paired": {"key": "…"}}`.
+/// `{"req": …, "phase": "Busy" | {"Failed": "why"} | {"Paired": {"key": "…"}}}`, `req` the
+/// `Pair` or `RequestAccess` command's.
 const PUSH_PAIR: u32 = 1;
-/// `WakeStatus`, or `null` to clear.
+/// `WakeStatus` under the `Wake`'s `req`, or `null` when the wake ended.
 const PUSH_WAKE: u32 = 2;
 /// A JSON string: a one-shot toast.
 const PUSH_NOTICE: u32 = 3;
 /// Anything: a library fetch is starting for the shelf on screen.
 const PUSH_LIBRARY_BEGIN: u32 = 5;
-/// `"Loading"`, `"Empty"`, `"Ready"` or `{"Error": {"title", "body", "can_retry"}}`.
+/// `{"req": …, "phase": "Loading" | "Empty" | "Ready" | {"Error": {"title", "body",
+/// "can_retry"}}}`, `req` the `FetchLibrary`'s.
 const PUSH_LIBRARY_PHASE: u32 = 6;
-/// `[LibraryGame]` — the fetched catalog.
+/// `{"req": …, "games": [LibraryGame]}` — the fetched catalog for that `FetchLibrary`.
 const PUSH_LIBRARY_GAMES: u32 = 7;
 /// `[{"app_id", "state"}]` — the host's running games.
 const PUSH_LIBRARY_RUNNING: u32 = 9;
@@ -358,7 +360,7 @@ pub unsafe extern "C" fn pf_console_push(kind: u32, ptr: *const u8, len: u32) {
         let (console, library) = (&app.handles.console, &app.handles.library);
         let done = match kind {
             PUSH_HOSTS => json::<Vec<HostRow>>(text).map(|v| console.set_hosts(v)),
-            PUSH_PAIR => json::<PairPhase>(text).map(|v| console.set_pair(v)),
+            PUSH_PAIR => json::<PairStatus>(text).map(|v| console.set_pair(v)),
             PUSH_WAKE => json::<Option<WakeStatus>>(text).map(|v| console.set_wake(v)),
             PUSH_NOTICE => json::<String>(text).map(|v| console.set_notice(v)),
             PUSH_LIBRARY_BEGIN => {
@@ -367,8 +369,12 @@ pub unsafe extern "C" fn pf_console_push(kind: u32, ptr: *const u8, len: u32) {
                 app.art.clear();
                 Some(())
             }
-            PUSH_LIBRARY_PHASE => json::<LibraryPhase>(text).map(|v| library.set_phase(v)),
-            PUSH_LIBRARY_GAMES => json::<Vec<LibraryGame>>(text).map(|v| library.set_games(v)),
+            PUSH_LIBRARY_PHASE => {
+                json::<PhasePush>(text).map(|v| library.set_phase(&v.req, v.phase))
+            }
+            PUSH_LIBRARY_GAMES => {
+                json::<GamesPush>(text).map(|v| library.set_games(&v.req, v.games))
+            }
             PUSH_LIBRARY_RUNNING => json::<Vec<pf_client_core::library::RunningGame>>(text)
                 .map(|v| library.set_running(&v)),
             PUSH_LIBRARY_STALE => json::<u8>(text).map(|v| {

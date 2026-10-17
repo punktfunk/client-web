@@ -168,7 +168,7 @@ handling since 1.87. They cannot be linked: with the prebuilt the link ends in
 halfway ends in `undefined symbol: __cpp_exception` from libstd instead.
 
 So Skia is built with `EMCC_CFLAGS=-fwasm-exceptions`, and that archive is published on the
-[unom package registry](https://git.unom.io/unom/-/packages/generic/skia-binaries/0.99.0).
+[unom package registry](https://git.unom.io/unom/-/packages/generic/skia-binaries/0.153.3).
 `build.sh` downloads it and keeps a copy under `~/.cache/punktfunk/skia-wasm/`, so later builds
 work offline. A key nobody published — after a `skia-safe` bump — builds from source (30 minutes, under
 emsdk 4.0.9: skia-bindings 0.99's bindgen does not run under 6.x) and lands in the same cache; publish that archive and pin its digest in punktfunk's
