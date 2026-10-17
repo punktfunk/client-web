@@ -28,6 +28,9 @@ export {
   type ConsoleEvent,
   type ConsoleGame,
   type ConsoleHostRow,
+  type ConsoleReq,
+  NO_REQ,
+  reqOf,
 } from "./console-bridge.ts";
 export { bootstrap, bootstrapUrl, hosts, originOf, reach, reachTarget, type Bootstrap, type KnownHost, type Plane, type Reach } from "./pf-connect.ts";
 export { deviceName, exitApp, packaged, remoteKey, tizen, tizenInfo } from "./platform.ts";

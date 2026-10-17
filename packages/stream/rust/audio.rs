@@ -107,11 +107,6 @@ pub unsafe extern "C" fn pf_mic_send(ptr: *const u8, len: u32, seq: u32, pts_ns:
     crate::transport::send_datagram(&encode_mic_datagram(seq, pts_ns as u64, opus));
 }
 
-/// Is this datagram audio? The ring's commit asks before publishing a slot.
-pub fn is_audio(first: u8) -> bool {
-    first == AUDIO_MAGIC || first == AUDIO_RED_MAGIC
-}
-
 /// One audio datagram, either shape.
 pub fn on_datagram(d: &[u8]) {
     PLANE.with(|p| {

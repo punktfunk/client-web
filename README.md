@@ -12,7 +12,7 @@
 ---
 
 Point a tab at a punktfunk host and stream your desktop or a game. No install, no extension, no
-plugin: WebTransport carries the same `punktfunk/1` datagrams a native client gets, WebCodecs
+plugin: WebTransport carries the same `punktfunk/2` media a native client gets, WebCodecs
 decodes them, and the picture lands on a canvas — a decoded frame goes straight into a texture and
 never enters the wasm heap.
 
@@ -168,7 +168,7 @@ handling since 1.87. They cannot be linked: with the prebuilt the link ends in
 halfway ends in `undefined symbol: __cpp_exception` from libstd instead.
 
 So Skia is built with `EMCC_CFLAGS=-fwasm-exceptions`, and that archive is published on the
-[unom package registry](https://git.unom.io/unom/-/packages/generic/skia-binaries/0.99.0).
+[unom package registry](https://git.unom.io/unom/-/packages/generic/skia-binaries/0.153.3).
 `build.sh` downloads it and keeps a copy under `~/.cache/punktfunk/skia-wasm/`, so later builds
 work offline. A key nobody published — after a `skia-safe` bump — builds from source (30 minutes, under
 emsdk 4.0.9: skia-bindings 0.99's bindgen does not run under 6.x) and lands in the same cache; publish that archive and pin its digest in punktfunk's
@@ -218,8 +218,6 @@ proxied to each host's management API, pinned. `Dockerfile` and `deploy/` packag
 | `src/ui/{home,sheets,library,hud,settings}.tsx` | The screens, one file per shape. `pieces.tsx` is what they share. |
 | `src/components/stagger.tsx` | The console's on-mount cadence, kept in step with its file of the same name: every page is a cascade its cards arrive in one after another, and nothing from `@unom/ui` moves until a `<Stagger root>` above it says so. |
 | `src/ui/console.ts` | The gamepad interface: `pf-console-ui` on a canvas, through `engine.console`. `?ui=console`. |
-| `src/ui/console-cost.ts` | What a console frame costs: the line a minute in the page's log, and the sweep a measuring page runs. |
-| `src/ui/cover.ts` | A cover decoded and sized by the browser, handed to the console as a BMP: its decode is then a copy, not 100 ms of JPEG in wasm on the render thread. |
 | `src/ui/{fixtures.ts,screens.stories.tsx}` | Every `Screen` as a fixture, and the stories both harnesses render from it. |
 | `src/components/ui/*` | `@unom/ui` adapted to this app's tokens once — the management console's arrangement, and its corrections. |
 | `tools/screenshots.mjs` | Every screen as a PNG, from the Storybook build, at a desktop and a phone width. CI attaches them to each run. |
@@ -255,16 +253,6 @@ renderer knows anything about pairing, trust or the session.
 `ConsoleUi` composes the web shell rather than replacing it: the screens where someone has to type
 stay DOM, and the canvas takes over once a session is live. That is honest about what a D-pad
 shell can and cannot do, and it is why adding the second interface cost one file.
-
-**What the console costs.** While it is on screen the console logs a line a minute: frames
-drawn, and the main thread's time in each. A measuring page prices it — `?ui=console&bench`, or a
-build with `PF_BENCH=1`, which is how a packaged page becomes one. It counts the first screen as a
-desktop draws it, reloads, and counts it with the kit's reduced interface; each also without the
-blur behind pinned chrome, with a still backdrop, and at two-thirds size. The table goes over
-the console and into the page's log. After that, a screen that has shown for fifteen seconds
-with no cover arriving and no key pressed is priced again, settled; F9, or the red key on a Samsung remote,
-prices whatever screen is showing. Built with `PF_BENCH_REPORT=<url>`, the page also posts each
-table there as plain text.
 
 The web shell is the same stack as the host's management console — **React, `@unom/ui` for every
 control, Tailwind on the shared brand tokens, and the console's own motion** — so a button here

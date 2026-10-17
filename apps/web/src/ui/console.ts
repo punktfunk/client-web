@@ -19,15 +19,18 @@ import {
   type ConsoleEvent,
   type ConsoleGame,
   type ConsoleHostRow,
+  type ConsoleReq,
   deviceName,
   type Engine,
   exitApp,
   gameEndNotice,
   type Host,
   type LibraryEntry,
+  NO_REQ,
   packaged,
   pageLog,
   remoteKey,
+  reqOf,
   tizen,
   tvBack,
 } from "@punktfunk/stream";
@@ -132,6 +135,10 @@ export class ConsoleUi implements Ui {
    *  first, a request for access, a title to start once the host is ready. */
   private pendingPin: { origin: string; pin: string } | null = null;
   private pendingKnock: string | null = null;
+  /** The `Pair` or `RequestAccess` and the `FetchLibrary` the console waits on: their pushes
+   *  carry these, or the console drops them. */
+  private pairReq: ConsoleReq = NO_REQ;
+  private libraryReq: ConsoleReq = NO_REQ;
   private pendingPlay: { origin: string; id: string | null; title: string } | null = null;
   /** A session the console dialled, so a failure or an end is reported back to it. */
   private dialled = false;
@@ -141,7 +148,7 @@ export class ConsoleUi implements Ui {
    *  is running. */
   private hostApi: { origin: string; host: Host } | null = null;
   /** A wake the console asked for: it gates the console's navigation until it hears back. */
-  private waking: { key: string; origin: string; name: string; then: boolean; since: number; timer: number } | null = null;
+  private waking: { req: ConsoleReq; key: string; origin: string; name: string; then: boolean; since: number; timer: number } | null = null;
   private readonly live: HTMLElement;
   private readonly leave: HTMLButtonElement;
   /** The set's own keyboard, for the fields the console opens: an offscreen input that the IME
@@ -608,7 +615,7 @@ export class ConsoleUi implements Ui {
         if (pin && pin.origin === s.origin && !s.error) {
           this.pendingPin = null;
           this.actions?.pair(pin.pin);
-          c.push(CONSOLE_PUSH.PAIR, "Busy");
+          this.pushPair("Busy");
           return;
         }
         if (this.pendingKnock === s.origin) {
@@ -616,7 +623,7 @@ export class ConsoleUi implements Ui {
           this.actions?.requestAccess();
           return;
         }
-        if (s.error) c.push(CONSOLE_PUSH.PAIR, { Failed: s.error });
+        if (s.error) this.pushPair({ Failed: s.error });
         else if (!s.busy) c.push(CONSOLE_PUSH.NAVIGATE, { pair: this.row(s.origin) });
         return;
       }
@@ -635,7 +642,7 @@ export class ConsoleUi implements Ui {
         this.dialled = false;
         this.fetchFailed(s.head, s.text);
         c.phase(2, `${s.head}. ${s.text}`);
-        c.push(CONSOLE_PUSH.PAIR, "Idle");
+        this.pushPair("Idle");
         return;
       default:
         return;
@@ -646,7 +653,17 @@ export class ConsoleUi implements Ui {
   private fetchFailed(title: string, body: string): void {
     if (!this.fetching) return;
     this.fetching = null;
-    this.engine.console.push(CONSOLE_PUSH.LIBRARY_PHASE, { Error: { title, body, can_retry: true } });
+    this.pushLibrary(CONSOLE_PUSH.LIBRARY_PHASE, "phase", { Error: { title, body, can_retry: true } });
+  }
+
+  /** A pairing phase for the `Pair` or `RequestAccess` the console sent. */
+  private pushPair(phase: unknown): void {
+    this.engine.console.push(CONSOLE_PUSH.PAIR, { req: this.pairReq, phase });
+  }
+
+  /** A shelf phase or catalog for the `FetchLibrary` the console sent. */
+  private pushLibrary(kind: number, field: "phase" | "games", value: unknown): void {
+    this.engine.console.push(kind, { req: this.libraryReq, [field]: value });
   }
 
   /** The library for the host the engine is on: its titles, their covers, what is running. */
@@ -664,7 +681,7 @@ export class ConsoleUi implements Ui {
       this.artSent.clear();
       // A pairing that just finished: the console's Pair screen waits for this.
       const fp = this.fingerprint(origin);
-      if (fp) c.push(CONSOLE_PUSH.PAIR, { Paired: { key: fp } });
+      if (fp) this.pushPair({ Paired: { key: fp } });
       this.pushHosts();
       c.push(CONSOLE_PUSH.NAVIGATE, { library: this.row(origin) });
       c.push(CONSOLE_PUSH.LIBRARY_BEGIN, null);
@@ -679,12 +696,14 @@ export class ConsoleUi implements Ui {
     if (sig !== this.gamesSent) {
       this.gamesSent = sig;
       if (s.error) {
-        c.push(CONSOLE_PUSH.LIBRARY_PHASE, { Error: { title: "The library could not be read", body: s.error, can_retry: true } });
+        this.pushLibrary(CONSOLE_PUSH.LIBRARY_PHASE, "phase", {
+          Error: { title: "The library could not be read", body: s.error, can_retry: true },
+        });
       } else if (s.entries.length === 0) {
-        c.push(CONSOLE_PUSH.LIBRARY_PHASE, s.busy ? "Loading" : "Empty");
+        this.pushLibrary(CONSOLE_PUSH.LIBRARY_PHASE, "phase", s.busy ? "Loading" : "Empty");
       } else {
-        c.push(CONSOLE_PUSH.LIBRARY_GAMES, s.entries.map((e) => game(e, s.running)));
-        c.push(CONSOLE_PUSH.LIBRARY_PHASE, "Ready");
+        this.pushLibrary(CONSOLE_PUSH.LIBRARY_GAMES, "games", s.entries.map((e) => game(e, s.running)));
+        this.pushLibrary(CONSOLE_PUSH.LIBRARY_PHASE, "phase", "Ready");
       }
       const running = s.entries.find((e) => e.title === s.running);
       c.push(CONSOLE_PUSH.LIBRARY_RUNNING, running ? [{ app_id: running.id, title: running.title, state: "running" }] : []);
@@ -838,6 +857,7 @@ export class ConsoleUi implements Ui {
     switch (name) {
       case "FetchLibrary": {
         if (!origin) return;
+        this.libraryReq = reqOf(body);
         const now = this.engine.current;
         if (now.kind === "ready" && now.origin === origin) {
           // Already there: hand the shelf what the app has.
@@ -852,12 +872,26 @@ export class ConsoleUi implements Ui {
       }
       case "Pair": {
         if (!origin) return;
+        this.pairReq = reqOf(body);
         const pin = str("pin");
         if (this.screen?.kind === "pair" && this.screen.origin === origin) {
           this.actions?.pair(pin);
-          this.engine.console.push(CONSOLE_PUSH.PAIR, "Busy");
+          this.pushPair("Busy");
         } else {
           this.pendingPin = { origin, pin };
+          this.actions?.connect(origin);
+        }
+        return;
+      }
+      case "RequestAccess": {
+        // The host's operator decides; the shelf it opens on approval reports Paired.
+        if (!origin) return;
+        this.pairReq = reqOf(body);
+        this.pushPair("Busy");
+        if (this.screen?.kind === "pair" && this.screen.origin === origin) {
+          this.actions?.requestAccess();
+        } else {
+          this.pendingKnock = origin;
           this.actions?.connect(origin);
         }
         return;
@@ -873,7 +907,7 @@ export class ConsoleUi implements Ui {
         if (origin) this.actions?.forget(origin);
         return;
       case "Wake":
-        if (origin) this.startWake(str("key"), origin, body["then_connect"] === true);
+        if (origin) this.startWake(reqOf(body), str("key"), origin, body["then_connect"] === true);
         return;
       case "CancelWake":
         this.endWake(true);
@@ -925,7 +959,7 @@ export class ConsoleUi implements Ui {
 
   /** Wake a host and keep the console's wake card current: seconds while the page's own wake
    *  polls it, then online (the console connects by itself if asked to) or timed out. */
-  private startWake(key: string, origin: string, then: boolean): void {
+  private startWake(req: ConsoleReq, key: string, origin: string, then: boolean): void {
     this.endWake(false);
     const name = this.hosts.find((h) => h.origin === origin)?.name ?? key;
     const since = Date.now();
@@ -935,14 +969,14 @@ export class ConsoleUi implements Ui {
       const seconds = Math.floor((Date.now() - w.since) / 1000);
       const online = this.hosts.find((h) => h.origin === w.origin)?.reach === "ok";
       const timedOut = !online && seconds >= WAKE_TIMEOUT_S;
-      this.engine.console.push(CONSOLE_PUSH.WAKE, { key, name, seconds, timed_out: timedOut, online, then_connect: then });
+      this.engine.console.push(CONSOLE_PUSH.WAKE, { req, key, name, seconds, timed_out: timedOut, online, then_connect: then });
       if (online || timedOut) {
         clearInterval(w.timer);
         // Online without a connect to follow: the card has said so, and goes.
         if (online && !then) window.setTimeout(() => this.endWake(true), 1500);
       }
     };
-    this.waking = { key, origin, name, then, since, timer: window.setInterval(tick, 1000) };
+    this.waking = { req, key, origin, name, then, since, timer: window.setInterval(tick, 1000) };
     this.actions?.wake(origin);
     tick();
   }
