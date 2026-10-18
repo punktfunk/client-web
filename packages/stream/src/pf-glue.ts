@@ -447,6 +447,15 @@ mergeInto(LibraryManager.library, {
     });
   },
 
+  pf_redirect__deps: ["$UTF8ToString"],
+  pf_redirect: function (port: number, ptr: number, len: number): void {
+    // After `pf_ctl_recv` returns, as `pf_refused`: the engine dials anew in answer.
+    const hash = UTF8ToString(ptr, len);
+    queueMicrotask(function () {
+      if (Module.__pfOnRedirect) Module.__pfOnRedirect(port, hash);
+    });
+  },
+
   pf_launch_notice__deps: ["$UTF8ToString"],
   pf_launch_notice: function (ptr: number, len: number): void {
     if (Module.__pfOnLaunchNotice) Module.__pfOnLaunchNotice(UTF8ToString(ptr, len));

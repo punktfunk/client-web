@@ -6,9 +6,9 @@
 //! and JavaScript writes each datagram straight in with `HEAPU8.set`. One memcpy, no allocation,
 //! nothing per-packet for either runtime to free.
 //!
-//! Two copies happen in total — JS into the ring, ring into the caller's buffer in
-//! [`Transport::recv_batch`] — because the trait hands out caller-owned buffers. That is the
-//! shape core's session pump wants, and neither copy allocates.
+//! The pump takes each datagram as its own buffer ([`Transport::recv_owned`]'s default), so the
+//! second copy, ring into that buffer, is one wasm-heap allocation per datagram. Nothing reaches
+//! JavaScript's collector.
 //!
 //! Single-threaded by construction: emscripten runs this on one thread, and every entry point
 //! here is called from it. The ring therefore lives in a `thread_local` behind `RefCell`, and the
@@ -23,7 +23,7 @@ use std::cell::RefCell;
 use std::io;
 
 /// Slots in the receive ring. 256 × 9216 B ≈ 2.4 MB, which at 5k datagrams/s is ~50 ms of buffer —
-/// far more than a `recv_batch` cadence needs, and the point at which a stall should be dropping
+/// far more than the pump's cadence needs, and the point at which a stall should be dropping
 /// packets rather than growing memory.
 const RING_SLOTS: usize = 256;
 
@@ -223,22 +223,6 @@ impl Transport for WebTransportDatagrams {
             }
         })
     }
-
-    /// The path the pump actually takes: drain into caller-owned buffers, no allocation.
-    fn recv_batch(&self, out: &mut [Vec<u8>], lens: &mut [usize]) -> io::Result<usize> {
-        RING.with(|r| {
-            let mut r = r.borrow_mut();
-            let mut filled = 0;
-            while filled < out.len() {
-                let Some((offset, len)) = r.pop() else { break };
-                let n = len.min(out[filled].len());
-                out[filled][..n].copy_from_slice(&r.buf[offset..offset + n]);
-                lens[filled] = n;
-                filled += 1;
-            }
-            Ok(filled)
-        })
-    }
 }
 
 /// Send `count` datagrams of `size` bytes through the seam, returning how many the browser
@@ -267,25 +251,11 @@ pub extern "C" fn pf_net_blast(count: u32, size: u32) -> u32 {
 /// datagrams came out, so the page can watch the echo come back without touching the ring itself.
 #[unsafe(no_mangle)]
 pub extern "C" fn pf_net_drain() -> u32 {
-    // The batch the pump would use — sized to the ring so one call empties a burst.
-    thread_local! {
-        static OUT: RefCell<(Vec<Vec<u8>>, Vec<usize>)> = RefCell::new((
-            vec![vec![0u8; SLOT_BYTES]; 32],
-            vec![0usize; 32],
-        ));
+    let mut total = 0;
+    while let Ok(Some(_)) = WebTransportDatagrams.recv() {
+        total += 1;
     }
-    OUT.with(|o| {
-        let mut o = o.borrow_mut();
-        let (out, lens) = &mut *o;
-        let mut total = 0;
-        loop {
-            match WebTransportDatagrams.recv_batch(out, lens) {
-                Ok(0) | Err(_) => break,
-                Ok(n) => total += n as u32,
-            }
-        }
-        total
-    })
+    total
 }
 
 #[cfg(test)]
@@ -360,25 +330,6 @@ mod tests {
         }
         assert!(!push(&[0xff]), "the ring is full and must refuse");
         assert_eq!(pf_rx_dropped(), 1, "a refusal is counted, not silent");
-    }
-
-    #[test]
-    fn recv_batch_drains_without_allocating_and_truncates_to_the_caller() {
-        drain();
-        for i in 0..4u8 {
-            assert!(push(&[i; 8]));
-        }
-        let t = WebTransportDatagrams;
-        let mut out = vec![vec![0u8; 8], vec![0u8; 8], vec![0u8; 3]];
-        let mut lens = [0usize; 3];
-        assert_eq!(t.recv_batch(&mut out, &mut lens).unwrap(), 3);
-        assert_eq!(&out[0][..lens[0]], &[0u8; 8]);
-        assert_eq!(&out[1][..lens[1]], &[1u8; 8]);
-        // A short caller buffer truncates rather than overruns.
-        assert_eq!(lens[2], 3);
-        assert_eq!(&out[2][..3], &[2u8; 3]);
-        // The fourth is still queued: a batch stops at the caller's capacity.
-        assert_eq!(t.recv().unwrap().as_deref(), Some(&[3u8; 8][..]));
     }
 
     #[test]

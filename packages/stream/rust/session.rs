@@ -22,7 +22,7 @@ use punktfunk_core::hud::{self, StatsSnapshot, StatsVerbosity};
 use punktfunk_core::quic::v2::features::FeatureSet;
 use punktfunk_core::quic::v2::field::split_frame;
 use punktfunk_core::quic::v2::hello::{ClientHello, Ready, ServerHello};
-use punktfunk_core::quic::v2::msg::V2Message;
+use punktfunk_core::quic::v2::msg::{Redirect, V2Message};
 use punktfunk_core::quic::v2::registry as reg;
 use punktfunk_core::quic::{
     AccessUpdate, AuthChallenge, CursorRenderMode, CursorShape, Hello, LaunchOutcome, LinkFacts,
@@ -231,6 +231,7 @@ pub extern "C" fn pf_session_reconfigure(width: u32, height: u32, fps: u32) {
                 height,
                 refresh_hz: fps,
             },
+            exclude_codecs: 0,
         });
     });
 }
@@ -321,6 +322,9 @@ unsafe extern "C" {
     fn pf_video_config(codec: u32, width: u32, height: u32, depth: u32, hdr: u32);
     /// The host said why it is closing. `reason` is UTF-8, borrowed for the call.
     fn pf_refused(code: u32, reason: *const u8, len: u32);
+    /// The session runs on another host of this box: dial `port` on the address dialed,
+    /// pinning `cert_hash` (64 hex characters, borrowed for the call).
+    fn pf_redirect(port: u32, cert_hash: *const u8, len: u32);
     /// The host's sentence for a launch that did not give the player their game. UTF-8,
     /// borrowed for the call.
     fn pf_launch_notice(text: *const u8, len: u32);
@@ -436,7 +440,8 @@ pub unsafe extern "C" fn pf_session_hello(
             pyrowave_bpp_x100: 0,
             resume: None,
             suites: Vec::new(),
-            features: FeatureSet::default(),
+            // `PROFILES`: this page follows a `Redirect` to the seat a door sends it to.
+            features: FeatureSet::default().with(reg::FEATURE_PROFILES),
             profile: None,
             access_only: false,
         });
@@ -567,6 +572,26 @@ fn on_frame(c: &mut Client, ty: u64, body: &[u8]) {
                 c.phase = Phase::Failed;
             }
         },
+        // A door's answer for a profile that plays on a seat: the page dials the seat's browser
+        // plane and says `Hello` again there. One without a hash names no plane a browser can
+        // pin, so it ends the connect.
+        Redirect::TYPE if c.phase == Phase::Offered => match Redirect::from_body(body) {
+            Ok(to) if !to.cert_hash.is_empty() => {
+                c.phase = Phase::Idle;
+                // SAFETY: the string is borrowed for a call into JavaScript that copies it.
+                unsafe {
+                    pf_redirect(
+                        u32::from(to.port),
+                        to.cert_hash.as_ptr(),
+                        to.cert_hash.len() as u32,
+                    )
+                };
+            }
+            Ok(_) | Err(_) => {
+                println!("punktfunk-web: a redirect this page can't follow");
+                c.phase = Phase::Failed;
+            }
+        },
         AuthChallenge::TYPE => {
             if let Ok(ch) = AuthChallenge::from_body(body) {
                 // The page signs and calls back into `pf_cred_signed`; nothing to send here.
@@ -669,6 +694,7 @@ fn on_server_hello(c: &mut Client, server: ServerHello) {
         clock_origin_ns: server.clock_origin_ns,
         keys: None,
         clock: None,
+        clear_placement: false,
     };
     match Session::new(cfg, media, Box::new(WebTransportDatagrams)) {
         Ok(session) => {
