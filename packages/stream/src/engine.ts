@@ -228,6 +228,10 @@ export class Engine {
   /** Where the plane is dialled for the current connection. */
   private planeHost: string | null = null;
   private plane: pf.Plane | null = null;
+  /** Where this stream is dialled when the host sent it elsewhere on the box: a door's seat. */
+  private seatPlane: { port: number; certHash: string } | null = null;
+  /** The certificate hash the device credential is bound to, which is the plane it dials. */
+  private boundHash: string | null = null;
   /** The management API over the plane, for a target that `fetch` cannot reach. Opened once the
    *  plane is known and checked; closed with the connection. */
   private tunnel: TunnelFetch | null = null;
@@ -298,6 +302,7 @@ export class Engine {
     mod.__pfOnCtlReady = () => this.onControlStream();
     mod.__pfOnClosed = (code, reason) => this.onClosed(code, reason);
     mod.__pfOnRefused = (code, reason) => this.onClosed(code, reason);
+    mod.__pfOnRedirect = (port, certHash) => this.onRedirect(port, certHash);
     mod.__pfOnLaunchNotice = (text) => {
       this.launchNotice = { text, at: performance.now() };
     };
@@ -436,6 +441,7 @@ export class Engine {
     this.set({ kind: "connecting", origin });
     // The key BEFORE the connection: the host may ask for a signature the moment the control
     // stream opens, and a key still coming out of IndexedDB would miss it.
+    this.boundHash = this.plane.cert_hash_sha256;
     withStr(this.mod, [this.plane.cert_hash_sha256], (p) => this.mod._pf_device_init(p));
   }
 
@@ -539,7 +545,7 @@ export class Engine {
     this.set({ kind: "starting", origin: this.origin });
     this.streamed = opts;
     this.pendingStream = opts;
-    this.dial();
+    this.dialBox();
   }
 
   /**
@@ -556,7 +562,42 @@ export class Engine {
     this.sdrNotice = true;
     this.set({ kind: "starting", origin });
     this.pendingStream = opts;
-    this.dial();
+    this.dialBox();
+  }
+
+  /** Dial the host this engine connected to, with the credential bound to its plane again. */
+  private dialBox(): void {
+    this.seatPlane = null;
+    this.bindAndDial(this.plane?.cert_hash_sha256 ?? "");
+  }
+
+  /** Dial now when the credential is bound to `hash`; else bind it, and `onDeviceReady` dials. */
+  private bindAndDial(hash: string): void {
+    if (!hash || hash === this.boundHash) return this.dial();
+    this.boundHash = hash;
+    withStr(this.mod, [hash], (p) => this.mod._pf_device_init(p));
+  }
+
+  /**
+   * The host is a door and this profile plays on a seat of the box: dial the seat's browser
+   * plane once, pinning the hash the door vouched for over this pinned connection, and say
+   * `Hello` there. The device credential binds to that plane's certificate, as to any.
+   */
+  private onRedirect(port: number, certHash: string): void {
+    const origin = this.origin;
+    const opts = this.streamed;
+    if (!origin || !opts || this.state.kind !== "starting") return;
+    if (this.seatPlane || certHash.length !== 64) {
+      this.stopSession();
+      return this.set({ kind: "error", origin, message: "the host sent this stream elsewhere twice" });
+    }
+    // The door closes this connection next; closing it first keeps that close from ending the
+    // dial while the credential rebinds.
+    this.mod._pf_wt_close?.();
+    this.mod._pf_session_reset?.();
+    this.seatPlane = { port, certHash };
+    this.pendingStream = opts;
+    this.bindAndDial(certHash);
   }
 
   /** Send `Hello`, with the video plane up to take what answers it. */
@@ -826,6 +867,8 @@ export class Engine {
     this.mod._pf_session_reset?.();
     this.origin = null;
     this.plane = null;
+    this.seatPlane = null;
+    this.boundHash = null;
     this.tunnel?.close();
     this.tunnel = null;
     this.host = null;
@@ -856,11 +899,12 @@ export class Engine {
   /** Open the plane. Only after `onDeviceReady`: the wasm side must already hold the key's SPKI. */
   private dial(): void {
     if (!this.origin || !this.plane) return;
-    // `/pf2` is the host's `punktfunk/2` session; a host older than 0.43 has no such path.
-    const url = `https://${this.planeHost}:${this.plane.port}/pf2`;
-    const ok = withStr(this.mod, [url, this.plane.cert_hash_sha256], (u, _ul, h) =>
-      this.mod._pf_wt_connect(u, h),
-    );
+    // `/pf2` is the host's `punktfunk/2` session; a host older than 0.43 has no such path. A
+    // door's seat answers on its own port of the same address.
+    const port = this.seatPlane?.port ?? this.plane.port;
+    const hash = this.seatPlane?.certHash ?? this.plane.cert_hash_sha256;
+    const url = `https://${this.planeHost}:${port}/pf2`;
+    const ok = withStr(this.mod, [url, hash], (u, _ul, h) => this.mod._pf_wt_connect(u, h));
     if (!ok) {
       this.set({ kind: "error", origin: this.origin, message: "the browser refused the WebTransport session" });
     }
@@ -928,7 +972,7 @@ export class Engine {
       return this.set({
         kind: "error",
         origin,
-        message: `couldn't reach the host on UDP ${this.plane?.port}, its browser streaming port. Check that nothing between this device and the host blocks it`,
+        message: `couldn't reach the host on UDP ${this.seatPlane?.port ?? this.plane?.port}, its browser streaming port. Check that nothing between this device and the host blocks it`,
       });
     }
     switch (this.state.kind) {

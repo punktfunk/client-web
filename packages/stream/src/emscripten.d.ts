@@ -147,6 +147,9 @@ export interface PunktfunkModule {
   __pfOnClosed?: (code: number, reason: string) => void;
   /** The host said why it is closing, on the control plane (`Refused`). Comes before the close. */
   __pfOnRefused?: (code: number, reason: string) => void;
+  /** The host's `Redirect`: dial `port` on the same address, pinning `certHash`, and say `Hello`
+   *  there. */
+  __pfOnRedirect?: (port: number, certHash: string) => void;
   /** The host's sentence for a launch that did not give the player their game. */
   __pfOnLaunchNotice?: (text: string) => void;
   /** Datagrams have landed in the ring: pump the session now rather than at the next frame. */
