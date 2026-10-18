@@ -13,15 +13,19 @@
 // `render(screen)` is one external store the tree subscribes to. The DOM follows a value, and
 // the frame loop underneath never waits on it: React commits on its own tick.
 
+import { packaged } from "@punktfunk/stream";
+import { toast, Toaster } from "@unom/ui/toast";
 import { MotionConfig } from "motion/react";
 import { type JSX, useSyncExternalStore } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import "../styles.css";
+import { Stagger } from "@/components/stagger";
 import { Frame } from "./frame.tsx";
 import { Home } from "./home.tsx";
 import { Hud } from "./hud.tsx";
 import { Library } from "./library.tsx";
 import { SettingsDialog, SettingsPage } from "./settings.tsx";
+import { installRemote } from "./remote.ts";
 import { Accept, Connecting, ErrorCard, LinkSheet, Pair, Trust, Waiting } from "./sheets.tsx";
 import { type Actions, type Screen, tabOf, type Ui } from "./types.ts";
 
@@ -30,12 +34,16 @@ export class WebShell implements Ui {
   private actions: Actions = noop;
   private readonly listeners = new Set<() => void>();
   private readonly root: Root;
+  private readonly remote: (() => void) | null;
 
   constructor(container: HTMLElement) {
     const el = document.createElement("div");
     container.append(el);
     this.root = createRoot(el);
     this.root.render(<Shell shell={this} />);
+    // On a TV the sheets this shell still draws — trust, the stream's menu — are driven by a
+    // remote: arrows between the buttons, Enter, and Back as the sheet's own way back.
+    this.remote = packaged() ? installRemote(() => this.screen, () => this.actions) : null;
   }
 
   /** `useSyncExternalStore`'s two halves. Arrow properties, so they can be passed bare. */
@@ -57,7 +65,14 @@ export class WebShell implements Ui {
     for (const fn of this.listeners) fn();
   }
 
+  /** The console's toaster: a line in the corner, gone by itself. */
+  notify(text: string, tone?: "error"): void {
+    if (tone === "error") toast.error(text);
+    else toast(text);
+  }
+
   destroy(): void {
+    this.remote?.();
     this.root.unmount();
   }
 }
@@ -77,7 +92,14 @@ export const noop: Actions = {
 
 function Shell({ shell }: { shell: WebShell }): JSX.Element {
   const screen = useSyncExternalStore(shell.subscribe, shell.snapshot);
-  return <ShellFrame screen={screen} actions={shell.act} />;
+  return (
+    <>
+      <ShellFrame screen={screen} actions={shell.act} />
+      {/* Outside the frame, so a toast shows over a live picture and over the gamepad console
+          alike, and never comes and goes with a page. */}
+      <Toaster />
+    </>
+  );
 }
 
 /** The whole interface for one `Screen`. Exported so Storybook draws a screen exactly as the
@@ -105,10 +127,12 @@ export function ShellFrame({ screen, actions }: { screen: Screen; actions: Actio
         <div className="pf-aurora" aria-hidden="true" />
         <Announce screen={screen} />
         <Frame tab={tabOf(screen)} host={kind === "library" ? screen.host : undefined} actions={actions}>
-          {/* A new page fades in; the old one does not wait to fade out first. */}
-          <div key={kind} className="flex min-h-full flex-col animate-in fade-in duration-150">
+          {/* A new page fades in; the old one does not wait to fade out first. The page is the
+              root of its own cascade, as the console's `<Section>` is: the cards on it arrive
+              one after another, from the moment the page does. */}
+          <Stagger root key={kind} className="flex min-h-full flex-col animate-in fade-in duration-150">
             <Page screen={screen} actions={actions} />
-          </div>
+          </Stagger>
         </Frame>
       </div>
     </MotionConfig>

@@ -14,6 +14,7 @@ import {
   connection,
   DeviceRefused,
   deviceKey,
+  type Fetch,
   httpClientFor,
   type Connection,
   type Signer,
@@ -47,10 +48,15 @@ export class Host {
      *  device signature is bound to. */
     hostFingerprint: string,
     signer: Signer,
+    /** How the host is reached when not by the page's own `fetch`: the plane's tunnel, for a
+     *  packaged page. Every call goes through it, the device exchange included. */
+    fetch?: Fetch,
   ) {
+    const via = fetch ? { fetch } : {};
     this.conn = connection({
       url: origin,
-      credential: deviceKey({ url: origin, hostFingerprint, signer }),
+      credential: deviceKey({ url: origin, hostFingerprint, signer, ...via }),
+      ...via,
     });
     this.client = Effect.runPromise(httpClientFor(this.conn)).then((http) => api.make(http));
   }

@@ -129,6 +129,15 @@ const KEY_CHORDS: Record<string, Chord> = {
 /** How long the pad's escape chord must be held to end the stream, as on the native clients. */
 const ESCAPE_HOLD_MS = 1500;
 
+/**
+ * A TV remote's Back. Samsung's runtime sends it as `code: "Escape"` with `key: "XF86Back"` and
+ * `keyCode` 10009; the page's way out of a stream is this key, so it opens the menu and is never
+ * forwarded to the host as Escape — a keyboard's Escape still is.
+ */
+export function tvBack(e: KeyboardEvent): boolean {
+  return e.key === "XF86Back" || e.keyCode === 10009;
+}
+
 /** Standard-mapping indices: A, LB, RB, Back, Start. */
 const PAD = { A: 0, LB: 4, RB: 5, BACK: 8, START: 9 } as const;
 
@@ -260,7 +269,9 @@ export class InputPipe {
         ? KEY_CHORDS[e.code]
         : e.code === "F11" || (e.code === "Enter" && e.altKey && !e.ctrlKey && !e.shiftKey)
           ? "fullscreen"
-          : undefined;
+          : tvBack(e)
+            ? "menu"
+            : undefined;
     if (chord) {
       e.preventDefault();
       if (down && !e.repeat) this.opts.onChord?.(chord);

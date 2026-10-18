@@ -9,6 +9,7 @@
 // No decoded pixel is ever in wasm memory, which is what keeps the WebGPU swap to one file.
 
 import type { PunktfunkModule } from "./emscripten.ts";
+import { tizen } from "./platform.ts";
 import { VideoSurface, type VideoPlane } from "./video-surface.ts";
 import { VideoSurfaceWebGPU } from "./video-surface-webgpu.ts";
 
@@ -50,6 +51,10 @@ export interface Decodable {
  * The codecs this browser decodes in hardware: H.264 always, HEVC and AV1 when
  * `isConfigSupported` says so. Hardware only, because a software HEVC or AV1 decode of a game
  * stream falls behind where H.264 would not.
+ *
+ * Not AV1 on a Samsung set. Its runtime answers yes to every codec string, 4K AV1 included,
+ * and a yes there is a hint rather than a measurement: a software AV1 decode on a TV SoC is
+ * the stream falling behind. HEVC stays on offer until the first measured stream says otherwise.
  */
 export async function decodableCodecs(): Promise<Decodable> {
   const ok = async (codec: string): Promise<boolean> => {
@@ -68,7 +73,7 @@ export async function decodableCodecs(): Promise<Decodable> {
   };
   let mask = CODEC_H264;
   let tenBit = true;
-  for (const codec of [CODEC_HEVC, CODEC_AV1]) {
+  for (const codec of offeredBeyondH264()) {
     if (!(await ok(CODEC_STRING[codec]!))) continue;
     mask |= codec;
     tenBit &&= await ok(CODEC_STRING_10[codec]!);
@@ -76,7 +81,14 @@ export async function decodableCodecs(): Promise<Decodable> {
   return { mask, tenBit: tenBit && mask !== CODEC_H264 };
 }
 
-/** Whether WebGPU gives this page an adapter: the plane HDR needs, not merely the API. */
+/** The codecs worth asking the engine about, past H.264: a platform gate, not a setting. */
+export function offeredBeyondH264(): number[] {
+  return tizen() ? [CODEC_HEVC] : [CODEC_HEVC, CODEC_AV1];
+}
+
+/** Whether WebGPU gives this page an adapter: the plane HDR needs, not merely the API. A
+ *  runtime that has `navigator.gpu` and hands back `null` — a Samsung set — is a no here, and
+ *  `createPlane` lands on WebGL2 for the same reason. */
 export async function webgpuUsable(): Promise<boolean> {
   try {
     return !!(await navigator.gpu?.requestAdapter());

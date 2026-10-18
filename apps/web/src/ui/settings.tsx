@@ -4,9 +4,11 @@
 // control on the right, and a choice of four or fewer as buttons side by side. Each tab's
 // advanced rows show under Show advanced; hidden, a tab says how many of them are changed.
 
-import { ASPECTS, aspectOf, customSize, DEFAULTS, nearest, type Settings, STATS_SCALES } from "@punktfunk/stream";
+import { ASPECTS, aspectOf, customSize, DEFAULTS, nearest, type Settings, STATS_SCALES, tizen } from "@punktfunk/stream";
 import { cn } from "@unom/ui/lib/utils";
-import { type JSX, type ReactNode, useState } from "react";
+import { motion } from "motion/react";
+import { Children, Fragment, isValidElement, type JSX, type ReactNode, useState } from "react";
+import { ROW, ROW_GAP, Stagger } from "@/components/stagger";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -33,6 +35,22 @@ type TabName = (typeof TABS)[number];
 
 /** The tab last open, for the next time settings open this visit. */
 let lastTab: TabName = "General";
+
+/** What the page binds while streaming, as `pf_client_core::shortcuts` lists it for the console:
+ *  `input.ts` holds the bindings. The Samsung set adds the remote's Back, and has no Esc row
+ *  because Esc still reaches the host there. */
+const CONTROLS: ReadonlyArray<readonly [keys: string, text: string]> = [
+  ["Ctrl+Alt+Shift+Q", "Release the mouse, or capture it again"],
+  ["Esc", "Release the mouse, where the page captured it"],
+  ["Ctrl+Alt+Shift+D", "Disconnect"],
+  ["Ctrl+Alt+Shift+S", "Cycle the statistics overlay"],
+  ["Ctrl+Alt+Shift+O", "Open the quick actions menu"],
+  ["Ctrl+Alt+Shift+V", "Mute or unmute the microphone"],
+  ["Ctrl+Alt+Shift+M", "Switch the mouse mode"],
+  ["F11 or Alt+Enter", "Toggle fullscreen"],
+  ["Select + A", "Open the quick actions menu (controller)"],
+  ["L1 + R1 + Start + Select", "Release input; hold to disconnect (controller)"],
+];
 
 /** Set by `vite.config.ts` from `git describe`. */
 declare const __PF_VERSION__: string;
@@ -92,7 +110,7 @@ function SettingsTabs({ screen, actions }: { screen: SettingsScreen; actions: Ac
         {TABS.map((t) => <TabsTrigger key={t} value={t}>{t}</TabsTrigger>)}
       </TabsList>
 
-      <TabsContent value="General" className="flex flex-col gap-5">
+      <Panel value="General">
         <Group title="Session">
           <Toggle
             label="Start streams fullscreen"
@@ -168,9 +186,9 @@ function SettingsTabs({ screen, actions }: { screen: SettingsScreen; actions: Ac
             />
           </>,
         )}
-      </TabsContent>
+      </Panel>
 
-      <TabsContent value="Display" className="flex flex-col gap-5">
+      <Panel value="Display">
         <Group title="Resolution">
           <Resolution v={v} set={set} />
           {v.width === 0 && (
@@ -236,9 +254,9 @@ function SettingsTabs({ screen, actions }: { screen: SettingsScreen; actions: Ac
             </Row>
           </>,
         )}
-      </TabsContent>
+      </Panel>
 
-      <TabsContent value="Input" className="flex flex-col gap-5">
+      <Panel value="Input">
         <Group title="Keyboard & mouse">
           <Row
             label="Mouse input"
@@ -263,15 +281,15 @@ function SettingsTabs({ screen, actions }: { screen: SettingsScreen; actions: Ac
             onChange={(on) => set({ captureInput: on })}
           />
         </Group>
-      </TabsContent>
+      </Panel>
 
-      <TabsContent value="Audio" className="flex flex-col gap-5">
+      <Panel value="Audio">
         <Group title="Playback">
           <Toggle label="Play the host's audio" on={v.audio} onChange={(on) => set({ audio: on })} />
         </Group>
-      </TabsContent>
+      </Panel>
 
-      <TabsContent value="Controllers" className="flex flex-col gap-5">
+      <Panel value="Controllers">
         <Group title="Sticks">
           <Slider
             label="Stick deadzone"
@@ -283,9 +301,18 @@ function SettingsTabs({ screen, actions }: { screen: SettingsScreen; actions: Ac
             onValueChange={(n) => set({ deadzone: n / 100 })}
           />
         </Group>
-      </TabsContent>
+      </Panel>
 
-      <TabsContent value="About" className="flex flex-col gap-5">
+      <Panel value="About">
+        <Group title="Stream controls">
+          {(tizen() ? [["Back", "Open the quick actions menu"] as const, ...CONTROLS.filter(([k]) => k !== "Esc")] : CONTROLS).map(
+            ([keys, text]) => (
+              <Row key={keys} label={text}>
+                <kbd className="rounded bg-muted px-1.5 py-0.5 font-mono text-xs">{keys}</kbd>
+              </Row>
+            ),
+          )}
+        </Group>
         <Group title="punktfunk web">
           <Row label="Version">
             <span className="font-mono text-sm text-muted-foreground">{__PF_VERSION__}</span>
@@ -304,7 +331,7 @@ function SettingsTabs({ screen, actions }: { screen: SettingsScreen; actions: Ac
             <Button size="sm" variant="secondary" onClick={() => set(DEFAULTS)}>Reset</Button>
           </Row>
         </Group>
-      </TabsContent>
+      </Panel>
     </Tabs>
   );
 }
@@ -421,13 +448,40 @@ function Advanced({
   );
 }
 
-/** A card of related rows under a heading, a rule between rows. */
+/** One tab's panel. Its own cascade: a panel mounts when its tab is picked, long after the page
+ *  around it arrived, so nothing above it is still driving. */
+function Panel({ value, children }: { value: TabName; children: ReactNode }): JSX.Element {
+  return (
+    <TabsContent value={value}>
+      <Stagger root className="flex flex-col gap-5">{children}</Stagger>
+    </TabsContent>
+  );
+}
+
+/** A card of related rows under a heading, a rule between rows. The rows rise in turn behind
+ *  the card, as the console's lists do; `contents` keeps them the card's own flex items, so
+ *  its gap and the rule between them still apply. A fragment's rows are rows of the card. */
 function Group({ title, children }: { title?: string; children: ReactNode }): JSX.Element {
   return (
     <section className="flex flex-col gap-2">
       {title && <h2 className="px-1 text-xs font-medium tracking-wide text-muted-foreground uppercase">{title}</h2>}
-      <Card className="flex flex-col gap-4 p-5 [&>*+*]:border-t [&>*+*]:border-border [&>*+*]:pt-4">{children}</Card>
+      <Card className="flex flex-col gap-4 p-5">
+        <Stagger gap={ROW_GAP} className="contents [&>*+*]:border-t [&>*+*]:border-border [&>*+*]:pt-4">
+          {rows(children).map((child, i) => (
+            <motion.div key={isValidElement(child) ? (child.key ?? i) : i} variants={ROW}>
+              {child}
+            </motion.div>
+          ))}
+        </Stagger>
+      </Card>
     </section>
+  );
+}
+
+/** `children` as a card's rows, one fragment level flattened: `advanced` hands its rows over in one. */
+function rows(children: ReactNode): ReactNode[] {
+  return Children.toArray(children).flatMap((c) =>
+    isValidElement<{ children?: ReactNode }>(c) && c.type === Fragment ? Children.toArray(c.props.children) : [c],
   );
 }
 

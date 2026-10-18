@@ -6,7 +6,9 @@
 import type { LibraryEntry } from "@punktfunk/stream";
 import { cn } from "@unom/ui/lib/utils";
 import { CircleX, Monitor, Play, Search, Server } from "lucide-react";
+import { motion } from "motion/react";
 import { type JSX, type KeyboardEvent, useRef, useState } from "react";
+import { ROW, ROW_GAP, Stagger, staggerProps } from "@/components/stagger";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -18,6 +20,12 @@ import { Empty, ErrorLine, labelOf, Loading, status } from "./pieces.tsx";
 import type { Actions, HostCard, Screen } from "./types.ts";
 
 type LibraryScreen = Extract<Screen, { kind: "library" }>;
+
+/** The stagger between posters, as the console's library has it: a shelf enters in under a
+ *  second, not one tile a beat. */
+const TILE_GAP = 0.012;
+const TILE = { from: { opacity: 0, y: 12 }, enter: { opacity: 1, y: 0 } };
+const TAP = { scale: 0.97 };
 
 export function Library({ screen, actions }: { screen: LibraryScreen; actions: Actions }): JSX.Element {
   const [query, setQuery] = useState("");
@@ -72,11 +80,17 @@ export function Library({ screen, actions }: { screen: LibraryScreen; actions: A
 
       <section aria-label="Desktops" className="flex flex-col gap-3">
         <h2 className="text-xs font-medium tracking-wide text-muted-foreground uppercase">Desktops</h2>
-        <div className="-mx-1 flex gap-3 overflow-x-auto px-1 pb-1">
+        {/* A scroller clips everything past its box, rings and shadows included, so the row is
+            padded out to the page's gutters and back in again: it bleeds to the page's edge, as
+            the macOS shelf does, and nothing a card draws outside itself is cut off. */}
+        <Stagger
+          gap={ROW_GAP}
+          className="-mx-4 -my-6 flex snap-x gap-3 overflow-x-auto px-4 py-6 sm:-mx-10 sm:px-10"
+        >
           {screen.shelves.map((h) => (
             <DesktopTile key={h.origin} host={h} onPlay={() => actions.streamDesktop(h.origin)} />
           ))}
-        </div>
+        </Stagger>
       </section>
 
       <section aria-label="Games" className="flex flex-col gap-4">
@@ -120,14 +134,16 @@ export function Library({ screen, actions }: { screen: LibraryScreen; actions: A
 /** Which paired host's titles to show. Chips, as the macOS client's shelf filter. */
 function ShelfSwitcher({ shelves, current, actions }: { shelves: HostCard[]; current: string; actions: Actions }): JSX.Element {
   return (
-    <div role="tablist" aria-label="Host" className="flex flex-wrap gap-2">
+    <Stagger gap={0.04} role="tablist" aria-label="Host" className="flex flex-wrap gap-2">
       {shelves.map((h) => {
         const on = h.origin === current;
         return (
-          <button
+          <motion.button
             key={h.origin}
             type="button"
             role="tab"
+            variants={ROW}
+            whileTap={TAP}
             aria-selected={on}
             className={cn(
               "flex items-center gap-2 rounded-full border px-3.5 py-1.5 text-sm transition-colors focus-visible:outline-2 focus-visible:outline-ring",
@@ -137,10 +153,10 @@ function ShelfSwitcher({ shelves, current, actions }: { shelves: HostCard[]; cur
           >
             <span className={cn("size-2 rounded-full", status(h).dot)} aria-hidden="true" />
             {labelOf(h)}
-          </button>
+          </motion.button>
         );
       })}
-    </div>
+    </Stagger>
   );
 }
 
@@ -148,7 +164,7 @@ function ShelfSwitcher({ shelves, current, actions }: { shelves: HostCard[]; cur
 function DesktopTile({ host, onPlay }: { host: HostCard; onPlay: () => void }): JSX.Element {
   const state = status(host);
   return (
-    <Card asChild interactive className="w-48! shrink-0 gap-3 p-4 text-left">
+    <Card asChild interactive className="w-48! shrink-0 snap-start gap-3 p-4 text-left">
       <button type="button" onClick={onPlay} aria-label={`Stream the desktop of ${labelOf(host)}`}>
         <span className="flex items-center justify-between">
           <Monitor className="size-5 text-primary" aria-hidden="true" />
@@ -163,26 +179,33 @@ function DesktopTile({ host, onPlay }: { host: HostCard; onPlay: () => void }): 
   );
 }
 
+/**
+ * The posters. A list rather than an ARIA grid: a grid owes its cells rows, and a wrapping CSS
+ * grid has no row to name. The arrow keys still walk it — across, and up and down by however
+ * many columns the layout resolved to, read back from the grid itself so a gap or a stray pixel
+ * cannot put Down on the wrong tile.
+ */
 function Grid({ entries, screen, actions }: { entries: LibraryEntry[]; screen: LibraryScreen; actions: Actions }): JSX.Element {
-  const grid = useRef<HTMLDivElement>(null);
-  const onKey = (e: KeyboardEvent<HTMLDivElement>) => {
+  const grid = useRef<HTMLUListElement>(null);
+  const onKey = (e: KeyboardEvent<HTMLUListElement>) => {
     const el = grid.current;
     if (!el) return;
-    const tiles = [...el.querySelectorAll<HTMLButtonElement>("button[role=gridcell]")];
+    const tiles = [...el.querySelectorAll<HTMLButtonElement>("button")];
     const i = tiles.indexOf(document.activeElement as HTMLButtonElement);
     if (i < 0) return;
-    const cols = Math.max(1, Math.round(el.clientWidth / (tiles[0]?.offsetWidth ?? 1)));
+    const cols = Math.max(1, getComputedStyle(el).gridTemplateColumns.split(" ").length);
     const next = { ArrowRight: i + 1, ArrowLeft: i - 1, ArrowDown: i + cols, ArrowUp: i - cols, Home: 0, End: tiles.length - 1 }[e.key];
     if (next === undefined || !tiles[next]) return;
     e.preventDefault();
     tiles[next].focus();
   };
   return (
-    <div
+    <motion.ul
       ref={grid}
-      role="grid"
+      role="list"
       aria-label="Library"
-      className="grid grid-cols-[repeat(auto-fill,minmax(8.5rem,1fr))] gap-x-5 gap-y-6"
+      {...staggerProps(TILE_GAP)}
+      className="m-0 grid list-none grid-cols-[repeat(auto-fill,minmax(8.5rem,1fr))] gap-x-5 gap-y-6 p-0"
       onKeyDown={onKey}
     >
       {entries.map((entry) => (
@@ -194,7 +217,7 @@ function Grid({ entries, screen, actions }: { entries: LibraryEntry[]; screen: L
           onPlay={() => actions.play(entry)}
         />
       ))}
-    </div>
+    </motion.ul>
   );
 }
 
@@ -203,38 +226,39 @@ function Grid({ entries, screen, actions }: { entries: LibraryEntry[]; screen: L
 function Tile({ entry, art, running, onPlay }: { entry: LibraryEntry; art: string | undefined; running: boolean; onPlay: () => void }): JSX.Element {
   const [loaded, setLoaded] = useState(false);
   return (
-    <button
-      type="button"
-      role="gridcell"
-      aria-label={entry.title}
-      onClick={onPlay}
-      className="group flex flex-col gap-2 rounded-[10px] text-left outline-none focus-visible:ring-2 focus-visible:ring-ring"
-    >
-      <span className="relative block aspect-2/3 overflow-hidden rounded-[10px] bg-muted ring-1 ring-border transition-shadow group-hover:ring-accent group-hover:shadow-[0_8px_28px_var(--pf-glow)]">
-        <span className="absolute inset-0 grid place-items-center p-3 text-center text-sm font-medium text-muted-foreground" aria-hidden="true">
+    <motion.li variants={TILE} className="min-w-0">
+      <button
+        type="button"
+        aria-label={entry.title}
+        onClick={onPlay}
+        className="group flex w-full flex-col gap-2 rounded-[10px] text-left outline-none focus-visible:ring-2 focus-visible:ring-ring"
+      >
+        <span className="relative block aspect-2/3 w-full overflow-hidden rounded-[10px] bg-muted ring-1 ring-border transition-shadow group-hover:ring-accent group-hover:shadow-[0_8px_28px_var(--pf-glow)]">
+          <span className="absolute inset-0 grid place-items-center p-3 text-center text-sm font-medium text-muted-foreground" aria-hidden="true">
+            {entry.title}
+          </span>
+          {art && (
+            <img
+              src={art}
+              alt=""
+              loading="lazy"
+              decoding="async"
+              // A cover already in the cache can finish before React sees `load`.
+              ref={(img) => { if (img?.complete) setLoaded(true); }}
+              onLoad={() => setLoaded(true)}
+              className={cn(
+                "relative size-full object-cover transition-[opacity,transform] duration-300 group-hover:scale-[1.03]",
+                loaded ? "opacity-100" : "opacity-0",
+              )}
+            />
+          )}
+          {running && <Badge variant="success" className="absolute top-2 right-2 shadow-sm">Running</Badge>}
+        </span>
+        <span className="line-clamp-2 text-xs text-muted-foreground group-hover:text-foreground" title={entry.title}>
           {entry.title}
         </span>
-        {art && (
-          <img
-            src={art}
-            alt=""
-            loading="lazy"
-            decoding="async"
-            // A cover already in the cache can finish before React sees `load`.
-            ref={(img) => { if (img?.complete) setLoaded(true); }}
-            onLoad={() => setLoaded(true)}
-            className={cn(
-              "relative size-full object-cover transition-[opacity,transform] duration-300 group-hover:scale-[1.03]",
-              loaded ? "opacity-100" : "opacity-0",
-            )}
-          />
-        )}
-        {running && <Badge variant="success" className="absolute top-2 right-2 shadow-sm">Running</Badge>}
-      </span>
-      <span className="line-clamp-2 text-xs text-muted-foreground group-hover:text-foreground" title={entry.title}>
-        {entry.title}
-      </span>
-    </button>
+      </button>
+    </motion.li>
   );
 }
 

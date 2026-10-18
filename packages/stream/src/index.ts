@@ -29,7 +29,13 @@ export {
   type ConsoleEvent,
   type ConsoleGame,
   type ConsoleHostRow,
+  type ConsoleReq,
+  NO_REQ,
+  reqOf,
 } from "./console-bridge.ts";
-export { hosts, originOf, reach, type KnownHost, type Plane, type Reach } from "./pf-connect.ts";
+export { bootstrap, bootstrapUrl, hosts, originOf, reach, reachTarget, type Bootstrap, type KnownHost, type Plane, type Reach } from "./pf-connect.ts";
+export { deviceName, exitApp, packaged, remoteKey, tizen, tizenInfo } from "./platform.ts";
+export { tunnelFetch, type TunnelFetch } from "./tunnel.ts";
+export { tvBack } from "./input.ts";
 export { type LinkError, linkFor, type PageLink, parseLink } from "./links.ts";
 export type { VideoPlane, UploadStats } from "./video-surface.ts";

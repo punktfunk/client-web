@@ -1,7 +1,7 @@
 // The client's Dialog IS @unom/ui's radix dialog. @unom/ui ships the SURFACE only and leaves
 // placement to the app, so `DialogContent` here is the surface already wrapped in its portal +
-// overlay and centred in the viewport. It arrives whole, with one short zoom: a dialog is
-// something asked for, and its rows arriving one by one only made the asking slower.
+// overlay and centred in the viewport, with the console's cadence: the surface zooms in whole,
+// and its rows — header, body, footer — rise in turn behind it.
 import {
   Dialog,
   DialogClose,
@@ -14,7 +14,9 @@ import {
   DialogTitle,
 } from "@unom/ui/dialog";
 import { cn } from "@unom/ui/lib/utils";
-import type { ComponentProps } from "react";
+import { motion } from "motion/react";
+import { Children, type ComponentProps, isValidElement } from "react";
+import { ROW, ROW_GAP, Stagger } from "@/components/stagger";
 
 const DialogContent = ({ className, children, ...props }: ComponentProps<typeof DialogSurface>) => (
   <DialogPortal>
@@ -27,7 +29,16 @@ const DialogContent = ({ className, children, ...props }: ComponentProps<typeof 
       )}
       {...props}
     >
-      {children}
+      {/* `root`, because a dialog renders through a portal — outside every page cascade, nothing
+          above it drives `from → enter`. `contents` keeps each row a flex item of the surface, so
+          its gap still spaces them. */}
+      <Stagger root gap={ROW_GAP} className="contents">
+        {Children.toArray(children).map((child, i) => (
+          <motion.div key={isValidElement(child) ? (child.key ?? i) : i} variants={ROW}>
+            {child}
+          </motion.div>
+        ))}
+      </Stagger>
     </DialogSurface>
   </DialogPortal>
 );

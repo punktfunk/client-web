@@ -128,17 +128,28 @@ mergeInto(LibraryManager.library, {
         const w = datagrams.createWritable ? datagrams.createWritable() : datagrams.writable;
         pfNet.writer = w.getWriter();
         if (Module._pf_wt_ctl_open) Module._pf_wt_ctl_open();
-        // A stream the host opens carries one thing: why it is about to close (`Refused`).
-        // Same framing as the control stream, so the bytes go to the same decoder.
-        const feed = function (reader: ReadableStreamDefaultReader<Uint8Array>): void {
+        // A stream the host opens carries one thing: why it is about to close, as one `Refused`
+        // frame. It is read to its end and handed over whole, apart from the control stream.
+        const feed = function (reader: ReadableStreamDefaultReader<Uint8Array>, got: Uint8Array[]): void {
           reader.read().then(
             function (r) {
-              if (r.done) return;
-              const p = _malloc(r.value.length);
-              HEAPU8.set(r.value, p);
-              Module._pf_ctl_recv(p, r.value.length);
+              if (!r.done) {
+                got.push(r.value);
+                feed(reader, got);
+                return;
+              }
+              const len = got.reduce(function (n, c) {
+                return n + c.length;
+              }, 0);
+              if (len === 0) return;
+              const p = _malloc(len);
+              let at = p;
+              for (const c of got) {
+                HEAPU8.set(c, at);
+                at += c.length;
+              }
+              Module._pf_uni_recv(p, len);
               _free(p);
-              feed(reader);
             },
             function () {},
           );
@@ -147,7 +158,7 @@ mergeInto(LibraryManager.library, {
           reader.read().then(
             function (r) {
               if (r.done) return;
-              feed(r.value.getReader());
+              feed(r.value.getReader(), []);
               unis(reader);
             },
             function () {},
@@ -251,15 +262,17 @@ mergeInto(LibraryManager.library, {
 
   // --- the control stream ---------------------------------------------------------------------
   //
-  // Same length-prefixed punktfunk/1 messages the native client puts on a quinn stream. Rust owns
-  // the codec; this owns the stream. A stream hands over arbitrary chunk boundaries, so whatever
-  // arrives goes straight to Rust, which reassembles.
+  // The same punktfunk/2 frames the native client puts on a quinn stream. Rust owns the codec;
+  // this owns the stream. A stream hands over arbitrary chunk boundaries, so whatever arrives goes
+  // straight to Rust, which reassembles.
   pf_wt_ctl_open__deps: ["$pfNet"],
   pf_wt_ctl_open: function (): number {
     if (!pfNet.wt || pfNet.ctl) return 0;
     pfNet.wt.createBidirectionalStream().then(
       function (stream) {
         pfNet.ctl = stream.writable.getWriter();
+        // Every punktfunk/2 stream opens with its type; the control stream's is 0.
+        pfNet.ctl.write(new Uint8Array([0])).catch(function () {});
         const pump = function (reader: ReadableStreamDefaultReader<Uint8Array>): void {
           reader.read().then(
             function (r) {
@@ -274,7 +287,7 @@ mergeInto(LibraryManager.library, {
           );
         };
         pump(stream.readable.getReader());
-        // Rust sends Hello once the stream exists, not before: the host has nothing to reply on.
+        // Rust sends its hello once the stream exists, not before: the host has nothing to reply on.
         if (Module.__pfOnCtlReady) Module.__pfOnCtlReady();
       },
       function (e) {

@@ -14,11 +14,13 @@
 use pf_client_core::console::{PointerButton, PointerInput, SessionPhase};
 use pf_client_core::menu_nav::{MenuNav, MenuSample};
 use pf_console_ui::bridge::{
-    CreateOptions, EntryJson, Event, Pads, PadsJson, PresetJson, Published,
+    CreateOptions, EntryJson, Event, GamesPush, Pads, PadsJson, PhasePush, PresetJson, Published,
 };
+use pf_console_ui::os_theme::set_os_reduce_motion;
 use pf_console_ui::{
-    decode_poster_off_thread, Console, ConsoleHandles, HostRow, InputSource, Key, LibraryGame,
-    LibraryPhase, PairPhase, Platform, SnapshotStore, Stale, Viewport, WakeStatus,
+    decode_poster_off_thread, set_style_override, BackdropStyle, Console, ConsoleHandles, HostRow,
+    InputSource, Key, PairStatus, Platform, SnapshotStore, Stale, Viewport, WakeStatus,
+    MIN_GPU_CACHE_BYTES,
 };
 use skia_safe::gpu::{self, DirectContext, SurfaceOrigin};
 use skia_safe::{Color, ColorType, Surface};
@@ -31,10 +33,10 @@ use std::time::{Duration, Instant};
 /// The UI canvas is the transparent one: video composites underneath it (plan §1 R1).
 const GL_RGBA8: u32 = 0x8058;
 
-/// Skia's resource budget. A quarter of the desktop's 160 MB: the page shares one heap with the
-/// decoder and the browser, and plan §5.5 makes the wasm ceiling a thing we measure rather than
-/// assume. Raise it only against that measurement.
-const GPU_CACHE_BYTES: usize = 40 << 20;
+/// Skia's resource budget: the kit's floor. Under it a full shelf thrashes — the cache evicts the
+/// covers the next frame draws, and that frame decodes them again on the render thread. At 40 MB
+/// a Samsung set drew a filled library at a frame every few seconds. A ceiling, not an allocation.
+const GPU_CACHE_BYTES: usize = MIN_GPU_CACHE_BYTES;
 
 /// A frame at most this often once the console is idle, as on Apple.
 const IDLE_FRAME: Duration = Duration::from_micros(33_333);
@@ -61,6 +63,8 @@ struct App {
     drawn: Option<Instant>,
     /// The canvas was cleared for a stream and holds nothing of the console.
     cleared: bool,
+    /// A cost sweep is counting: an idle console draws every frame it is asked for.
+    uncapped: bool,
     store: Arc<SnapshotStore>,
     handles: ConsoleHandles,
     published: Published,
@@ -143,7 +147,14 @@ fn start(opts: CreateOptions) -> anyhow::Result<App> {
     let mut context = gpu::direct_contexts::make_gl(interface, None)
         .ok_or_else(|| anyhow::anyhow!("Skia: DirectContext over WebGL2 failed"))?;
     context.set_resource_cache_limit(GPU_CACHE_BYTES);
-    let (mut opts, entry, store) = opts.into_console(Platform::Web);
+    // A packaged Samsung TV page says so at start; the kit then answers with the page's rows,
+    // a remote's glyphs, and an exit on Back at the root.
+    let platform = if opts.tizen {
+        Platform::Tizen
+    } else {
+        Platform::Web
+    };
+    let (mut opts, entry, store) = opts.into_console(platform);
     // A Vulkan compute codec: a browser has no device to run it on.
     opts.pyrowave_ok = false;
     opts.gpu_cache_bytes = GPU_CACHE_BYTES;
@@ -158,6 +169,7 @@ fn start(opts: CreateOptions) -> anyhow::Result<App> {
         size: (0, 0),
         drawn: None,
         cleared: false,
+        uncapped: false,
         store,
         handles,
         published,
@@ -168,9 +180,10 @@ fn start(opts: CreateOptions) -> anyhow::Result<App> {
 }
 
 /// Draw one frame at the canvas's current device-pixel size. Called from `requestAnimationFrame`.
+/// `1` when a frame was drawn: an idle console skips some, and one behind a stream draws none.
 #[unsafe(no_mangle)]
-pub extern "C" fn pf_frame(width: i32, height: i32) {
-    with_app((), |app| app.draw(width, height));
+pub extern "C" fn pf_frame(width: i32, height: i32) -> i32 {
+    with_app(0, |app| i32::from(app.draw(width, height)))
 }
 
 /// One key, as `console.ts` mapped it from `KeyboardEvent.code`. `key` indexes [`KEYS`]; anything
@@ -290,21 +303,33 @@ pub extern "C" fn pf_console_state() -> u32 {
     })
 }
 
+/// What the page's cost sweep leaves out while it prices it: bit 0 the blur behind pinned
+/// chrome, bit 1 motion, which stills the backdrop, bit 2 the idle frame cap, so the rate it
+/// counts is the device's. `0` puts all three back.
+#[unsafe(no_mangle)]
+pub extern "C" fn pf_console_leave_out(what: u32) {
+    set_style_override((what & 1 != 0).then_some(BackdropStyle::Off));
+    set_os_reduce_motion((what & 2 != 0).then_some(true));
+    with_app((), |app| app.uncapped = what & 4 != 0);
+}
+
 // `pf_console_push` kinds, each with the JSON it takes. The numbers are Apple's.
 
 /// `[HostRow]` — the home carousel.
 const PUSH_HOSTS: u32 = 0;
-/// `"Idle"`, `"Busy"`, `{"Failed": "why"}` or `{"Paired": {"key": "…"}}`.
+/// `{"req": …, "phase": "Busy" | {"Failed": "why"} | {"Paired": {"key": "…"}}}`, `req` the
+/// `Pair` or `RequestAccess` command's.
 const PUSH_PAIR: u32 = 1;
-/// `WakeStatus`, or `null` to clear.
+/// `WakeStatus` under the `Wake`'s `req`, or `null` when the wake ended.
 const PUSH_WAKE: u32 = 2;
 /// A JSON string: a one-shot toast.
 const PUSH_NOTICE: u32 = 3;
 /// Anything: a library fetch is starting for the shelf on screen.
 const PUSH_LIBRARY_BEGIN: u32 = 5;
-/// `"Loading"`, `"Empty"`, `"Ready"` or `{"Error": {"title", "body", "can_retry"}}`.
+/// `{"req": …, "phase": "Loading" | "Empty" | "Ready" | {"Error": {"title", "body",
+/// "can_retry"}}}`, `req` the `FetchLibrary`'s.
 const PUSH_LIBRARY_PHASE: u32 = 6;
-/// `[LibraryGame]` — the fetched catalog.
+/// `{"req": …, "games": [LibraryGame]}` — the fetched catalog for that `FetchLibrary`.
 const PUSH_LIBRARY_GAMES: u32 = 7;
 /// `[{"app_id", "state"}]` — the host's running games.
 const PUSH_LIBRARY_RUNNING: u32 = 9;
@@ -335,7 +360,7 @@ pub unsafe extern "C" fn pf_console_push(kind: u32, ptr: *const u8, len: u32) {
         let (console, library) = (&app.handles.console, &app.handles.library);
         let done = match kind {
             PUSH_HOSTS => json::<Vec<HostRow>>(text).map(|v| console.set_hosts(v)),
-            PUSH_PAIR => json::<PairPhase>(text).map(|v| console.set_pair(v)),
+            PUSH_PAIR => json::<PairStatus>(text).map(|v| console.set_pair(v)),
             PUSH_WAKE => json::<Option<WakeStatus>>(text).map(|v| console.set_wake(v)),
             PUSH_NOTICE => json::<String>(text).map(|v| console.set_notice(v)),
             PUSH_LIBRARY_BEGIN => {
@@ -344,8 +369,12 @@ pub unsafe extern "C" fn pf_console_push(kind: u32, ptr: *const u8, len: u32) {
                 app.art.clear();
                 Some(())
             }
-            PUSH_LIBRARY_PHASE => json::<LibraryPhase>(text).map(|v| library.set_phase(v)),
-            PUSH_LIBRARY_GAMES => json::<Vec<LibraryGame>>(text).map(|v| library.set_games(v)),
+            PUSH_LIBRARY_PHASE => {
+                json::<PhasePush>(text).map(|v| library.set_phase(&v.req, v.phase))
+            }
+            PUSH_LIBRARY_GAMES => {
+                json::<GamesPush>(text).map(|v| library.set_games(&v.req, v.games))
+            }
             PUSH_LIBRARY_RUNNING => json::<Vec<pf_client_core::library::RunningGame>>(text)
                 .map(|v| library.set_running(&v)),
             PUSH_LIBRARY_STALE => json::<u8>(text).map(|v| {
@@ -412,9 +441,10 @@ const KEYS: [Key; 13] = [
 ];
 
 impl App {
-    fn draw(&mut self, width: i32, height: i32) {
+    /// One frame, unless there is nothing to draw it on or no need to. `true` when it drew.
+    fn draw(&mut self, width: i32, height: i32) -> bool {
         if width <= 0 || height <= 0 {
-            return;
+            return false;
         }
         self.decode_art();
         if self.surface.is_none() || self.size != (width, height) {
@@ -424,7 +454,7 @@ impl App {
             self.cleared = false;
         }
         let Some(surface) = self.surface.as_mut() else {
-            return;
+            return false;
         };
         // Off screen for a stream: clear once so the picture shows, then leave the canvas be.
         if self.console.in_stream() && !self.console.holds_launch() {
@@ -433,12 +463,15 @@ impl App {
                 self.gpu.flush_and_submit();
                 self.cleared = true;
             }
-            return;
+            return false;
         }
         self.cleared = false;
         let now = Instant::now();
-        if self.console.idle() && self.drawn.is_some_and(|at| now - at < IDLE_FRAME) {
-            return;
+        if !self.uncapped
+            && self.console.idle()
+            && self.drawn.is_some_and(|at| now - at < IDLE_FRAME)
+        {
+            return false;
         }
         let viewport = Viewport::plain(width as u32, height as u32);
         let (label, pref, pads) = &self.pads;
@@ -446,6 +479,7 @@ impl App {
             .frame(surface.canvas(), &viewport, label.as_deref(), *pref, pads);
         self.gpu.flush_and_submit();
         self.drawn = Some(now);
+        true
     }
 
     /// A few queued covers, at the scale the shelf asked for. Nothing until a shelf has drawn.
