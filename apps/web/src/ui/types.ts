@@ -8,7 +8,7 @@
 // The split is what makes a second interface cheap rather than a fork: nothing about pairing,
 // trust or the session lives in a renderer.
 
-import type { AudioSnapshot, HudLine, KnownHost, LibraryEntry, Reach, Settings } from "@punktfunk/stream";
+import type { AudioSnapshot, HudCorner, HudLine, KnownHost, LibraryEntry, Reach, Settings } from "@punktfunk/stream";
 
 /** Everything worth showing about a live session. */
 export interface SessionStats {
@@ -119,12 +119,17 @@ type ScreenBody =
       busy?: boolean;
     }
   /** `menu`: the quick menu is open over the picture. `endGame`: the title this device launched
-   *  that the stream plays, which End game ends. `notice`: what the host said when it refused. */
+   *  that the stream plays, which End game ends. `notice`: what the host said when it refused.
+   *  `corner` and `scale` place and size the statistics; `exitHint` says how to leave, for the
+   *  first seconds of a stream. */
   | {
       kind: "streaming";
       stats: SessionStats;
       diagnostics: boolean;
       menu: boolean;
+      corner: HudCorner;
+      scale: number;
+      exitHint?: string;
       endGame?: string;
       notice?: string;
     }

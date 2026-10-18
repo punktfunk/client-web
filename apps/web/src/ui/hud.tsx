@@ -1,7 +1,7 @@
 // The overlay over a live picture. Out of the way by default — this is the screen someone came
 // for — and brought back by a pointer, a key or a tap, then hidden again.
 
-import { type HudLine, packaged, tvBack } from "@punktfunk/stream";
+import { type HudCorner, type HudLine, packaged, tvBack } from "@punktfunk/stream";
 import { cn } from "@unom/ui/lib/utils";
 import { Maximize, Menu, MousePointer2, Settings } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
@@ -122,9 +122,16 @@ export function Hud({ screen, actions }: { screen: Extract<Screen, { kind: "stre
           <motion.div
             key="statistics"
             {...DROP}
-            className="pointer-events-auto fixed top-[calc(3.5rem+var(--pf-inset))] right-inset w-[min(34rem,calc(100vw-2*var(--pf-inset)))]"
+            className={cn("pointer-events-auto fixed", CORNER_CLASS[screen.corner])}
+            style={{ width: `min(${34 * screen.scale}rem, calc(100vw - 2 * var(--pf-inset)))` }}
           >
-            <Diagnostics stats={stats} />
+            <Diagnostics stats={stats} scale={screen.scale} />
+          </motion.div>
+        )}
+        {/* How to leave, once, as the stream starts; the captured-pointer line below says it then. */}
+        {screen.exitHint && !stats.pointerCaptured && (
+          <motion.div key="exit-hint" {...RISE} className="pointer-events-none fixed inset-x-0 bottom-[6%] flex justify-center px-inset">
+            <span className="animate-[pf-exit-hint_6s_forwards] rounded-full bg-card/95 px-4 py-2 text-sm">{screen.exitHint}</span>
           </motion.div>
         )}
         {/* The host's word on a launch that did not give the player their game, or on this
@@ -255,9 +262,18 @@ const ROLE_CLASS: Record<HudLine["role"], string> = {
   warn: "text-amber-500",
 };
 
+/** Where each corner puts the statistics. The top ones clear the toolbar. */
+const CORNER_CLASS: Record<HudCorner, string> = {
+  topLeading: "top-[calc(3.5rem+var(--pf-inset))] left-inset",
+  topTrailing: "top-[calc(3.5rem+var(--pf-inset))] right-inset",
+  bottomLeading: "bottom-inset left-inset",
+  bottomTrailing: "bottom-inset right-inset",
+};
+
 /** The stats overlay every client draws, in this session's tier and vocabulary, then what only a
- *  browser measures. Lines come from the engine formatted; this panel only paints them. */
-function Diagnostics({ stats: s }: { stats: SessionStats }): JSX.Element {
+ *  browser measures. Lines come from the engine formatted; this panel only paints them, at
+ *  `scale` times its size. */
+function Diagnostics({ stats: s, scale }: { stats: SessionStats; scale: number }): JSX.Element {
   const lines = s.hud ?? [];
   const browser = [
     s.backend ?? "",
@@ -270,7 +286,8 @@ function Diagnostics({ stats: s }: { stats: SessionStats }): JSX.Element {
   return (
     <Card
       aria-label="Statistics"
-      className="max-h-[60dvh] overflow-y-auto bg-card/95 px-5 py-4 font-mono text-sm leading-relaxed"
+      className="max-h-[60dvh] overflow-y-auto bg-card/95 px-5 py-4 font-mono leading-relaxed"
+      style={{ fontSize: `${0.875 * scale}rem` }}
     >
       {lines.map((l, i) => (
         // Lines have no identity beyond their place in the list.

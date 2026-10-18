@@ -31,3 +31,14 @@ test("a rate stored before Automatic existed is kept, not second-guessed", () =>
   store.set("pf.settings", JSON.stringify({ ...DEFAULTS, bitrateKbps: 20_000 }));
   assert.equal(settings.get().bitrateKbps, 20_000);
 });
+
+test("the overlay's corner and size keep to the values every client stores", () => {
+  store.clear();
+  assert.equal(settings.get().hudPlacement, "topTrailing");
+  assert.equal(settings.set({ hudPlacement: "bottomLeading" }).hudPlacement, "bottomLeading");
+  assert.equal(settings.set({ hudPlacement: "middle" as never }).hudPlacement, "topTrailing", "an unknown corner reads as the default");
+  assert.equal(settings.set({ statsScalePct: 150 }).statsScalePct, 150);
+  assert.equal(settings.set({ statsScalePct: 140 }).statsScalePct, 100, "a size off the list reads as 100 %");
+  assert.equal(settings.get().exitHint, true);
+  assert.equal(settings.get().showAdvanced, false);
+});

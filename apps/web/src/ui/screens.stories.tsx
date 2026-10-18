@@ -40,6 +40,7 @@ export const LibraryLoading = of(SCREENS["library-loading"]);
 export const LibraryOffline = of(SCREENS["library-offline"]);
 export const LibraryNone = of(SCREENS["library-none"]);
 export const Streaming = of(SCREENS["streaming"]);
+export const StreamingHint = of(SCREENS["streaming-hint"]);
 export const StreamingDiagnostics = of(SCREENS["streaming-diagnostics"]);
 export const StreamingCaptured = of(SCREENS["streaming-captured"]);
 export const StreamingMenu = of(SCREENS["streaming-menu"]);
