@@ -75,10 +75,11 @@ struct Client {
     /// `Welcome::audio_channels`: what the Opus frames carry. The page's decoder is configured
     /// from it.
     audio_channels: u8,
-    /// `Welcome`'s bit depth and whether its colour is HDR: the decoder string and the plane's
-    /// dynamic range follow them.
+    /// `Welcome`'s bit depth, whether its colour is HDR and whether it is full range: the decoder
+    /// string, the plane's dynamic range and the HDR decoder's range follow them.
     depth: u8,
     hdr: bool,
+    full_range: bool,
     /// Access units delivered, so the page can tell "connected" from "streaming".
     frames: u64,
     /// The stats overlay's window. No clock handshake runs in a browser, so its offset stays
@@ -131,6 +132,7 @@ impl Client {
             audio_channels: 0,
             depth: 8,
             hdr: false,
+            full_range: false,
             frames: 0,
             hud: new_hud(),
             receipts: VecDeque::with_capacity(RECEIPTS),
@@ -319,7 +321,7 @@ unsafe extern "C" {
     /// page copies what it needs before returning, and no pixel comes back.
     fn pf_video_au(ptr: *const u8, len: u32, pts_us: f64, key: i32, flags: u32);
     /// The negotiated format, once `ServerHello` has been read.
-    fn pf_video_config(codec: u32, width: u32, height: u32, depth: u32, hdr: u32);
+    fn pf_video_config(codec: u32, width: u32, height: u32, depth: u32, hdr: u32, full_range: u32);
     /// The host said why it is closing. `reason` is UTF-8, borrowed for the call.
     fn pf_refused(code: u32, reason: *const u8, len: u32);
     /// The session runs on another host of this box: dial `port` on the address dialed,
@@ -428,6 +430,8 @@ pub unsafe extern "C" fn pf_session_hello(
             audio_layout: punktfunk_core::audio::AudioLayout::Legacy.wire(),
             // The video plane letterboxes a frame whose shape differs from the window.
             video_fit: punktfunk_core::video_fit::VideoFit::Fit.wire(),
+            // Opus only: a browser has no AC-3 passthrough to a receiver.
+            audio_bitstreams: 0,
         };
         // No media suites: WebTransport already encrypts, so the media arrives unsealed.
         send(&ClientHello {
@@ -438,12 +442,15 @@ pub unsafe extern "C" fn pf_session_hello(
             link: LinkFacts::default(),
             probe_only: false,
             pyrowave_bpp_x100: 0,
+            slices: 0,
             resume: None,
             suites: Vec::new(),
             // `PROFILES`: this page follows a `Redirect` to the seat a door sends it to.
             features: FeatureSet::default().with(reg::FEATURE_PROFILES),
             profile: None,
             access_only: false,
+            // One canvas, one screen.
+            screens: Vec::new(),
         });
         c.fps = fps;
         c.phase = Phase::Offered;
@@ -680,6 +687,7 @@ fn on_server_hello(c: &mut Client, server: ServerHello) {
     c.host_caps2 = welcome.host_caps2;
     c.depth = welcome.bit_depth;
     c.hdr = welcome.color.is_hdr();
+    c.full_range = welcome.color.full_range != 0;
     c.audio_channels = welcome.audio_channels;
     crate::audio::negotiated(welcome.audio_channels, welcome.audio_layout);
     c.grants = welcome.grants;
@@ -964,6 +972,7 @@ unsafe fn video_config(c: &Client) {
             c.height,
             u32::from(c.depth),
             u32::from(c.hdr),
+            u32::from(c.full_range),
         )
     };
 }
