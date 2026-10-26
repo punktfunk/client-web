@@ -750,7 +750,8 @@ export class Engine {
    */
   fullscreen(on = !document.fullscreenElement): void {
     const keyboard = (navigator as { keyboard?: { lock?: () => Promise<void>; unlock?: () => void } }).keyboard;
-    if (on && !document.fullscreenElement) {
+    // An iPhone has no element fullscreen at all, and the call would throw before anything else.
+    if (on && !document.fullscreenElement && document.documentElement.requestFullscreen) {
       void document.documentElement
         .requestFullscreen()
         .then(() => keyboard?.lock?.())
