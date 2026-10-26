@@ -705,6 +705,8 @@ class App {
       }
       try {
         const st = await now.host.status();
+        // Another shelf took the poll while this one was out: its answer is not news here.
+        if (this.pollingFor !== s.origin) return;
         // Anything not exited is up, as on every client; this device's own launch leads.
         const up = st.games.filter((g) => g.state !== "exited");
         const live = up.find((g) => g.endable && g.app_id) ?? up[0];
