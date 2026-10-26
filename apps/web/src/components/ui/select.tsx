@@ -10,7 +10,7 @@
 // column, never an inline chip.
 import {
   Select,
-  SelectContent,
+  SelectContent as SelectContentBase,
   SelectGroup,
   SelectItem as SelectItemBase,
   SelectLabel,
@@ -37,5 +37,9 @@ const SelectItem = ({ className, ...props }: ComponentProps<typeof SelectItemBas
   <SelectItemBase className={cn("focus:bg-primary/15 focus:text-foreground", className)} {...props} />
 );
 SelectItem.displayName = "SelectItem";
+
+// The list opens in a portal outside any dialog, so it marks its own keys as the page's.
+const SelectContent = (props: ComponentProps<typeof SelectContentBase>) => <SelectContentBase data-pf-keys="local" {...props} />;
+SelectContent.displayName = "SelectContent";
 
 export { Select, SelectContent, SelectGroup, SelectItem, SelectLabel, SelectTrigger, SelectValue };
