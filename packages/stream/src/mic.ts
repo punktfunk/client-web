@@ -84,28 +84,35 @@ export class MicPipe {
     this.stream = stream;
     const ctx = new AudioContext({ sampleRate: SAMPLE_RATE });
     this.ctx = ctx;
-    const url = URL.createObjectURL(new Blob([WORKLET], { type: "application/javascript" }));
+    // Any step below can fail on a browser short of one piece; the microphone must not stay open.
     try {
-      await ctx.audioWorklet.addModule(url);
-    } finally {
-      URL.revokeObjectURL(url);
+      const url = URL.createObjectURL(new Blob([WORKLET], { type: "application/javascript" }));
+      try {
+        await ctx.audioWorklet.addModule(url);
+      } finally {
+        URL.revokeObjectURL(url);
+      }
+      if (this.ctx !== ctx) return;
+      const encoder = new AudioEncoder({
+        output: (chunk) => this.send(chunk),
+        error: () => this.stop(),
+      });
+      encoder.configure({ codec: "opus", sampleRate: SAMPLE_RATE, numberOfChannels: 1, bitrate: 64_000 });
+      this.encoder = encoder;
+      const node = new AudioWorkletNode(ctx, "punktfunk-mic", { numberOfInputs: 1, numberOfOutputs: 1 });
+      node.port.onmessage = (e: MessageEvent<Float32Array<ArrayBuffer>>) => this.encode(e.data);
+      ctx.createMediaStreamSource(stream).connect(node);
+      // A node nothing pulls from may not run; a muted gain to the output keeps it in the graph.
+      const mute = ctx.createGain();
+      mute.gain.value = 0;
+      node.connect(mute).connect(ctx.destination);
+      await ctx.resume();
+    } catch (e) {
+      console.error("punktfunk: microphone", e);
+      if (this.ctx === ctx) this.stop();
+      return;
     }
-    if (this.ctx !== ctx) return;
-    const encoder = new AudioEncoder({
-      output: (chunk) => this.send(chunk),
-      error: () => this.stop(),
-    });
-    encoder.configure({ codec: "opus", sampleRate: SAMPLE_RATE, numberOfChannels: 1, bitrate: 64_000 });
-    this.encoder = encoder;
-    const node = new AudioWorkletNode(ctx, "punktfunk-mic", { numberOfInputs: 1, numberOfOutputs: 1 });
-    node.port.onmessage = (e: MessageEvent<Float32Array<ArrayBuffer>>) => this.encode(e.data);
-    ctx.createMediaStreamSource(stream).connect(node);
-    // A node nothing pulls from may not run; a muted gain to the output keeps it in the graph.
-    const mute = ctx.createGain();
-    mute.gain.value = 0;
-    node.connect(mute).connect(ctx.destination);
-    await ctx.resume();
-    this._state = "on";
+    if (this.ctx === ctx) this._state = "on";
   }
 
   stop(): void {
