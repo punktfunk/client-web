@@ -31,7 +31,7 @@ export class HostCursor {
   /** The shape last worn, kept while a new serial's bitmap is still on its way. */
   private worn: Shape | null = null;
   /** The shape and size the canvas's cursor was last built from. */
-  private built: { shape: Shape; w: number; h: number } | null = null;
+  private built: { shape: Shape; w: number; h: number; css: string } | null = null;
 
   /** Keep a bitmap the host sent. Called from the glue, possibly before the first frame. */
   shape(serial: number, w: number, h: number, hotX: number, hotY: number, rgba: Uint8Array): void {
@@ -80,16 +80,18 @@ export class HostCursor {
     const scale = (Math.min(r.width / cw, r.height / ch) * cw) / Math.max(1, streamWidth);
     const w = Math.max(1, Math.min(MAX_CSS, Math.round(shape.bitmap.width * scale)));
     const h = Math.max(1, Math.min(MAX_CSS, Math.round(shape.bitmap.height * scale)));
+    // The built string, not the canvas's own value: after the host hid its pointer that is "none".
     const b = this.built;
-    if (b && b.shape === shape && b.w === w && b.h === h && canvas.style.cursor) return canvas.style.cursor;
-    this.built = { shape, w, h };
+    if (b && b.shape === shape && b.w === w && b.h === h) return b.css;
     const out = document.createElement("canvas");
     out.width = w;
     out.height = h;
     out.getContext("2d")?.drawImage(shape.bitmap, 0, 0, w, h);
     const hx = Math.min(w - 1, Math.round(shape.hotX * (w / shape.bitmap.width)));
     const hy = Math.min(h - 1, Math.round(shape.hotY * (h / shape.bitmap.height)));
-    return `url(${out.toDataURL()}) ${hx} ${hy}, auto`;
+    const css = `url(${out.toDataURL()}) ${hx} ${hy}, auto`;
+    this.built = { shape, w, h, css };
+    return css;
   }
 
   /** A session ended: forget its shapes and give the canvas its pointer back. */
