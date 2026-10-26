@@ -115,11 +115,19 @@ export const settings = {
     const chosen = Object.fromEntries(
       Object.entries(next).filter(([k, v]) => v !== DEFAULTS[k as keyof Settings]),
     );
-    localStorage.setItem(KEY, JSON.stringify(chosen));
+    try {
+      localStorage.setItem(KEY, JSON.stringify(chosen));
+    } catch {
+      // Storage blocked or full: the choice holds for this visit.
+    }
     return next;
   },
   reset(): Settings {
-    localStorage.removeItem(KEY);
+    try {
+      localStorage.removeItem(KEY);
+    } catch {
+      // Storage blocked: nothing was kept to remove.
+    }
     return { ...DEFAULTS };
   },
 };
