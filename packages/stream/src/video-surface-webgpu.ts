@@ -97,7 +97,13 @@ export class VideoSurfaceWebGPU implements VideoPlane {
     if (!navigator.gpu) throw new Error("no WebGPU in this engine");
     const adapter = await navigator.gpu.requestAdapter({ powerPreference: "high-performance" });
     if (!adapter) throw new Error("no WebGPU adapter");
-    return new VideoSurfaceWebGPU(canvas, await adapter.requestDevice());
+    const device = await adapter.requestDevice();
+    try {
+      return new VideoSurfaceWebGPU(canvas, device);
+    } catch (e) {
+      device.destroy();
+      throw e;
+    }
   }
 
   private constructor(

@@ -177,10 +177,11 @@ export class VideoSurface implements VideoPlane {
     return this.colorSpace;
   }
 
+  /** Frees the plane's own objects and keeps the context: the canvas outlives this plane, and
+   *  hands the next one this same context, lost or not. */
   destroy(): void {
     const gl = this.gl;
     gl.deleteTexture(this.tex);
     gl.deleteProgram(this.program);
-    gl.getExtension("WEBGL_lose_context")?.loseContext();
   }
 }

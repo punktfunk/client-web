@@ -163,22 +163,29 @@ export interface VideoStats {
  * Which plane to draw on.
  *
  * WebGPU when the engine has it, because it is the only shipped HDR route; WebGL2 otherwise.
- * Both satisfy the same seam, so this choice is invisible above.
+ * Both satisfy the same seam, so this choice is invisible above. A canvas keeps the first kind of
+ * context it handed out, so a plane picked mid-visit applies after a reload, and until then the
+ * one the canvas has draws instead of nothing.
  */
 export async function createPlane(
   canvas: HTMLCanvasElement,
   prefer: "auto" | "webgl2" | "webgpu" = "auto",
 ): Promise<{ plane: VideoPlane; backend: "webgpu" | "webgl2" }> {
-  if (prefer !== "webgl2") {
+  const webgpu = async () => ({ plane: await VideoSurfaceWebGPU.create(canvas), backend: "webgpu" as const });
+  const webgl2 = () => ({ plane: new VideoSurface(canvas), backend: "webgl2" as const });
+  if (prefer === "webgl2") {
     try {
-      return { plane: await VideoSurfaceWebGPU.create(canvas), backend: "webgpu" };
-    } catch (e) {
-      if (prefer === "webgpu") throw e;
-      // Falling back is the normal path on an engine without WebGPU, not a failure worth a
-      // dialog — the WebGL2 plane shows the same picture.
+      return webgl2();
+    } catch {
+      return webgpu();
     }
   }
-  return { plane: new VideoSurface(canvas), backend: "webgl2" };
+  try {
+    return await webgpu();
+  } catch {
+    // The normal path on an engine without WebGPU, not a failure worth a dialog.
+    return webgl2();
+  }
 }
 
 /**
@@ -196,6 +203,7 @@ export class VideoPipe {
   private meta = new Map<number, { flags: number; key: boolean }>();
   /** A fresh decoder takes a key frame first; deltas before one are refused. */
   private needKey = true;
+  private closed = false;
   private codec = 0;
   /** `Welcome`'s bit depth, HDR and range, for the decoder string, the plane and `PQ_PASSTHROUGH`. */
   private depth = 8;
@@ -247,6 +255,8 @@ export class VideoPipe {
     this.stats.height = height;
     if (!this.plane) {
       const made = await createPlane(this.canvas, this.prefer);
+      // Closed while the plane was made: it would outlive the pipe.
+      if (this.closed) return made.plane.destroy();
       this.plane = made.plane;
       this.backend = made.backend;
       this.stats.backend = made.backend;
@@ -410,6 +420,7 @@ export class VideoPipe {
   }
 
   close(): void {
+    this.closed = true;
     this.pending?.close();
     this.pending = null;
     this.closeDecoder();

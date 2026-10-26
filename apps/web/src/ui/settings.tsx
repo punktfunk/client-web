@@ -244,7 +244,7 @@ function SettingsTabs({ screen, actions }: { screen: SettingsScreen; actions: Ac
                 onChange={(codec) => set({ codec })}
               />
             </Row>
-            <Row label="Video plane" hint="Automatic uses WebGPU where the browser has it.">
+            <Row label="Video plane" hint="Automatic uses WebGPU where the browser has it. Once a stream has played, a change waits for the page to reload.">
               <Segmented
                 label="Video plane"
                 value={v.videoBackend}
