@@ -124,3 +124,16 @@ test("a second mouse button held with the first is pressed and released", () => 
   }
 });
 
+test("a wheel turned down scrolls down: the wire is up-positive, the browser down-positive", () => {
+  const sent: Array<[number, number, number]> = [];
+  const mod = { _pf_input: (kind: number, code: number, x: number) => sent.push([kind, code, x]) };
+  const pipe = new InputPipe(mod as never, {} as HTMLCanvasElement, { streamWidth: 1920, streamHeight: 1080, pointer: "absolute", deadzone: 0.05 });
+  const wheel = (deltaX: number, deltaY: number) =>
+    (pipe as unknown as { scroll(e: unknown): void }).scroll({ deltaMode: 0, deltaX, deltaY, preventDefault() {} });
+  wheel(0, 100);
+  wheel(100, 0);
+  assert.deepEqual(sent, [
+    [6, 0, -120],
+    [6, 1, 120],
+  ]);
+});

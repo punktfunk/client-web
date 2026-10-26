@@ -382,7 +382,8 @@ export class InputPipe {
     // Pixels, lines or pages, in that order of `deltaMode`; each to notches. 100 px and 3
     // lines are what a notch is in the engines that report those units.
     const notch = (e.deltaMode === 0 ? 100 : e.deltaMode === 1 ? 3 : 1) * (this.opts.invertScroll ? -1 : 1);
-    this.wheel.y += (e.deltaY / notch) * WHEEL_NOTCH;
+    // The wire's vertical is up-positive (core `input::scroll`); a browser's `deltaY` is down-positive.
+    this.wheel.y -= (e.deltaY / notch) * WHEEL_NOTCH;
     this.wheel.x += (e.deltaX / notch) * WHEEL_NOTCH;
     const vy = Math.trunc(this.wheel.y);
     if (vy) {
