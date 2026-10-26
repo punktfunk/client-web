@@ -775,12 +775,13 @@ pub extern "C" fn pf_session_pump() -> u32 {
             let key = i32::from(crate::keyframe::is_keyframe(&frame.data, codec));
             // SAFETY: the page reads `len` bytes at `ptr` and returns before this does; `frame`
             // owns the buffer for the whole call. R3: what crosses is the encoded access unit,
-            // never a decoded pixel.
+            // never a decoded pixel. Whole µs, as WebCodecs keeps a timestamp and the page looks
+            // each frame's flags up by it.
             unsafe {
                 pf_video_au(
                     frame.data.as_ptr(),
                     frame.data.len() as u32,
-                    frame.pts_ns as f64 / 1000.0,
+                    (frame.pts_ns / 1000) as f64,
                     key,
                     frame.flags,
                 )
