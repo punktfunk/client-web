@@ -64,7 +64,12 @@ export function installRemote(current: () => Screen, actions: () => Actions): ()
     const inField = !!t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA");
     if (tvBack(e)) {
       if (screen.kind === "streaming" && screen.menu) return;
-      if (back(screen, actions())) e.preventDefault();
+      // Handled here, and only here: the stream's own key listener reads Back as the menu toggle,
+      // and would close the menu this just opened.
+      if (back(screen, actions())) {
+        e.preventDefault();
+        e.stopImmediatePropagation();
+      }
       return;
     }
     if (inField) return;
