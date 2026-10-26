@@ -32,8 +32,9 @@ export function captureLog(): void {
 /** What the page has logged, under the browser it ran in — and on a Samsung set, the set: what
  *  the host files as a client log. */
 export function pageLog(): string {
-  const body = lines.join("\n");
-  const tail = body.length > MAX_BYTES ? body.slice(body.length - MAX_BYTES) : body;
+  // Cut by bytes, not characters: the host's limit is in bytes, and text past ASCII takes more.
+  const body = new TextEncoder().encode(lines.join("\n"));
+  const tail = new TextDecoder().decode(body.length > MAX_BYTES ? body.subarray(body.length - MAX_BYTES) : body);
   const device = tizenInfo();
   const where = typeof location === "undefined" ? "" : `\npage: ${location.protocol}//${location.host}${location.pathname}`;
   return `punktfunk web client\nuser agent: ${navigator.userAgent}${device ? `\ndevice: ${device}` : ""}${where}\n\n${tail}\n`;
