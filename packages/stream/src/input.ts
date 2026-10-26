@@ -79,6 +79,16 @@ const VK: Readonly<Record<string, number>> = {
 /** Browser `MouseEvent.button` → GameStream button id (X1/X2 are 4/5 there). */
 const MOUSE_BUTTON: readonly number[] = [1, 2, 3, 4, 5];
 
+/** `MouseEvent.buttons` bits, each with the `button` index it stands for: right is the second
+ *  bit but the third index. */
+const BUTTON_BITS: ReadonlyArray<readonly [bit: number, button: number]> = [
+  [1, 0],
+  [2, 2],
+  [4, 1],
+  [8, 3],
+  [16, 4],
+];
+
 /** One wheel notch on the wire. */
 const WHEEL_NOTCH = 120;
 
@@ -151,6 +161,8 @@ export class InputPipe {
   /** Fractional wheel travel carried to the next event, so slow scrolls still arrive. */
   private wheel = { x: 0, y: 0 };
   private touches = new Map<number, number>();
+  /** Mouse buttons (`MouseEvent.buttons`) the host holds down. */
+  private held = 0;
   /** Per pad: when the escape chord went down (`0` up), whether its hold fired, and whether
    *  the menu chord is down — each chord fires on its edge, not every frame it is held. */
   private chords = new Map<number, { escapeSince: number; held: boolean; menu: boolean }>();
@@ -209,8 +221,10 @@ export class InputPipe {
       this.on(c, "pointerrawupdate" as "pointermove", (e: PointerEvent) => {
         if (e.pointerType !== "touch") this.pointer(e, "move");
       });
+      // A second button pressed while one is held may come only as `pointermove`.
       this.on(c, "pointermove", (e: PointerEvent) => {
         if (e.pointerType === "touch") this.pointer(e, "move");
+        else this.press(e.buttons);
       });
     } else {
       this.on(c, "pointermove", (e: PointerEvent) => this.pointer(e, "move"));
@@ -285,6 +299,18 @@ export class InputPipe {
     this.mod._pf_input(down ? KIND.KEY_DOWN : KIND.KEY_UP, vk, 0, 0, 0);
   }
 
+  /** Send what changed in `MouseEvent.buttons`. A second button pressed or released while one is
+   *  held arrives as `pointermove`, never as its own down or up, so every event is compared. */
+  private press(buttons: number): void {
+    const changed = buttons ^ this.held;
+    this.held = buttons;
+    for (const [bit, index] of BUTTON_BITS) {
+      if (changed & bit) {
+        this.mod._pf_input(buttons & bit ? KIND.MOUSE_BUTTON_DOWN : KIND.MOUSE_BUTTON_UP, MOUSE_BUTTON[index]!, 0, 0, 0);
+      }
+    }
+  }
+
   // --- pointer ---------------------------------------------------------------------------
   private pointer(e: PointerEvent, phase: "down" | "move" | "up"): void {
     if (e.pointerType === "touch") return this.touch(e, phase);
@@ -305,21 +331,19 @@ export class InputPipe {
         if (e.movementX || e.movementY) {
           this.mod._pf_input(KIND.MOUSE_MOVE, 0, e.movementX, e.movementY, 0);
         }
-        return;
+      } else {
+        const [x, y] = this.stream(e);
+        this.mod._pf_input(KIND.MOUSE_MOVE_ABS, 0, x, y, this.extent());
       }
-      const [x, y] = this.stream(e);
-      this.mod._pf_input(KIND.MOUSE_MOVE_ABS, 0, x, y, this.extent());
-      return;
+      return this.press(e.buttons);
     }
-    const button = MOUSE_BUTTON[e.button];
-    if (button === undefined) return;
     // Put the pointer where the click is before the click lands — but not while locked, where
     // there is no local position to speak of and sending one would teleport the remote cursor.
     if (!this.captured) {
       const [x, y] = this.stream(e);
       this.mod._pf_input(KIND.MOUSE_MOVE_ABS, 0, x, y, this.extent());
     }
-    this.mod._pf_input(phase === "down" ? KIND.MOUSE_BUTTON_DOWN : KIND.MOUSE_BUTTON_UP, button, 0, 0, 0);
+    this.press(e.buttons);
   }
 
   private touch(e: PointerEvent, phase: "down" | "move" | "up"): void {
