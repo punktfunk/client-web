@@ -653,6 +653,9 @@ export class Engine {
     this.tier = this.tunable.statsTier;
     this.hud = [];
     this.lastDropped = 0;
+    // The wasm frame count starts again at zero with each session.
+    this.lastFrames = 0;
+    this.lastSecond = performance.now();
     this.launchNotice = this.sdrNotice
       ? { text: "This browser can't show HDR video, so the stream is in SDR.", at: performance.now() }
       : null;
@@ -1091,6 +1094,8 @@ export class Engine {
   // --- the frame loop ------------------------------------------------------------------
   private frame(): void {
     if (!this.running) return;
+    // Armed first: a throw below costs this frame, not the loop that pumps every later one.
+    requestAnimationFrame(() => this.frame());
     // Signing is asynchronous and the phase can change on either side of it, so this is polled
     // rather than pushed. One check per frame costs nothing next to the draw.
     if (this.mod._pf_cred_phase() === CRED.NEEDS_SIGNATURE) this.mod._pf_device_sign();
@@ -1098,7 +1103,6 @@ export class Engine {
     this.mod._pf_session_pump();
     this.video?.present();
     this.updateSession();
-    requestAnimationFrame(() => this.frame());
   }
 
   private pumpCredential(): void {
@@ -1187,6 +1191,8 @@ export class Engine {
       this.input.tune({ streamWidth: v.width, streamHeight: v.height });
     }
     this.input?.poll();
+    // A pad chord in `poll` can end the stream; what follows would report it live again.
+    if (!this.video) return;
     if (v?.width) {
       const input = this.input !== null;
       this.cursor.tick(this.mod, this.opts.videoCanvas, input, this.tunable.pointer === "absolute", this.input?.captured ?? false, v.width);
