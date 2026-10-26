@@ -212,7 +212,7 @@ class App {
       },
       setSettings: (patch) => {
         this.prefs = settings.set(patch);
-        this.applyPrefs();
+        this.applyPrefs(patch);
         this.render(engine.current);
       },
       toggleCapture: () => {
@@ -887,10 +887,12 @@ class App {
   }
 
   // --- settings and the window ------------------------------------------------------------
-  /** Push the tunable half of the settings at the engine. The rest — size, rate, bitrate — is
-   *  read when a stream starts, because it is `StreamOptions` and not an engine property. */
-  private applyPrefs(): void {
-    this.engine.configure({
+  /** Push the tunable half of the settings at the engine, or only the keys `changed` names: a
+   *  setting pushed again would undo what a shortcut switched mid-stream. The rest — size, rate,
+   *  bitrate — is read when a stream starts, because it is `StreamOptions` and not an engine
+   *  property. */
+  private applyPrefs(changed?: Partial<Settings>): void {
+    const all: Parameters<Engine["configure"]>[0] = {
       videoBackend: this.prefs.videoBackend,
       audio: this.prefs.audio,
       captureInput: this.prefs.captureInput,
@@ -901,7 +903,8 @@ class App {
       codec: this.prefs.codec,
       hdr: this.prefs.hdr,
       invertScroll: this.prefs.invertScroll,
-    });
+    };
+    this.engine.configure(changed ? Object.fromEntries(Object.entries(all).filter(([k]) => k in changed)) : all);
   }
 
   /**
