@@ -407,6 +407,7 @@ mergeInto(LibraryManager.library, {
       })
       .catch(function (e) {
         console.error("punktfunk: no device key", e);
+        if (Module.__pfOnDeviceFailed) Module.__pfOnDeviceFailed();
       });
     return 1;
   },

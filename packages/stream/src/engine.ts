@@ -304,6 +304,7 @@ export class Engine {
     };
     if (opts.uiCanvas) mod.__pfUiCanvas = opts.uiCanvas;
     mod.__pfOnDeviceReady = () => this.onDeviceReady();
+    mod.__pfOnDeviceFailed = () => this.onDeviceFailed();
     mod.__pfOnCtlReady = () => this.onControlStream();
     mod.__pfOnClosed = (code, reason) => this.onClosed(code, reason);
     mod.__pfOnRefused = (code, reason) => this.onClosed(code, reason);
@@ -323,7 +324,11 @@ export class Engine {
    */
   static async create(opts: EngineOptions): Promise<Engine> {
     if (!decodeSupported()) {
-      throw new Error("this browser cannot decode video (no WebCodecs)");
+      throw new Error("this browser can't decode video. Open this page in a current Chrome, Edge, Safari or Firefox");
+    }
+    // WebTransport and the device key exist only there; plain http on a LAN address is not one.
+    if (!isSecureContext) {
+      throw new Error("this page isn't on an https address, so the browser won't stream from it. Open it over https");
     }
     const [mod, codecs, channels, gpu] = await Promise.all([loadModule(), decodableCodecs(), playableChannels(), webgpuUsable()]);
     return new Engine(mod, opts, codecs, channels, gpu);
@@ -935,6 +940,17 @@ export class Engine {
     this.checkHost(origin, fingerprint, device);
   }
 
+  /** The device key could not be loaded or made, so nothing can sign for this browser. */
+  private onDeviceFailed(): void {
+    const origin = this.origin;
+    if (!origin) return;
+    this.set({
+      kind: "error",
+      origin,
+      message: "this browser couldn't open its device key. Allow this site to store data, then try again",
+    });
+  }
+
   /** Open the plane. Only after `onDeviceReady`: the wasm side must already hold the key's SPKI. */
   private dial(): void {
     if (!this.origin || !this.plane) return;
@@ -1127,6 +1143,13 @@ export class Engine {
         this.offeredSince = 0;
         this.set({ kind: "forgotten", origin });
       }
+      return;
+    }
+    // The host sent something this page can't read: nothing after it will be either.
+    if (phase === SESSION.FAILED) {
+      this.stopSession();
+      this.set({ kind: "error", origin, message: "this page couldn't read what the host sent", skew: true });
+      this.mod._pf_wt_close?.();
       return;
     }
     if (phase !== SESSION.LIVE) return;

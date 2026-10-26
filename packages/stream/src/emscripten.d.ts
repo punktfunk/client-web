@@ -140,6 +140,8 @@ export interface PunktfunkModule {
   __pfUiCanvas?: HTMLCanvasElement;
   /** The device key is loaded and Rust holds its SPKI. Dial now, not before. */
   __pfOnDeviceReady?: () => void;
+  /** The device key could not be loaded or made. */
+  __pfOnDeviceFailed?: () => void;
   /** The control stream is open. Send `Hello`, or ask for a PIN. */
   __pfOnCtlReady?: () => void;
   /** The connection closed. `code` is the host's application close code (`-1` for a transport

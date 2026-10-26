@@ -123,3 +123,12 @@ test("a connect left before its host answers says nothing afterwards", async () 
   }
 });
 
+test("a session the page can't read ends as a version mismatch, not a hang", () => {
+  const { engine, mod, calls } = engineIn("ready");
+  engine.startStream({ width: 1280, height: 720 });
+  mod._pf_session_phase = () => 3;
+  (engine as unknown as { updateSession(): void }).updateSession();
+  assert.equal(engine.current.kind, "error");
+  assert.equal((engine.current as { skew?: boolean }).skew, true);
+  assert.ok(calls.includes("_pf_session_reset") && calls.includes("_pf_wt_close"));
+});
