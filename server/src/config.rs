@@ -70,11 +70,21 @@ impl Config {
             tls,
             tls_names: list(get("TLS_NAMES")),
             hosts: parse_hosts(&get("PUNKTFUNK_HOSTS").unwrap_or_default())?,
-            discover: get("DISCOVER").as_deref() != Some("0"),
-            add_hosts: get("ADD_HOSTS").as_deref() != Some("0"),
+            discover: switch("DISCOVER", get("DISCOVER"))?,
+            add_hosts: switch("ADD_HOSTS", get("ADD_HOSTS"))?,
             dist: get("DIST_DIR").unwrap_or_else(|| "dist".into()).into(),
             data: get("DATA_DIR").unwrap_or_else(|| "data".into()).into(),
         })
+    }
+}
+
+/// A switch that is on unless set: `0`, `false`, `no` or `off` turn it off. A value it does not
+/// know is refused rather than read as on, since both switches widen what the server reaches.
+fn switch(name: &str, v: Option<String>) -> Result<bool> {
+    match v.map(|s| s.trim().to_ascii_lowercase()).as_deref() {
+        None | Some("1" | "true" | "yes" | "on") => Ok(true),
+        Some("0" | "false" | "no" | "off") => Ok(false),
+        Some(other) => bail!("{name} is 1 or 0, not {other:?}"),
     }
 }
 
@@ -136,7 +146,8 @@ fn parse_host(entry: &str) -> Result<Listed> {
 /// A certificate fingerprint as the console shows it: 64 hex digits, colons allowed.
 pub fn parse_fp(s: &str) -> Result<[u8; 32]> {
     let hex: String = s.chars().filter(|c| *c != ':').collect();
-    if hex.len() != 64 {
+    // ASCII first: the slicing below is by byte, and an mDNS advert can carry anything.
+    if hex.len() != 64 || !hex.is_ascii() {
         bail!("a fingerprint is 64 hex digits");
     }
     let mut out = [0u8; 32];
@@ -173,6 +184,16 @@ mod tests {
         assert_eq!(got[2].port, 47990);
         assert!(parse_hosts("nameless").is_err());
         assert!(parse_hosts("desk=1.2.3.4#abc").is_err());
+        assert!(parse_fp(&format!("a{}a", "é".repeat(31))).is_err());
+    }
+
+    #[test]
+    fn a_switch_turns_off_by_any_usual_word() {
+        for off in ["0", "false", "OFF", " no "] {
+            let c = Config::from_lookup(|k| (k == "ADD_HOSTS").then(|| off.into())).unwrap();
+            assert!(!c.add_hosts, "{off}");
+        }
+        assert!(Config::from_lookup(|k| (k == "DISCOVER").then(|| "maybe".into())).is_err());
     }
 
     #[test]
