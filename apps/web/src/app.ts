@@ -670,7 +670,8 @@ class App {
     } finally {
       if (this.libraryFor === s.origin) {
         this.libraryLoading = false;
-        this.libraryAt = Date.now();
+        // A failure keeps no clock: opening the host again asks again.
+        if (!this.libraryError) this.libraryAt = Date.now();
       }
     }
     this.redrawLibrary();
