@@ -157,7 +157,14 @@ export interface PunktfunkModule {
   /** A host pointer bitmap: straight-alpha RGBA, copied out of wasm memory. */
   __pfOnCursorShape?: (serial: number, w: number, h: number, hotX: number, hotY: number, rgba: Uint8Array) => void;
   /** The negotiated video format, once `Welcome` has been read. */
-  __pfOnVideoConfig?: (codec: number, width: number, height: number, depth: number, hdr: boolean) => void;
+  __pfOnVideoConfig?: (
+    codec: number,
+    width: number,
+    height: number,
+    depth: number,
+    hdr: boolean,
+    fullRange: boolean,
+  ) => void;
   /** One access unit. The bytes are copied out of wasm memory before this is called. */
   __pfOnAccessUnit?: (data: Uint8Array, ptsUs: number, key: boolean, flags: number) => void;
   /** One thing the console raised, as JSON: a bridge event or `{"cmd": ConsoleCmd}`. */

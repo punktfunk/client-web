@@ -133,14 +133,13 @@ export function hdrDisplay(backend: "auto" | "webgl2" | "webgpu", gpu: boolean):
  * What an HDR decoder is told the picture is: BT.2020's matrix, but BT.709 primaries and the sRGB
  * transfer. The browser then converts YCbCr to RGB and nothing else, and the plane receives the
  * PQ signal as sent, which `fs_pq` decodes. Left to itself, each engine ran PQ through an SDR
- * conversion, and the picture came out grey.
+ * conversion, and the picture came out grey. The range is `Welcome`'s, set per configure.
  */
 const PQ_PASSTHROUGH: VideoColorSpaceInit = {
   primaries: "bt709",
   transfer: "iec61966-2-1",
   // In the WebCodecs registry, not yet in TypeScript's DOM types.
   matrix: "bt2020-ncl" as VideoMatrixCoefficients,
-  fullRange: false,
 };
 
 export interface VideoStats {
@@ -198,9 +197,10 @@ export class VideoPipe {
   /** A fresh decoder takes a key frame first; deltas before one are refused. */
   private needKey = true;
   private codec = 0;
-  /** `Welcome`'s bit depth and whether it is HDR, for the decoder string and the plane. */
+  /** `Welcome`'s bit depth, HDR and range, for the decoder string, the plane and `PQ_PASSTHROUGH`. */
   private depth = 8;
   private hdr = false;
+  private fullRange = false;
   /** The first frame of an HDR configure has been checked for `PQ_PASSTHROUGH`. */
   private hdrChecked = false;
   private lastRebuildMs = 0;
@@ -228,9 +228,10 @@ export class VideoPipe {
 
   /** Install the callbacks the glue calls. Idempotent, so a reconnect can call it again. */
   attach(): void {
-    this.mod.__pfOnVideoConfig = (codec, width, height, depth, hdr) => {
+    this.mod.__pfOnVideoConfig = (codec, width, height, depth, hdr, fullRange) => {
       this.depth = depth;
       this.hdr = hdr;
+      this.fullRange = fullRange;
       void this.configure(codec, width, height);
     };
     this.mod.__pfOnAccessUnit = (data, ptsUs, key, flags) => this.submit(data, ptsUs, key, flags);
@@ -268,7 +269,7 @@ export class VideoPipe {
       codedHeight: height,
       optimizeForLatency: true,
       hardwareAcceleration: "prefer-hardware",
-      ...(this.hdr ? { colorSpace: PQ_PASSTHROUGH } : {}),
+      ...(this.hdr ? { colorSpace: { ...PQ_PASSTHROUGH, fullRange: this.fullRange } } : {}),
     });
     this.hdrChecked = false;
     this.decoder = decoder;

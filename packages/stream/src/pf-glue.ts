@@ -466,8 +466,8 @@ mergeInto(LibraryManager.library, {
     if (Module.__pfOnCursorShape) Module.__pfOnCursorShape(serial >>> 0, w, h, hx, hy, HEAPU8.slice(ptr, ptr + len));
   },
 
-  pf_video_config: function (codec: number, width: number, height: number, depth: number, hdr: number): void {
-    if (Module.__pfOnVideoConfig) Module.__pfOnVideoConfig(codec, width, height, depth, hdr !== 0);
+  pf_video_config: function (codec: number, width: number, height: number, depth: number, hdr: number, fullRange: number): void {
+    if (Module.__pfOnVideoConfig) Module.__pfOnVideoConfig(codec, width, height, depth, hdr !== 0, fullRange !== 0);
   },
 
   // --- audio ----------------------------------------------------------------------------------
