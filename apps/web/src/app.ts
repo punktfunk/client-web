@@ -911,7 +911,8 @@ class App {
    */
   private watchSize(): void {
     const observer = new ResizeObserver(() => {
-      if (!this.prefs.resizeStream) return;
+      // A fixed resolution hides the toggle, and so must turn it off.
+      if (!this.prefs.resizeStream || this.prefs.width !== 0) return;
       const now = this.engine.current;
       if (now.kind !== "streaming") return;
       const [width, height] = size(this.uiCanvas);
