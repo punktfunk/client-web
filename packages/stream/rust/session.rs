@@ -219,6 +219,7 @@ pub extern "C" fn pf_session_reset() {
     });
     crate::audio::reset();
     crate::rumble::reset();
+    crate::transport::reset();
 }
 
 /// Ask the host to switch to `width` x `height` at `fps` without reconnecting (a window resize).
