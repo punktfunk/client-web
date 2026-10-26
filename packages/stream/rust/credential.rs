@@ -48,6 +48,8 @@ struct Credential {
     to_sign: Vec<u8>,
     /// SPAKE2 role A, live between `PairRequest` and `PairProof`.
     pake: Option<pake::PairingPake>,
+    /// The host's confirmation checked out: it knows the PIN. Only then can a `PairResult` pair.
+    host_proved: bool,
     phase: Cred,
 }
 
@@ -216,6 +218,7 @@ pub fn pair_begin(pin: &str, name: &str) -> Option<Vec<u8>> {
         }
         let (state, spake_a) = pake::start(true, pin, &c.fingerprint, &c.host_fp);
         c.pake = Some(state);
+        c.host_proved = false;
         c.phase = Cred::Pairing;
         Some(
             PairRequest {
@@ -244,6 +247,7 @@ pub fn on_pair_challenge(ch: &PairChallenge) -> Option<Vec<u8>> {
             c.phase = Cred::Failed;
             return None;
         }
+        c.host_proved = true;
         Some(
             PairProof {
                 confirm: confirms.client,
@@ -253,11 +257,19 @@ pub fn on_pair_challenge(ch: &PairChallenge) -> Option<Vec<u8>> {
     })
 }
 
-/// The host's verdict. The page stores the host fingerprint only on `Paired`.
+/// The host's verdict. The page stores the host fingerprint only on `Paired`, so a yes counts
+/// only from a host that proved the PIN first: anything else answering `ok` skipped the PAKE.
 pub fn on_pair_result(r: &PairResult) {
     CRED.with(|c| {
         let mut c = c.borrow_mut();
-        c.phase = if r.ok { Cred::Paired } else { Cred::Failed };
+        if c.phase != Cred::Pairing {
+            return;
+        }
+        c.phase = if r.ok && c.host_proved {
+            Cred::Paired
+        } else {
+            Cred::Failed
+        };
     });
 }
 
@@ -333,6 +345,21 @@ mod tests {
             .is_none(),
             "wrong PIN: no proof goes back"
         );
+        assert_eq!(phase(), Cred::Failed);
+        on_pair_result(&PairResult { ok: true });
+        assert_eq!(
+            phase(),
+            Cred::Failed,
+            "a yes after a failed MAC stays a failure"
+        );
+    }
+
+    /// A yes with no challenge before it comes from something that never knew the PIN.
+    #[test]
+    fn a_yes_without_the_ceremony_is_a_failure() {
+        load(b"a device key", [0x42; 32]);
+        pair_begin("1234", "Browser").unwrap();
+        on_pair_result(&PairResult { ok: true });
         assert_eq!(phase(), Cred::Failed);
     }
 
