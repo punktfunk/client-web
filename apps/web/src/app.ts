@@ -615,14 +615,17 @@ class App {
     try {
       const r = await fetch(url, { method: "POST" });
       if (!r.ok) throw new Error(`wake refused (${r.status})`);
-      for (let tries = 0; tries < 20; tries++) {
+      let up = false;
+      for (let tries = 0; tries < 20 && !up; tries++) {
         await new Promise((done) => setTimeout(done, 3000));
         const now = await reach(origin);
         this.reachCache.set(origin, { reach: now, at: Date.now() });
-        if (now === "ok") break;
+        up = now === "ok";
       }
+      if (!up) this.ui.notify(`${this.nameOf(origin)} didn't answer within a minute of waking. It may still be starting.`, "error");
     } catch (e) {
       console.warn("punktfunk: wake", e);
+      this.ui.notify(`Couldn't wake ${this.nameOf(origin)} — this page's server didn't send the wake packet.`, "error");
     } finally {
       this.waking.delete(origin);
       this.redrawLists();
