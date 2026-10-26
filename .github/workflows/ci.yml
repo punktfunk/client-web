@@ -126,7 +126,8 @@ jobs:
   # pull requests build it without pushing. Pushing needs the UNOM_REGISTRY_USER and
   # UNOM_REGISTRY_TOKEN secrets, a Gitea token with package write.
   image:
-    needs: build
+    # Every check, not only the build: an image is what people run.
+    needs: [build, web, check, server]
     strategy:
       matrix:
         include:
