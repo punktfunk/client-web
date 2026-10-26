@@ -135,16 +135,18 @@ async fn wake(
 }
 
 /// Vite hashes everything under `/assets`, so those never change; the page itself always might.
+/// A missing asset is not cached: mid-deploy it may be one the next request finds.
 async fn cache(req: Request, next: Next) -> Response {
     let path = req.uri().path();
-    let value = if path.starts_with("/assets/") {
+    let (asset, proxied) = (path.starts_with("/assets/"), path.starts_with("/h/"));
+    let mut res = next.run(req).await;
+    let value = if asset && res.status().is_success() {
         Some("public, max-age=31536000, immutable")
-    } else if path.starts_with("/h/") {
+    } else if proxied {
         None
     } else {
         Some("no-cache")
     };
-    let mut res = next.run(req).await;
     if let Some(v) = value {
         res.headers_mut()
             .entry(header::CACHE_CONTROL)
