@@ -161,7 +161,8 @@ export class InputPipe {
   /** Fractional wheel travel carried to the next event, so slow scrolls still arrive. */
   private wheel = { x: 0, y: 0 };
   private touches = new Map<number, number>();
-  /** Mouse buttons (`MouseEvent.buttons`) the host holds down. */
+  /** Keys and mouse buttons (`MouseEvent.buttons`) the host holds down, for a lost focus to let go of. */
+  private keys = new Set<number>();
   private held = 0;
   /** Per pad: when the escape chord went down (`0` up), whether its hold fired, and whether
    *  the menu chord is down — each chord fires on its edge, not every frame it is held. */
@@ -233,6 +234,8 @@ export class InputPipe {
     this.on(c, "pointercancel", (e: PointerEvent) => this.pointer(e, "up"));
     this.on(c, "wheel", (e: WheelEvent) => this.scroll(e), { passive: false });
     this.on(c, "contextmenu", (e: Event) => e.preventDefault());
+    // A release that lands in another window or tab never comes back here.
+    this.on(window, "blur", () => this.release());
     // The pad set is polled; these only keep the arrival and removal events honest.
     this.on(window, "gamepadconnected", (e: GamepadEvent) => this.arrive(e.gamepad));
     this.on(window, "gamepaddisconnected", (e: GamepadEvent) => this.leave(e.gamepad.index));
@@ -296,7 +299,16 @@ export class InputPipe {
     // Held keys repeat on the host; the browser's own repeat would double them.
     if (down && e.repeat) return;
     e.preventDefault();
+    if (down) this.keys.add(vk);
+    else this.keys.delete(vk);
     this.mod._pf_input(down ? KIND.KEY_DOWN : KIND.KEY_UP, vk, 0, 0, 0);
+  }
+
+  /** Let go of every key and button the host holds. */
+  private release(): void {
+    for (const vk of this.keys) this.mod._pf_input(KIND.KEY_UP, vk, 0, 0, 0);
+    this.keys.clear();
+    this.press(0);
   }
 
   /** Send what changed in `MouseEvent.buttons`. A second button pressed or released while one is
