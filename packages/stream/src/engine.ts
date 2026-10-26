@@ -565,6 +565,21 @@ export class Engine {
     this.dialBox();
   }
 
+  /** The browser decodes this stream neither in hardware nor in software. The title keeps
+   *  running on the host, as on a Leave. */
+  private undecodable(): void {
+    const origin = this.origin;
+    if (!origin || (this.state.kind !== "streaming" && this.state.kind !== "starting")) return;
+    this.stopSession();
+    // `error` before the close, so the close it answers with finds nothing left to report.
+    this.set({
+      kind: "error",
+      origin,
+      message: "this browser can't decode the host's video. Try another browser, or turn on hardware acceleration in this one",
+    });
+    this.mod._pf_wt_close?.();
+  }
+
   /** Dial the host this engine connected to, with the credential bound to its plane again. */
   private dialBox(): void {
     this.seatPlane = null;
@@ -603,8 +618,12 @@ export class Engine {
   /** Send `Hello`, with the video plane up to take what answers it. */
   private hello(opts: StreamOptions): void {
     // Off the decoder's own callback: the restart closes that decoder.
-    this.video ??= new VideoPipe(this.mod, this.opts.videoCanvas, this.tunable.videoBackend, () =>
-      setTimeout(() => this.restartInSdr(), 0),
+    this.video ??= new VideoPipe(
+      this.mod,
+      this.opts.videoCanvas,
+      this.tunable.videoBackend,
+      () => setTimeout(() => this.restartInSdr(), 0),
+      () => this.undecodable(),
     );
     this.video.attach();
     this.tier = this.tunable.statsTier;
