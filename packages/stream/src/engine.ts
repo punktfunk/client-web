@@ -276,6 +276,11 @@ export class Engine {
   private pendingKnock: StreamOptions | null = null;
   /** When the request for access went out, while it waits; `0` otherwise. */
   private knockSince = 0;
+  /** Moved by every `reset`: a `connect` that comes back from an await to a newer one was
+   *  cancelled or replaced, and says nothing. */
+  private epoch = 0;
+  /** The fingerprint the last `connect` was told to expect, for the reconnects this engine makes. */
+  private expect: string | undefined;
 
   private constructor(
     private readonly mod: PunktfunkModule,
@@ -355,7 +360,7 @@ export class Engine {
    * throw: the consumer renders `blocked`, `unreachable`, `untrusted` or `error`, and each
    * says what a person can do about it.
    */
-  async connect(address: string | HostTarget, opts: { expectFingerprint?: string } = {}): Promise<void> {
+  async connect(address: string | HostTarget, opts: { expectFingerprint?: string | undefined } = {}): Promise<void> {
     let origin: string;
     if (typeof address === "string") {
       try {
@@ -366,7 +371,15 @@ export class Engine {
     } else {
       origin = address.api.replace(/\/+$/, "");
     }
+    // A PIN or a request for access held for one host's reconnect is never sent to another.
+    if (origin !== this.origin) {
+      this.pendingPin = null;
+      this.pendingKnock = null;
+    }
     this.reset();
+    const epoch = this.epoch;
+    const stale = () => epoch !== this.epoch;
+    this.expect = opts.expectFingerprint;
     this.origin = origin;
     this.target = address;
     this.planeHost =
@@ -381,6 +394,7 @@ export class Engine {
       // no certificate to accept, so `blocked` cannot happen; the host's own 404 is the one
       // failure with a sentence of its own.
       const b = await pf.bootstrap(pf.bootstrapUrl(origin, this.planeHost));
+      if (stale()) return;
       if (b.reach === "unreachable") return this.set({ kind: "unreachable", origin });
       if (b.reach === "no-plane") {
         return this.set({
@@ -394,17 +408,21 @@ export class Engine {
       // Tell "certificate not accepted" apart from "nothing there" before saying anything: the
       // two are the same opaque error, and only one of them has a fix a person can follow.
       const { reach: state, said } = await pf.reachWhy(origin);
+      if (stale()) return;
       if (state === "unreachable") {
         return said ? this.set({ kind: "error", origin, message: said }) : this.set({ kind: "unreachable", origin });
       }
       if (state === "blocked") {
         return this.set({ kind: "blocked", origin, acceptUrl: pf.acceptUrl(origin) });
       }
+      let plane: pf.Plane;
       try {
-        this.plane = await pf.fetchPlane(origin);
+        plane = await pf.fetchPlane(origin);
       } catch (e) {
-        return this.set({ kind: "error", origin, message: message(e) });
+        return stale() ? undefined : this.set({ kind: "error", origin, message: message(e) });
       }
+      if (stale()) return;
+      this.plane = plane;
     }
     // Pairing keeps the identity the attestation names. Without one, every pairing is lost at once.
     if (!this.plane.cert_hash_sig || !this.plane.host_cert_der) {
@@ -429,8 +447,9 @@ export class Engine {
       } catch (e) {
         // Refuse before dialling. A host that cannot prove it is the one we paired with may still
         // be reachable — that is exactly the case this exists to catch.
-        return this.set({ kind: "untrusted", origin, reason: message(e) });
+        return stale() ? undefined : this.set({ kind: "untrusted", origin, reason: message(e) });
       }
+      if (stale()) return;
     }
     pf.hosts.remember(origin, typeof this.target === "object" && this.target ? { plane: this.target.plane } : {});
     // Every management call from here rides the plane, pinned to the hash just verified. The
@@ -470,7 +489,7 @@ export class Engine {
         // reconnect back through the credential the host just refused.
         pf.hosts.unpair(origin);
         this.mod._pf_wt_close?.();
-        void this.connect(this.target ?? origin);
+        void this.connect(this.target ?? origin, { expectFingerprint: this.expect });
         return;
       }
       default:
@@ -497,7 +516,7 @@ export class Engine {
         this.pendingKnock = opts;
         pf.hosts.unpair(origin);
         this.mod._pf_wt_close?.();
-        void this.connect(this.target ?? origin);
+        void this.connect(this.target ?? origin, { expectFingerprint: this.expect });
         return;
       default:
         return;
@@ -896,8 +915,9 @@ export class Engine {
     this.offeredSince = 0;
     this.knockSince = 0;
     this.pendingStream = null;
+    this.epoch++;
     // `pendingPin` and `pendingKnock` survive: each is set right before the reconnect that calls
-    // this.
+    // this. `connect` drops them for another host.
   }
 
   /**
@@ -939,6 +959,7 @@ export class Engine {
     const knock = this.pendingKnock;
     this.pendingKnock = null;
     if (knock) {
+      this.streamed = knock;
       this.knockSince = performance.now();
       this.set({ kind: "awaiting-approval", origin, name: this.deviceName });
       return this.hello(knock);
@@ -1073,8 +1094,9 @@ export class Engine {
       // The fingerprint stored is the long-lived identity's, not the plane's throwaway
       // certificate, which is replaced every twelve days.
       void pf.hostFingerprint(this.plane).then((fp) => {
+        // Kept even if the page has moved on: the host has stored this device by now.
         if (fp) pf.hosts.remember(origin, { fingerprint: fp });
-        this.set({ kind: "paired", origin });
+        if (this.origin === origin) this.set({ kind: "paired", origin });
       });
     } else if (phase === CRED.FAILED) {
       this.settled = true;
