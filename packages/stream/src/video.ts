@@ -203,6 +203,8 @@ export class VideoPipe {
   private meta = new Map<number, { flags: number; key: boolean }>();
   /** A fresh decoder takes a key frame first; deltas before one are refused. */
   private needKey = true;
+  /** This decoder has asked the host for that key frame. */
+  private askedKey = false;
   private closed = false;
   private codec = 0;
   /** `Welcome`'s bit depth, HDR and range, for the decoder string, the plane and `PQ_PASSTHROUGH`. */
@@ -268,6 +270,7 @@ export class VideoPipe {
     this.closeDecoder();
     this.meta.clear();
     this.needKey = true;
+    this.askedKey = false;
     const decoder = new VideoDecoder({
       output: (frame) => this.onFrame(frame),
       error: (e) => {
@@ -308,7 +311,15 @@ export class VideoPipe {
     // WebCodecs requires the first chunk after a configure to be a key frame, and a delta before
     // one is a hard error rather than a dropped frame. The wire carries no such bit, so
     // `is_keyframe` in `session.rs` reads it out of the bitstream; this is the other half of that.
-    if (this.needKey && !key) return;
+    if (this.needKey && !key) {
+      // A delta first: the key frame went by before this decoder was up, and the host sends the
+      // next one only when asked.
+      if (!this.askedKey) {
+        this.askedKey = true;
+        queueMicrotask(() => this.mod._pf_request_keyframe());
+      }
+      return;
+    }
     try {
       decoder.decode(
         new EncodedVideoChunk({
@@ -346,6 +357,7 @@ export class VideoPipe {
     this.accel = accel;
     void this.configure(this.codec, this.stats.width, this.stats.height);
     this.mod._pf_request_keyframe();
+    this.askedKey = true;
   }
 
   /** The first of `prefer-hardware` and `no-preference` the browser takes for this stream, or
