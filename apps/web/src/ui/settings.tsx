@@ -72,7 +72,7 @@ export function SettingsDialog({ screen, actions }: { screen: SettingsScreen; ac
       <DialogContent className="max-w-3xl">
         <DialogHeader>
           <DialogTitle>Settings</DialogTitle>
-          <DialogDescription>Stream settings take effect on the next stream; the rest apply now.</DialogDescription>
+          <DialogDescription>Mouse, controller and statistics settings apply now; the rest take effect on the next stream.</DialogDescription>
         </DialogHeader>
         <SettingsTabs screen={screen} actions={actions} />
         <DialogFooter>
