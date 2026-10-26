@@ -296,9 +296,10 @@ export class InputPipe {
     }
     const vk = VK[e.code];
     if (vk === undefined) return;
+    // Before the repeat check: a held Tab's own repeat would walk focus off the canvas.
+    e.preventDefault();
     // Held keys repeat on the host; the browser's own repeat would double them.
     if (down && e.repeat) return;
-    e.preventDefault();
     if (down) this.keys.add(vk);
     else this.keys.delete(vk);
     this.mod._pf_input(down ? KIND.KEY_DOWN : KIND.KEY_UP, vk, 0, 0, 0);
