@@ -1154,11 +1154,12 @@ try {
   // Before there is an engine there is no interface to say this on; the one sheet the page
   // carries for exactly this case does.
   const shell = new WebShell(document.body);
-  shell.mount(noop);
+  shell.mount({ ...noop, back: () => history.back(), retry: () => location.reload() });
   shell.render({
     kind: "error",
-    head: "This browser cannot run the client",
+    head: "This browser can't run the client",
     text: sentence(e instanceof Error ? e.message : String(e)),
+    retry: true,
   });
 }
 
