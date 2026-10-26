@@ -232,13 +232,14 @@ export class AudioPipe {
     this.decoder = this.makeDecoder();
 
     this.state = ctx.state === "running" ? "playing" : "suspended";
-    // Autoplay: a gesture anywhere on the page is enough, and the stream's own input is one.
+    // Autoplay: a gesture anywhere on the page is enough, and the stream's own input is one. A
+    // touch counts only as it lifts, which is all iOS honours.
     const resume = () => {
       void ctx.resume().then(() => {
         if (this.ctx === ctx) this.state = "playing";
       });
     };
-    for (const type of ["pointerdown", "keydown", "touchstart"] as const) {
+    for (const type of ["pointerdown", "pointerup", "keydown", "touchend"] as const) {
       window.addEventListener(type, resume, { passive: true });
       this.off.push(() => window.removeEventListener(type, resume));
     }
