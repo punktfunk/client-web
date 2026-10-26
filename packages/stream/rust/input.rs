@@ -6,8 +6,8 @@
 //! is sent before the session is live, because the host reads input on the session it admitted.
 //!
 //! Gamepads go as [`GamepadSnapshot`]s when the host advertised `HOST_CAP_GAMEPAD_STATE` — one
-//! datagram per change, sequence-numbered so a reorder cannot un-press a button — and as the
-//! per-transition events an older host understands otherwise. The page calls with the whole pad
+//! datagram per change and one per [`REFRESH`] while unchanged, sequence-numbered so a reorder
+//! cannot un-press a button — and as the per-transition events an older host understands otherwise. The page calls with the whole pad
 //! either way and never sees the difference.
 
 use crate::session;
@@ -19,15 +19,23 @@ use punktfunk_core::input::{
 use punktfunk_core::quic::v2::msg::encode_input_event;
 use punktfunk_core::quic::{HOST_CAP2_INPUT_EDGES, HOST_CAP_GAMEPAD_STATE};
 use std::cell::RefCell;
+use std::time::{Duration, Instant};
+
+/// How often an unchanged snapshot goes again, as core's native client does it: a datagram the
+/// network drops would otherwise hold its button or stick until the pad next moves.
+const REFRESH: Duration = Duration::from_millis(100);
 
 struct Pads {
     /// What was last sent per pad, for the change check and the transition diff.
     last: [Option<GamepadSnapshot>; MAX_PADS],
     seq: [u8; MAX_PADS],
+    sent: [Option<Instant>; MAX_PADS],
 }
 
 thread_local! {
-    static PADS: RefCell<Pads> = const { RefCell::new(Pads { last: [None; MAX_PADS], seq: [0; MAX_PADS] }) };
+    static PADS: RefCell<Pads> = const {
+        RefCell::new(Pads { last: [None; MAX_PADS], seq: [0; MAX_PADS], sent: [None; MAX_PADS] })
+    };
 }
 
 /// A key edge goes on the control stream toward a host that reads it there, so a release the
@@ -103,7 +111,8 @@ pub extern "C" fn pf_gamepad_remove(pad: u32) {
 }
 
 /// The whole pad, as the page read it. Sticks −32768..32767 with **+y = up**, triggers 0..255,
-/// `buttons` in core's `BTN_*` layout. Sends only what changed.
+/// `buttons` in core's `BTN_*` layout. Sends what changed, and a whole snapshot again each
+/// [`REFRESH`].
 #[unsafe(no_mangle)]
 #[allow(clippy::too_many_arguments)]
 pub extern "C" fn pf_gamepad(
@@ -133,11 +142,16 @@ pub extern "C" fn pf_gamepad(
         rs_x: clamp(rs_x),
         rs_y: clamp(rs_y),
     };
-    let last = PADS.with(|p| p.borrow().last[slot]);
-    if last.is_some_and(|l| same_pad(&l, &now)) {
+    let (last, sent) = PADS.with(|p| {
+        let p = p.borrow();
+        (p.last[slot], p.sent[slot])
+    });
+    let snapshots = session::host_caps() & HOST_CAP_GAMEPAD_STATE != 0;
+    let due = snapshots && sent.is_none_or(|t| t.elapsed() >= REFRESH);
+    if last.is_some_and(|l| same_pad(&l, &now)) && !due {
         return;
     }
-    if session::host_caps() & HOST_CAP_GAMEPAD_STATE != 0 {
+    if snapshots {
         let seq = PADS.with(|p| {
             let s = &mut p.borrow_mut().seq[slot];
             *s = s.wrapping_add(1);
@@ -147,7 +161,11 @@ pub extern "C" fn pf_gamepad(
     } else {
         transitions(last.unwrap_or_default(), &now);
     }
-    PADS.with(|p| p.borrow_mut().last[slot] = Some(now));
+    PADS.with(|p| {
+        let mut p = p.borrow_mut();
+        p.last[slot] = Some(now);
+        p.sent[slot] = Some(Instant::now());
+    });
 }
 
 fn same_pad(a: &GamepadSnapshot, b: &GamepadSnapshot) -> bool {
