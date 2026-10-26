@@ -48,10 +48,12 @@ impl Hosts {
     pub fn new(listed: Vec<Listed>, data: &Path, add_hosts: bool) -> Result<Arc<Self>> {
         std::fs::create_dir_all(data).with_context(|| format!("create {}", data.display()))?;
         let pins_path = data.join("pins.json");
+        // Only a missing file means no pins: one that cannot be read must not re-trust every host.
         let pins: BTreeMap<String, String> = match std::fs::read(&pins_path) {
             Ok(b) => serde_json::from_slice(&b)
                 .with_context(|| format!("read {}", pins_path.display()))?,
-            Err(_) => BTreeMap::new(),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => BTreeMap::new(),
+            Err(e) => return Err(e).with_context(|| format!("read {}", pins_path.display())),
         };
         let macs_path = data.join("wake.json");
         let macs: BTreeMap<String, Vec<String>> = std::fs::read(&macs_path)
@@ -109,9 +111,9 @@ impl Hosts {
             return;
         }
         all.insert(key.to_owned(), macs);
-        if let Err(e) = std::fs::write(
+        if let Err(e) = write_whole(
             &self.macs_path,
-            serde_json::to_vec_pretty(&*all).unwrap_or_default(),
+            &serde_json::to_vec_pretty(&*all).unwrap_or_default(),
         ) {
             tracing::warn!(error = %e, "wake.json was not written; the MACs last until restart");
         }
@@ -160,9 +162,9 @@ impl Hosts {
         }
         tracing::info!(host = key, fingerprint = %hex(&fp), "pinned on first contact");
         pins.insert(key.to_owned(), hex(&fp));
-        if let Err(e) = std::fs::write(
+        if let Err(e) = write_whole(
             &self.pins_path,
-            serde_json::to_vec_pretty(&*pins).unwrap_or_default(),
+            &serde_json::to_vec_pretty(&*pins).unwrap_or_default(),
         ) {
             tracing::warn!(error = %e, "pins.json was not written; the pin lasts until restart");
         }
@@ -268,6 +270,13 @@ pub fn discover(hosts: Arc<Hosts>) {
     if let Err(e) = spawned {
         tracing::warn!(error = %e, "mDNS thread did not start");
     }
+}
+
+/// Write `path` whole or not at all: a crash mid-write leaves the old file, never half of one.
+fn write_whole(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    let tmp = path.with_extension("tmp");
+    std::fs::write(&tmp, bytes)?;
+    std::fs::rename(&tmp, path)
 }
 
 /// A route segment from a display name: lowercase letters, digits and dashes, unique in `taken`.
