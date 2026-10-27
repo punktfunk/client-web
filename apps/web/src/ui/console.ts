@@ -25,11 +25,13 @@ import {
   exitApp,
   gameEndNotice,
   type Host,
+  hosts,
   type LibraryEntry,
   NO_REQ,
   packaged,
   pageLog,
   remoteKey,
+  type ProfilePick,
   reqOf,
   tizen,
   tvBack,
@@ -103,6 +105,10 @@ const QUIET_MS = 15_000;
 /** The screens the console cannot draw; everything else is the console's. */
 const WEB_SCREENS = new Set<Screen["kind"]>(["accept", "trust", "link", "streaming"]);
 
+/** How long the console waits on a `FetchProfiles` answer before it dials without one
+ *  (`pf_console_ui` `PROFILES_WAIT`). */
+const PROFILES_WAIT_MS = 3000;
+
 /** How long a wake is waited on before the console hears it did not come back. */
 const WAKE_TIMEOUT_S = 60;
 
@@ -139,7 +145,10 @@ export class ConsoleUi implements Ui {
    *  carry these, or the console drops them. */
   private pairReq: ConsoleReq = NO_REQ;
   private libraryReq: ConsoleReq = NO_REQ;
-  private pendingPlay: { origin: string; id: string | null; title: string } | null = null;
+  private pendingPlay: { origin: string; id: string | null; title: string; profile: string } | null = null;
+  /** A `FetchProfiles` for a host the engine is not on: it is reached quietly and answered once
+   *  ready, without re-rooting the console on its shelf mid-ask. */
+  private profilesAsk: { origin: string; fp: string; at: number } | null = null;
   /** A session the console dialled, so a failure or an end is reported back to it. */
   private dialled = false;
   /** A shelf the console asked for whose host is still being reached: a failure lands on it. */
@@ -317,6 +326,8 @@ export class ConsoleUi implements Ui {
         system_keyboard: tizen(),
         // The console kit's Tizen platform: the page's rows, a remote's glyphs, and an exit.
         tizen: tizen(),
+        // Answers `FetchProfiles`, so a connect picks the profile and readies its seat first.
+        profiles: true,
         settings: this.startSettings(),
       });
       if (!this.started) {
@@ -672,6 +683,16 @@ export class ConsoleUi implements Ui {
     if (s.origin === null) return;
     const origin = s.origin;
     const c = this.engine.console;
+    const ask = this.profilesAsk;
+    if (ask && ask.origin === origin) {
+      this.profilesAsk = null;
+      // Past the console's own wait it has dialled without the answer, and this is a shelf.
+      const live = performance.now() - ask.at < PROFILES_WAIT_MS;
+      const host = this.apiFor(origin);
+      if (live && host) void this.answerProfiles(ask.fp, host);
+      // Still asking: a shelf only when a launch is waiting on it.
+      if (live && this.pendingPlay?.origin !== origin) return;
+    }
     if (this.fetching === origin) this.fetching = null;
     if (this.shelf !== origin) {
       this.shelf = origin;
@@ -689,7 +710,7 @@ export class ConsoleUi implements Ui {
     const play = this.pendingPlay;
     if (play && play.origin === origin) {
       this.pendingPlay = null;
-      this.actions?.play(play.id ? ({ id: play.id, title: play.title } as LibraryEntry) : undefined);
+      this.actions?.play(play.id ? ({ id: play.id, title: play.title } as LibraryEntry) : undefined, play.profile);
       return;
     }
     const sig = `${s.entries.length}:${s.running ?? ""}:${s.error ?? ""}:${s.busy ? 1 : 0}`;
@@ -774,6 +795,7 @@ export class ConsoleUi implements Ui {
       os: "",
       pin: null,
       bound_preset: null,
+      profile: h.profile ?? null,
     };
   }
 
@@ -819,6 +841,7 @@ export class ConsoleUi implements Ui {
     }
     if (a === "CancelConnect") {
       this.pendingPlay = null;
+      this.profilesAsk = null;
       this.pendingPin = null;
       this.pendingKnock = null;
       this.dialled = false;
@@ -842,11 +865,12 @@ export class ConsoleUi implements Ui {
       return;
     }
     const now = this.engine.current;
+    const profile = l.profile ?? "";
     if (now.kind === "ready" && now.origin === origin) {
-      this.actions?.play(l.launch ? ({ id: l.launch, title: l.title } as LibraryEntry) : undefined);
+      this.actions?.play(l.launch ? ({ id: l.launch, title: l.title } as LibraryEntry) : undefined, profile);
       return;
     }
-    this.pendingPlay = { origin, id: l.launch, title: l.title };
+    this.pendingPlay = { origin, id: l.launch, title: l.title, profile };
     this.actions?.connect(origin);
   }
 
@@ -915,6 +939,28 @@ export class ConsoleUi implements Ui {
       case "RefreshRunning":
         if (origin) this.refreshRunning(origin);
         return;
+      case "FetchProfiles": {
+        const fp = str("fp_hex");
+        const host = origin ? this.apiFor(origin) : undefined;
+        if (host) return void this.answerProfiles(fp, host);
+        if (!origin) return this.pushProfiles(fp, { Failed: "This page doesn't know that host." });
+        this.profilesAsk = { origin, fp, at: performance.now() };
+        this.actions?.connect(origin);
+        return;
+      }
+      case "WakeProfile": {
+        // No answer: the console reads the list again until the seat is up.
+        const host = origin ? this.apiFor(origin) : undefined;
+        void host?.wakeProfile(str("id")).catch((e: unknown) => console.warn("punktfunk: profile seat did not wake", e));
+        return;
+      }
+      case "SetProfile": {
+        const at = this.originOf(str("key"), "");
+        if (!at) return;
+        hosts.setProfile(at, (body["profile"] as ProfilePick | null | undefined) ?? null);
+        this.pushHosts();
+        return;
+      }
       case "EndGame":
         if (origin) void this.endGame(origin, str("app_id"), str("title"));
         return;
@@ -923,6 +969,26 @@ export class ConsoleUi implements Ui {
         // the page offers what it has through the web shell.
         return;
     }
+  }
+
+  /** The management API of `origin`, when the engine is on it. */
+  private apiFor(origin: string): Host | undefined {
+    const now = this.engine.current;
+    return now.kind === "ready" && now.origin === origin ? now.host : undefined;
+  }
+
+  /** The box's profiles for the console's `FetchProfiles`, keyed on the pin it asked with. */
+  private async answerProfiles(fp: string, host: Host): Promise<void> {
+    try {
+      const listed = await host.profiles();
+      this.pushProfiles(fp, listed ? { Listed: listed } : "NoProfiles");
+    } catch (e) {
+      this.pushProfiles(fp, { Failed: e instanceof Error ? e.message : String(e) });
+    }
+  }
+
+  private pushProfiles(fp: string, answer: unknown): void {
+    this.engine.console.push(CONSOLE_PUSH.PROFILES, { fp_hex: fp, answer });
   }
 
   /** What the host runs, as the console's launch hold and Resume badge read it. Unanswered,
