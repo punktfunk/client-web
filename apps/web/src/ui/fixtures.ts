@@ -69,6 +69,19 @@ export const SCREENS = {
   "pair-again": { kind: "pair", origin: "https://192.168.1.25:47990", mode: "again" },
   "pair-refused": { kind: "pair", origin: "https://192.168.1.25:47990", mode: "first", error: "That PIN was refused." },
   "waiting": { kind: "waiting", origin: "https://192.168.1.25:47990", name: "Safari on Mac" },
+  "profiles": {
+    kind: "profiles",
+    origin: "https://192.168.1.25:47990",
+    host: "Living room",
+    saved: "b2",
+    cards: [
+      { id: "a1", name: "Mia", initials: "M", accent: "#e0457b" },
+      { id: "b2", name: "Kid", initials: "K", accent: "#3a8dde", note: "Getting ready…" },
+      { id: "c3", name: "Guest", initials: "G", note: "In use by Pixel 9" },
+    ],
+  },
+  "profiles-gone": { kind: "profiles", origin: "https://192.168.1.25:47990", host: "Living room", gone: "Old desk", cards: [{ id: "a1", name: "Mia", initials: "M", accent: "#e0457b" }] },
+  "seat": { kind: "seat", origin: "https://192.168.1.25:47990", title: "Getting Kid's desk ready…", detail: "Signing in…" },
   "link": { kind: "link", name: "Desk", address: "192.168.1.21", launch: "steam:570" },
   "trust": {
     kind: "trust",

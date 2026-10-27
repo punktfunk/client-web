@@ -44,6 +44,8 @@ function back(screen: Screen, actions: Actions): boolean {
     case "pair":
     case "error":
     case "accept":
+    case "profiles":
+    case "seat":
       actions.back();
       return true;
     case "settings":

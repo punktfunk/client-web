@@ -57,6 +57,17 @@ export interface HostCard extends KnownHost {
   waking?: boolean;
 }
 
+/** One card on the profile picker: initials on the profile's accent, and what its seat is doing
+ *  when that matters to the pick. */
+export interface ProfileCard {
+  id: string;
+  name: string;
+  initials: string;
+  /** `#RRGGBB`; the brand's when absent. */
+  accent?: string;
+  note?: string;
+}
+
 /**
  * Where the client is. One of these at a time, and `app.ts` is the only thing that decides.
  *
@@ -85,6 +96,11 @@ type ScreenBody =
   | { kind: "pair"; origin: string; mode: "first" | "again"; error?: string; busy?: boolean }
   /** A request for access, held by the host until someone approves `name` in its console. */
   | { kind: "waiting"; origin: string; name: string }
+  /** Who plays on a box with profiles. `saved` is the pick this browser keeps, which leads;
+   *  `gone` names one the box no longer lists. No cards: the box has none, or `error` says why. */
+  | { kind: "profiles"; origin: string; host: string; cards: ProfileCard[]; saved?: string; gone?: string; error?: string }
+  /** A profile's seat coming up; the stream dials once it is. */
+  | { kind: "seat"; origin: string; title: string; detail?: string }
   /**
    * The host answered, but it is not the host that was paired with. Its own screen, not an
    * error card: this is either a machine that was reinstalled or someone standing in the way of
@@ -182,8 +198,13 @@ export interface Actions {
   retry(): void;
   back(): void;
   /** Stream a title from the open shelf, or its host's desktop. Connects first when the shelf's
-   *  host is not connected. */
-  play(entry?: LibraryEntry): void;
+   *  host is not connected. `profile` is a pick the console already made; without it the box's
+   *  profiles are asked first. */
+  play(entry?: LibraryEntry, profile?: string): void;
+  /** The picker's answer: play as profile `id`. */
+  pickProfile(id: string): void;
+  /** Ask again who plays on a host: its card's Switch profile. */
+  switchProfile(origin: string): void;
   forget(origin: string): void;
   /** Answer the link on screen: connect as it asks, or drop it. */
   followLink(yes: boolean): void;

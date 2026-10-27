@@ -18,23 +18,33 @@ import {
   gameGone,
   type HostTarget,
   hosts,
+  initials,
   originOf,
   type LibraryEntry,
+  type ListedProfile,
   linkFor,
   packaged,
   type PageLink,
   pageLog,
   parseLink,
+  pickerDecision,
+  pickOf,
+  profileNote,
   type Reach,
   reach,
   reachTarget,
+  SEAT_POLL_MS,
+  seatGate,
   type Settings,
   settings,
+  statusOf,
   VersionSkew,
+  wakeFailed,
+  wakingLine,
 } from "@punktfunk/stream";
 import { ConsoleUi } from "./ui/console.ts";
 import { noop, WebShell } from "./ui/shell.tsx";
-import type { HostCard, HostTools, Screen, Tab, Ui } from "./ui/types.ts";
+import type { HostCard, HostTools, ProfileCard, Screen, Tab, Ui } from "./ui/types.ts";
 
 /** How long a reachability probe is believed. Long enough that returning to the home screen
  *  does not re-probe every host, short enough that a machine woken in the meantime shows up. */
@@ -113,10 +123,10 @@ class App {
   private pollingFor: string | null = null;
   /** What the last stream played (`entry` unset: the desktop), and what to start again once the
    *  host is ready after a stream that dropped. */
-  private lastPlay: { entry?: LibraryEntry } | null = null;
-  private resumeOnReady: { entry?: LibraryEntry } | null = null;
+  private lastPlay: Play | null = null;
+  private resumeOnReady: Play | null = null;
   /** The stream that dropped into the error on screen, which "Try again" brings back. */
-  private dropped: { entry?: LibraryEntry } | null = null;
+  private dropped: Play | null = null;
   private statusTimer = 0;
   /** Is the add-a-host sheet open? Forced on when there is no card to click instead. */
   private adding = false;
@@ -136,6 +146,11 @@ class App {
   private resizeTimer = 0;
   /** This page went fullscreen for a stream, and goes back when the stream's page returns. */
   private fullscreened = false;
+  /** A stream held at the profile gate, or a Switch profile in progress. Cleared to cancel: every
+   *  await in the gate checks it is still this one. */
+  private gate: Gate | null = null;
+  /** A Switch profile asked for a host that was not connected: it opens once the host is ready. */
+  private switchOnReady: string | null = null;
 
   constructor(
     private readonly engine: Engine,
@@ -170,8 +185,11 @@ class App {
         this.dropped = null;
         if ("origin" in s && s.origin) void engine.connect(this.targetOf(s.origin));
       },
-      back: () => engine.disconnect(),
-      play: (entry) => this.play(entry),
+      // Leaving the profile gate goes back to the host, not away from it.
+      back: () => (this.gate ? this.cancelGate() : engine.disconnect()),
+      play: (entry, profile) => this.play(entry, undefined, profile),
+      pickProfile: (id) => this.pickProfile(id),
+      switchProfile: (origin) => this.switchProfile(origin),
       forget: (origin) => this.forget(origin),
       followLink: (yes) => this.followLink(yes),
       copyLink: (origin) => void this.copyLink(origin),
@@ -244,6 +262,10 @@ class App {
 
   /** Facts in, words out. */
   private render(s: EngineState): void {
+    // The gate waits on its host's `ready`; anything else ends the wait, and a connect that
+    // ended short of it drops the Switch profile it was for.
+    if (this.gate && (s.kind !== "ready" || s.origin !== this.gate.origin)) this.gate = null;
+    if (s.kind === "idle" || s.kind === "error" || s.kind === "unreachable") this.switchOnReady = null;
     if (s.kind !== "streaming") {
       this.menuOpen = false;
       this.streamGame = null;
@@ -306,6 +328,9 @@ class App {
       case "awaiting-approval":
         return this.show({ kind: "waiting", origin: s.origin, name: s.name });
       case "paired": {
+        // A request for access was for the desktop stream; one the host had no seat for yet goes
+        // on through the profile gate once the connect is ready. The console drives its own.
+        if (this.web && this.screen.kind === "waiting") this.resumeOnReady ??= {};
         this.show({ kind: "pair", origin: s.origin, mode: "first", busy: true });
         // The host closes after the ceremony, as it does for native clients; streaming is a
         // fresh connection.
@@ -323,6 +348,12 @@ class App {
       case "forgotten":
         return this.show({ kind: "pair", origin: s.origin, mode: "again" });
       case "ready": {
+        if (this.gate) return this.show(this.gate.screen);
+        if (this.switchOnReady === s.origin) {
+          this.switchOnReady = null;
+          queueMicrotask(() => void this.askProfile(s.origin, s.host, null));
+          return;
+        }
         const launch = this.launchOnReady;
         if (launch) {
           // The title a link asked for. Not from inside this listener: starting a stream sets the
@@ -336,7 +367,7 @@ class App {
           // Not from inside this listener: starting the stream sets the engine's state again. The
           // connecting screen stays up until it does.
           this.resumeOnReady = null;
-          queueMicrotask(() => this.start(resume.entry));
+          queueMicrotask(() => this.start(resume.entry, resume.profile));
           return;
         }
         this.windowed();
@@ -943,16 +974,16 @@ class App {
   /** Stream `entry`, or the desktop, from `origin` — the open shelf unless named. A host that is
    *  not the one connected is reached first, and the stream starts once it is ready. Called from
    *  a click, which is the one moment the browser allows fullscreen. */
-  private play(entry?: LibraryEntry, origin = this.currentShelf()): void {
+  private play(entry?: LibraryEntry, origin = this.currentShelf(), profile?: string): void {
     if (!origin) return;
     if (this.web && this.prefs.fullscreen && !document.fullscreenElement) {
       this.fullscreened = true;
       this.engine.fullscreen(true);
     }
     const s = this.engine.current;
-    if (s.kind === "ready" && s.origin === origin) return this.start(entry);
+    if (s.kind === "ready" && s.origin === origin) return this.start(entry, profile);
     this.quiet = false;
-    this.resumeOnReady = entry ? { entry } : {};
+    this.resumeOnReady = { ...(entry ? { entry } : {}), ...(profile !== undefined ? { profile } : {}) };
     void this.engine.connect(this.targetOf(origin));
   }
 
@@ -986,10 +1017,132 @@ class App {
     this.engine.fullscreen(false);
   }
 
-  /** Start a stream on the host that is ready. */
-  private start(entry?: LibraryEntry): void {
-    this.lastPlay = entry ? { entry } : {};
-    this.engine.startStream({ ...this.streamOptions(), ...(entry ? { launch: entry } : {}) });
+  /** Start a stream on the host that is ready. The web shell passes the profile gate first; the
+   *  console runs its own and hands the pick in as `profile`, empty for none. */
+  private start(entry?: LibraryEntry, profile?: string): void {
+    const s = this.engine.current;
+    if (!this.web || s.kind !== "ready") return this.dial(entry, profile || undefined);
+    void this.askProfile(s.origin, s.host, entry ? { entry } : {});
+  }
+
+  private dial(entry?: LibraryEntry, profile?: string): void {
+    this.gate = null;
+    this.lastPlay = { ...(entry ? { entry } : {}), ...(profile ? { profile } : {}) };
+    this.engine.startStream({ ...this.streamOptions(), ...(entry ? { launch: entry } : {}), ...(profile ? { profile } : {}) });
+  }
+
+  // --- the profile gate ----------------------------------------------------------------
+  // On a box with profiles a stream names one, and the seat it plays on must be up before the
+  // dial: the host refuses a seat that isn't. Asked, woken and waited on as the native clients
+  // do it (`profiles.ts`).
+
+  /**
+   * Who plays on `origin`, then its seat. `play` is the stream waiting on the answer; `null` is
+   * the host card's Switch profile, which only saves the pick. A list that fails or is late
+   * dials as before, with the saved pick.
+   */
+  private async askProfile(origin: string, host: Host, play: { entry?: LibraryEntry } | null): Promise<void> {
+    const gate: Gate = { origin, host, play, rows: [], screen: { kind: "connecting", origin, phase: play ? "starting" : "connecting" } };
+    this.gate = gate;
+    this.render(this.engine.current);
+    const saved = hosts.all()[origin]?.profile ?? null;
+    let listed: ReadonlyArray<ListedProfile> | null | undefined;
+    try {
+      listed = await within(host.profiles(), PROFILES_WAIT_MS);
+    } catch {
+      listed = undefined;
+    }
+    if (this.gate !== gate) return;
+    if (listed === undefined && play) return this.dial(play.entry, saved?.id);
+    gate.rows = listed ?? [];
+    const decision = play ? pickerDecision(listed ?? null, saved) : null;
+    if (decision && !decision.picker) {
+      hosts.setProfile(origin, decision.remember);
+      return void this.settleSeat(gate, decision.send);
+    }
+    this.gateShow(gate, {
+      kind: "profiles",
+      origin,
+      host: this.nameOf(origin),
+      cards: gate.rows.map(cardOf),
+      ...(saved ? { saved: saved.id } : {}),
+      ...(decision?.gone ? { gone: decision.gone } : {}),
+      ...(listed === undefined ? { error: "Couldn't load the profiles." } : {}),
+    });
+  }
+
+  private pickProfile(id: string): void {
+    const gate = this.gate;
+    const row = gate?.rows.find((p) => p.id === id);
+    if (!gate || !row) return;
+    hosts.setProfile(gate.origin, pickOf(row));
+    if (!gate.play) return this.cancelGate();
+    void this.settleSeat(gate, id);
+  }
+
+  /** Dial as `id` once its seat can take the stream: now for a profile without a seat or one
+   *  that is up, after a wake and a wait for one that is stopped, never for one that can't. */
+  private async settleSeat(gate: Gate, id: string | undefined): Promise<void> {
+    const row = id ? gate.rows.find((p) => p.id === id) : undefined;
+    let next = row ? seatGate(row) : ({ kind: "dial" } as const);
+    if (!row || next.kind === "dial") return this.dial(gate.play?.entry, id);
+    const name = row.display_name;
+    if (next.kind === "wake") {
+      this.gateShow(gate, { kind: "seat", origin: gate.origin, title: wakingLine(name) });
+      try {
+        await gate.host.wakeProfile(row.id);
+      } catch (e) {
+        if (this.gate === gate) this.gateFailed(gate, wakeFailed(name, statusOf(e), e instanceof Error ? e.message : String(e)));
+        return;
+      }
+    }
+    // No timeout, as on every client: the sheet's Cancel is the way out.
+    for (;;) {
+      if (next.kind === "refuse") return this.gateFailed(gate, next.line);
+      if (this.gate !== gate) return;
+      this.gateShow(gate, {
+        kind: "seat",
+        origin: gate.origin,
+        title: wakingLine(name),
+        ...(next.kind === "wait" && next.detail ? { detail: next.detail } : {}),
+      });
+      await new Promise((done) => setTimeout(done, SEAT_POLL_MS));
+      let rows: ReadonlyArray<ListedProfile> | null;
+      try {
+        rows = await gate.host.profiles();
+      } catch {
+        // A failed read keeps waiting.
+        continue;
+      }
+      if (this.gate !== gate) return;
+      const now = rows?.find((p) => p.id === row.id);
+      // A profile the list dropped is the host's to refuse.
+      next = now ? seatGate(now) : { kind: "dial" };
+      if (next.kind === "dial") return this.dial(gate.play?.entry, row.id);
+    }
+  }
+
+  private gateShow(gate: Gate, screen: Screen): void {
+    if (this.gate !== gate) return;
+    gate.screen = screen;
+    this.render(this.engine.current);
+  }
+
+  private gateFailed(gate: Gate, line: string): void {
+    this.gateShow(gate, { kind: "error", head: "Couldn't start the stream", text: sentence(line) });
+  }
+
+  private cancelGate(): void {
+    this.gate = null;
+    this.render(this.engine.current);
+  }
+
+  /** The host card's Switch profile: the picker, after a connect when the host is not ready. */
+  private switchProfile(origin: string): void {
+    const s = this.engine.current;
+    if (s.kind === "ready" && s.origin === origin) return void this.askProfile(origin, s.host, null);
+    this.switchOnReady = origin;
+    void this.engine.connect(this.targetOf(origin));
   }
 
   /** The desktop stream the settings and the window ask for. */
@@ -1002,6 +1155,45 @@ class App {
       bitrateKbps: this.prefs.bitrateKbps,
     };
   }
+}
+
+/** A stream asked for: the title (unset: the desktop), and the profile the console picked. */
+interface Play {
+  entry?: LibraryEntry;
+  profile?: string;
+}
+
+/** How long the profile list may take before a stream dials with the saved pick instead. */
+const PROFILES_WAIT_MS = 5000;
+
+/** A stream held at the profile gate: its host and what it plays (`null`: only a pick to save),
+ *  the box's list, and the screen it shows meanwhile. */
+interface Gate {
+  origin: string;
+  host: Host;
+  play: { entry?: LibraryEntry } | null;
+  rows: ReadonlyArray<ListedProfile>;
+  screen: Screen;
+}
+
+/** `p`, or a rejection once `ms` have passed. */
+function within<T>(p: Promise<T>, ms: number): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error("timed out")), ms);
+    p.then(resolve, reject).finally(() => clearTimeout(timer));
+  });
+}
+
+/** A picker card for `p`. An accent that isn't `#RRGGBB` falls back to the brand's. */
+function cardOf(p: ListedProfile): ProfileCard {
+  const note = profileNote(p);
+  return {
+    id: p.id,
+    name: p.display_name,
+    initials: initials(p.display_name),
+    ...(p.accent && /^#[0-9a-f]{6}$/i.test(p.accent) ? { accent: p.accent } : {}),
+    ...(note ? { note } : {}),
+  };
 }
 
 /** The shelf a previous visit left open, if storage allows. */

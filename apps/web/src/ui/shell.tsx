@@ -26,7 +26,7 @@ import { Hud } from "./hud.tsx";
 import { Library } from "./library.tsx";
 import { SettingsDialog, SettingsPage } from "./settings.tsx";
 import { installRemote } from "./remote.ts";
-import { Accept, Connecting, ErrorCard, LinkSheet, Pair, Trust, Waiting } from "./sheets.tsx";
+import { Accept, Connecting, ErrorCard, LinkSheet, Pair, Profiles, SeatWait, Trust, Waiting } from "./sheets.tsx";
 import { type Actions, type Screen, tabOf, type Ui } from "./types.ts";
 
 export class WebShell implements Ui {
@@ -85,7 +85,7 @@ export const noop: Actions = {
   followLink() {}, copyLink() {},
   setAdding() {}, rename() {}, openSettings() {}, setSettings() {}, toggleCapture() {},
   showDiagnostics() {}, openMenu() {}, fullscreen() {}, cycleStats() {}, toggleMic() {},
-  consoleMode() {},
+  consoleMode() {}, pickProfile() {}, switchProfile() {},
 };
 
 // --- the root ---------------------------------------------------------------------------
@@ -146,6 +146,8 @@ function Page({ screen, actions }: { screen: Screen; actions: Actions }): JSX.El
     case "connecting": return <Connecting screen={screen} actions={actions} />;
     case "pair": return <Pair screen={screen} actions={actions} />;
     case "waiting": return <Waiting screen={screen} actions={actions} />;
+    case "profiles": return <Profiles screen={screen} actions={actions} />;
+    case "seat": return <SeatWait screen={screen} actions={actions} />;
     case "trust": return <Trust screen={screen} actions={actions} />;
     case "link": return <LinkSheet screen={screen} actions={actions} />;
     case "library": return <Library screen={screen} actions={actions} />;
@@ -169,6 +171,8 @@ function announce(s: Screen): string {
     case "connecting": return `Connecting to ${s.origin}`;
     case "pair": return s.error ?? "Enter the PIN this host is showing";
     case "waiting": return `Waiting for approval of ${s.name} in the host's console`;
+    case "profiles": return s.error ?? `Pick who is playing on ${s.host}`;
+    case "seat": return s.detail ? `${s.title} ${s.detail}` : s.title;
     case "trust": return "This is not the host that was paired with";
     case "link": return `A link asks to connect to ${s.name}`;
     case "library": return s.busy ? "Loading the library" : `${s.entries.length} titles`;
