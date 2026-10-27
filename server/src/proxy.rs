@@ -4,9 +4,9 @@
 //! host, so this server can never do more than the page could.
 
 use crate::hosts::Hosts;
-use axum::body::Body;
+use axum::body::{Body, HttpBody as _};
 use axum::extract::{Path, Request, State};
-use axum::http::{header, HeaderMap, HeaderName, StatusCode};
+use axum::http::{header, HeaderMap, HeaderName, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
 use futures_util::StreamExt;
 use punktfunk_core::tls::PinVerify;
@@ -52,21 +52,24 @@ fn upstream(addr: &str, port: u16, pin: Option<[u8; 32]>) -> anyhow::Result<Arc<
 /// A host this server lists: `/h/<id>/…`.
 pub async fn listed(
     State(hosts): State<Arc<Hosts>>,
-    Path((id, rest)): Path<(String, String)>,
+    Path((id, _)): Path<(String, String)>,
     req: Request,
 ) -> Response {
     let Some(host) = hosts.get(&id) else {
         return (StatusCode::NOT_FOUND, "This server has no such host.").into_response();
     };
+    let Some(url) = upstream_url(&host.addr, host.port, &req) else {
+        return StatusCode::BAD_REQUEST.into_response();
+    };
     let learn = Learn::Listed(host.id.clone());
-    relay(&hosts, &host.addr, host.port, host.pin, learn, &rest, req).await
+    relay(&hosts, &host.addr, host.port, host.pin, learn, url, req).await
 }
 
 /// A host the page names by address: `/a/<ip[:port]>/api/…`. Only a private address, and only
 /// the management API, so the route cannot be aimed anywhere else on or off the network.
 pub async fn typed(
     State(hosts): State<Arc<Hosts>>,
-    Path((target, rest)): Path<(String, String)>,
+    Path((target, _)): Path<(String, String)>,
     req: Request,
 ) -> Response {
     if !hosts.add_hosts {
@@ -83,9 +86,6 @@ pub async fn typed(
         )
             .into_response();
     };
-    if !rest.starts_with("api/") {
-        return StatusCode::NOT_FOUND.into_response();
-    }
     // The page's own server, named as a host, would answer itself with the page.
     // HTTP/2 carries the address in the URI authority; HTTP/1.1 in `Host`.
     let own = req.uri().authority().map(|a| a.as_str()).or_else(|| {
@@ -104,9 +104,26 @@ pub async fn typed(
         IpAddr::V4(v4) => v4.to_string(),
         IpAddr::V6(v6) => format!("[{v6}]"),
     };
+    // Checked on the URL that goes out, after `..` and `%2e%2e` have collapsed.
+    let Some(url) = upstream_url(&addr, port, &req).filter(|u| u.path().starts_with("/api/"))
+    else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
     let key = format!("{addr}:{port}");
     let pin = hosts.pin_at(&key);
-    relay(&hosts, &addr, port, pin, Learn::Address(key), &rest, req).await
+    relay(&hosts, &addr, port, pin, Learn::Address(key), url, req).await
+}
+
+/// The host's URL for `/<route>/<segment>/<rest>`: the rest and query as the browser sent them,
+/// still percent-encoded, so a decoded `%2f` or `%3f` cannot reshape the path.
+fn upstream_url(addr: &str, port: u16, req: &Request) -> Option<reqwest::Url> {
+    let rest = req.uri().path().splitn(4, '/').nth(3)?;
+    let query = req
+        .uri()
+        .query()
+        .map(|q| format!("?{q}"))
+        .unwrap_or_default();
+    reqwest::Url::parse(&format!("https://{addr}:{port}/{rest}{query}")).ok()
 }
 
 /// Where a first-contact pin is kept.
@@ -143,15 +160,9 @@ async fn relay(
     port: u16,
     pin: Option<[u8; 32]>,
     learn: Learn,
-    rest: &str,
+    url: reqwest::Url,
     req: Request,
 ) -> Response {
-    let query = req
-        .uri()
-        .query()
-        .map(|q| format!("?{q}"))
-        .unwrap_or_default();
-    let url = format!("https://{addr}:{port}/{rest}{query}");
     let up = match upstream(addr, port, pin) {
         Ok(up) => up,
         Err(e) => return gateway(addr, "the proxy client did not build", &format!("{e:#}")),
@@ -163,8 +174,8 @@ async fn relay(
         .await
         .expect("the gate is never closed");
     let (parts, body) = req.into_parts();
-    let has_body = parts.headers.contains_key(header::CONTENT_LENGTH)
-        || parts.headers.contains_key(header::TRANSFER_ENCODING);
+    // HTTP/2 can carry a body with neither header.
+    let has_body = !body.is_end_stream();
     let mut out = up
         .client
         .request(parts.method, url)
@@ -187,7 +198,16 @@ async fn relay(
                         .remove(&(addr.to_string(), port, None));
                 }
             }
-            let (status, headers) = (resp.status(), strip(resp.headers().clone()));
+            let (status, mut headers) = (resp.status(), strip(resp.headers().clone()));
+            // A host's reply is served on the page's origin: never as a document that runs there.
+            headers.insert(
+                header::CONTENT_SECURITY_POLICY,
+                HeaderValue::from_static("sandbox"),
+            );
+            headers.insert(
+                header::X_CONTENT_TYPE_OPTIONS,
+                HeaderValue::from_static("nosniff"),
+            );
             // The slot rides the body: over HTTP/1.1 the connection is busy until the last byte.
             let body = resp.bytes_stream().map(move |chunk| {
                 let _ = &slot;
@@ -199,6 +219,11 @@ async fn relay(
             res
         }
         Err(e) => {
+            // Kept clients are for hosts that answer; an address that never does keeps none.
+            UPSTREAMS
+                .lock()
+                .unwrap()
+                .remove(&(addr.to_string(), port, pin));
             let presented = *up.seen.lock().unwrap();
             if pin.is_some() && presented.is_some() && presented != pin {
                 tracing::warn!(
@@ -237,14 +262,17 @@ fn client(pin: Option<[u8; 32]>, seen: Seen) -> anyhow::Result<reqwest::Client> 
         .with_no_client_auth();
     // reqwest leaves a preconfigured TLS config alone, ALPN included.
     tls.alpn_protocols = vec![b"h2".to_vec(), b"http/1.1".to_vec()];
+    // A redirect is relayed, not followed: following it would leave the pin and the private range.
     Ok(reqwest::Client::builder()
         .tls_backend_preconfigured(tls)
         .connect_timeout(Duration::from_secs(5))
+        .redirect(reqwest::redirect::Policy::none())
         .no_proxy()
         .build()?)
 }
 
-/// Headers about one connection rather than the message; never forwarded either way.
+/// Never forwarded either way: headers about one connection rather than the message, and the
+/// page origin's own cookies and identity. A host's management API sets and reads no cookies.
 fn strip(mut h: HeaderMap) -> HeaderMap {
     for name in [
         header::CONNECTION,
@@ -255,8 +283,19 @@ fn strip(mut h: HeaderMap) -> HeaderMap {
         header::TRAILER,
         header::TRANSFER_ENCODING,
         header::UPGRADE,
+        header::COOKIE,
+        header::SET_COOKIE,
         HeaderName::from_static("keep-alive"),
     ] {
+        h.remove(name);
+    }
+    // `tailscale serve` names the tailnet user to the page's server, not to a host.
+    let tailscale: Vec<HeaderName> = h
+        .keys()
+        .filter(|k| k.as_str().starts_with("tailscale-"))
+        .cloned()
+        .collect();
+    for name in tailscale {
         h.remove(name);
     }
     h
@@ -287,8 +326,13 @@ mod tests {
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         listener.set_nonblocking(true).unwrap();
         let port = listener.local_addr().unwrap().port();
-        let app =
-            axum::Router::new().route("/api/v1/health", axum::routing::get(|| async { "ok" }));
+        let app = axum::Router::new()
+            .route("/api/v1/health", axum::routing::get(|| async { "ok" }))
+            .route(
+                "/api/v1/hop",
+                axum::routing::get(|| async { axum::response::Redirect::to("/secret") }),
+            )
+            .route("/secret", axum::routing::get(|| async { "secret" }));
         let server = axum_server::from_tcp_rustls(listener, tls).unwrap();
         tokio::spawn(server.serve(app.into_make_service()));
         (port, fp)
@@ -363,9 +407,24 @@ mod tests {
             (StatusCode::OK, "ok".into())
         );
         assert_eq!(hosts.pin_at(&format!("127.0.0.1:{port}")), Some(fp));
+        let res = crate::router(hosts.clone(), std::env::temp_dir())
+            .oneshot(Request::get(&health).body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(res.headers()["content-security-policy"], "sandbox");
 
         let off_api = format!("/a/127.0.0.1:{port}/metrics");
         assert_eq!(get(hosts.clone(), &off_api).await.0, StatusCode::NOT_FOUND);
+        // Out of `api/` by a dot segment, encoded or not, or by a redirect.
+        for path in [
+            "api/%2e%2e/secret",
+            "api/..%2fsecret",
+            "api/%2E%2E/secret",
+            "api/v1/hop",
+        ] {
+            let (status, body) = get(hosts.clone(), &format!("/a/127.0.0.1:{port}/{path}")).await;
+            assert_ne!(body, "secret", "{path} reached {status}");
+        }
         assert_eq!(
             get(hosts.clone(), "/a/8.8.8.8/api/v1/health").await.0,
             StatusCode::BAD_REQUEST

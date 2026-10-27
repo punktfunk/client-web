@@ -91,6 +91,14 @@ pub fn rtt_us() -> u32 {
     unsafe { pf_wt_rtt_us() }
 }
 
+/// Drop what the ring holds: a datagram the last connection left must not reach the next session.
+pub fn reset() {
+    RING.with(|r| {
+        let mut r = r.borrow_mut();
+        r.tail = r.head;
+    });
+}
+
 /// Base of the receive ring, for `HEAPU8.set(bytes, base + slot * stride)`.
 #[unsafe(no_mangle)]
 pub extern "C" fn pf_rx_base() -> *const u8 {

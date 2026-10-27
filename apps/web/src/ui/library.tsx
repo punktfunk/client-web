@@ -118,7 +118,7 @@ export function Library({ screen, actions }: { screen: LibraryScreen; actions: A
             <Empty title={`Not connected to ${screen.host ?? "this host"}`}>
               <Button size="sm" onClick={() => actions.browse(origin)}>Connect</Button>
             </Empty>
-          ) : (
+          ) : screen.error ? null : (
             <Empty>This host's library is empty, or nothing has been added to it yet.</Empty>
           )
         ) : shown.length === 0 ? (

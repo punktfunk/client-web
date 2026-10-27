@@ -27,6 +27,8 @@ const DialogContent = ({ className, children, ...props }: ComponentProps<typeof 
         "data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95 duration-150",
         className,
       )}
+      // A dialog over a stream keeps its keys: Tab, Enter and Esc work it, not the game.
+      data-pf-keys="local"
       {...props}
     >
       {/* `root`, because a dialog renders through a portal — outside every page cascade, nothing

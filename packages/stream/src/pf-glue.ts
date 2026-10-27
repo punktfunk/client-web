@@ -188,7 +188,8 @@ mergeInto(LibraryManager.library, {
                   Module.__pfOnData();
                   slot = Module._pf_rx_claim();
                 }
-                if (slot >= 0) {
+                // A slot holds any datagram the protocol allows; a longer one would run into the next.
+                if (slot >= 0 && r.value.length <= Module._pf_rx_stride()) {
                   HEAPU8.set(r.value, Module._pf_rx_base() + slot * Module._pf_rx_stride());
                   Module._pf_rx_commit(slot, r.value.length);
                 }
@@ -406,6 +407,7 @@ mergeInto(LibraryManager.library, {
       })
       .catch(function (e) {
         console.error("punktfunk: no device key", e);
+        if (Module.__pfOnDeviceFailed) Module.__pfOnDeviceFailed();
       });
     return 1;
   },

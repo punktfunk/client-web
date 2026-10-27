@@ -75,12 +75,13 @@ fn av1_is_keyframe(tu: &[u8]) -> bool {
 }
 
 /// An OBU size: the value and how many bytes it took. `None` past eight bytes, as the spec caps it.
+/// Summed in `u64`: eight groups of seven bits overflow wasm32's `usize`.
 fn leb128(b: &[u8]) -> Option<(usize, usize)> {
-    let mut value = 0usize;
+    let mut value = 0u64;
     for (n, byte) in b.iter().take(8).enumerate() {
-        value |= usize::from(byte & 0x7f) << (7 * n);
+        value |= u64::from(byte & 0x7f) << (7 * n);
         if byte & 0x80 == 0 {
-            return Some((value, n + 1));
+            return Some((usize::try_from(value).ok()?, n + 1));
         }
     }
     None

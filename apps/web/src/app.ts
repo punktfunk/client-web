@@ -212,7 +212,7 @@ class App {
       },
       setSettings: (patch) => {
         this.prefs = settings.set(patch);
-        this.applyPrefs();
+        this.applyPrefs(patch);
         this.render(engine.current);
       },
       toggleCapture: () => {
@@ -615,14 +615,17 @@ class App {
     try {
       const r = await fetch(url, { method: "POST" });
       if (!r.ok) throw new Error(`wake refused (${r.status})`);
-      for (let tries = 0; tries < 20; tries++) {
+      let up = false;
+      for (let tries = 0; tries < 20 && !up; tries++) {
         await new Promise((done) => setTimeout(done, 3000));
         const now = await reach(origin);
         this.reachCache.set(origin, { reach: now, at: Date.now() });
-        if (now === "ok") break;
+        up = now === "ok";
       }
+      if (!up) this.ui.notify(`${this.nameOf(origin)} didn't answer within a minute of waking. It may still be starting.`, "error");
     } catch (e) {
       console.warn("punktfunk: wake", e);
+      this.ui.notify(`Couldn't wake ${this.nameOf(origin)} — this page's server didn't send the wake packet.`, "error");
     } finally {
       this.waking.delete(origin);
       this.redrawLists();
@@ -667,7 +670,8 @@ class App {
     } finally {
       if (this.libraryFor === s.origin) {
         this.libraryLoading = false;
-        this.libraryAt = Date.now();
+        // A failure keeps no clock: opening the host again asks again.
+        if (!this.libraryError) this.libraryAt = Date.now();
       }
     }
     this.redrawLibrary();
@@ -701,6 +705,8 @@ class App {
       }
       try {
         const st = await now.host.status();
+        // Another shelf took the poll while this one was out: its answer is not news here.
+        if (this.pollingFor !== s.origin) return;
         // Anything not exited is up, as on every client; this device's own launch leads.
         const up = st.games.filter((g) => g.state !== "exited");
         const live = up.find((g) => g.endable && g.app_id) ?? up[0];
@@ -887,10 +893,12 @@ class App {
   }
 
   // --- settings and the window ------------------------------------------------------------
-  /** Push the tunable half of the settings at the engine. The rest — size, rate, bitrate — is
-   *  read when a stream starts, because it is `StreamOptions` and not an engine property. */
-  private applyPrefs(): void {
-    this.engine.configure({
+  /** Push the tunable half of the settings at the engine, or only the keys `changed` names: a
+   *  setting pushed again would undo what a shortcut switched mid-stream. The rest — size, rate,
+   *  bitrate — is read when a stream starts, because it is `StreamOptions` and not an engine
+   *  property. */
+  private applyPrefs(changed?: Partial<Settings>): void {
+    const all: Parameters<Engine["configure"]>[0] = {
       videoBackend: this.prefs.videoBackend,
       audio: this.prefs.audio,
       captureInput: this.prefs.captureInput,
@@ -901,7 +909,8 @@ class App {
       codec: this.prefs.codec,
       hdr: this.prefs.hdr,
       invertScroll: this.prefs.invertScroll,
-    });
+    };
+    this.engine.configure(changed ? Object.fromEntries(Object.entries(all).filter(([k]) => k in changed)) : all);
   }
 
   /**
@@ -911,7 +920,8 @@ class App {
    */
   private watchSize(): void {
     const observer = new ResizeObserver(() => {
-      if (!this.prefs.resizeStream) return;
+      // A fixed resolution hides the toggle, and so must turn it off.
+      if (!this.prefs.resizeStream || this.prefs.width !== 0) return;
       const now = this.engine.current;
       if (now.kind !== "streaming") return;
       const [width, height] = size(this.uiCanvas);
@@ -1144,11 +1154,12 @@ try {
   // Before there is an engine there is no interface to say this on; the one sheet the page
   // carries for exactly this case does.
   const shell = new WebShell(document.body);
-  shell.mount(noop);
+  shell.mount({ ...noop, back: () => history.back(), retry: () => location.reload() });
   shell.render({
     kind: "error",
-    head: "This browser cannot run the client",
+    head: "This browser can't run the client",
     text: sentence(e instanceof Error ? e.message : String(e)),
+    retry: true,
   });
 }
 

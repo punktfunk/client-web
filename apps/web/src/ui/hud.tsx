@@ -40,12 +40,15 @@ export function Hud({ screen, actions }: { screen: Extract<Screen, { kind: "stre
   const stats = screen.stats;
   useEffect(() => {
     let timer = 0;
+    // Only a pointer that can reach it shows the toolbar: keys go to the game, and a locked
+    // pointer has no cursor to click with. Either would keep it over the picture all game.
     const wake = () => {
+      if (document.pointerLockElement) return;
       setIdle(false);
       clearTimeout(timer);
       timer = window.setTimeout(() => setIdle(true), HIDE_AFTER_MS);
     };
-    const types = ["pointermove", "pointerdown", "keydown"] as const;
+    const types = ["pointermove", "pointerdown"] as const;
     for (const type of types) window.addEventListener(type, wake, { passive: true });
     wake();
     return () => {

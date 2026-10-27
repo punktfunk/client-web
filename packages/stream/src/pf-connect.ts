@@ -242,6 +242,16 @@ export interface KnownHost {
 // costs a re-pair, not a compromise.
 const KEY = "pf.hosts";
 
+/** Storage that is blocked or full loses the change, which costs a re-pair later; throwing here
+ *  would strand a connect or a pairing halfway. */
+function save(all: Record<string, KnownHost>): void {
+  try {
+    localStorage.setItem(KEY, JSON.stringify(all));
+  } catch {
+    // Kept nowhere: see above.
+  }
+}
+
 export const hosts = {
   all(): Record<string, KnownHost> {
     try {
@@ -256,12 +266,12 @@ export const hosts = {
   remember(origin: string, fields: KnownHost): void {
     const all = hosts.all();
     all[origin] = { ...all[origin], ...fields, seen: Date.now() };
-    localStorage.setItem(KEY, JSON.stringify(all));
+    save(all);
   },
   forget(origin: string): void {
     const all = hosts.all();
     delete all[origin];
-    localStorage.setItem(KEY, JSON.stringify(all));
+    save(all);
   },
   /** Rename a host, or drop the name again when `label` is empty. A host the page's server lists
    *  has no record until its first connect, so a name can be what starts one. */
@@ -271,7 +281,7 @@ export const hosts = {
     const trimmed = label.trim();
     if (trimmed) host.label = trimmed;
     else delete host.label;
-    localStorage.setItem(KEY, JSON.stringify(all));
+    save(all);
   },
   /** Drop the pairing but keep the host: it is still one this browser knows, just not one it is
    *  paired with any more. */
@@ -280,7 +290,7 @@ export const hosts = {
     const h = all[origin];
     if (!h) return;
     delete h.fingerprint;
-    localStorage.setItem(KEY, JSON.stringify(all));
+    save(all);
   },
   /** Most recently used first: the list the picker shows. */
   list(): Array<KnownHost & { origin: string }> {

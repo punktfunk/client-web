@@ -99,3 +99,41 @@ test("a pad without an actuator, or no pad at all, is left alone", () => {
   assert.doesNotThrow(() => playRumble([{} as Gamepad, null], 0, 0xffff, 0, 0, 0, 400));
   assert.doesNotThrow(() => playRumble([], 3, 0xffff, 0, 0, 0, 400));
 });
+
+test("a second mouse button held with the first is pressed and released", () => {
+  const sent: string[] = [];
+  const mod = { _pf_input: (kind: number, code: number) => sent.push(`${kind}:${code}`) };
+  const canvas = { focus() {} } as HTMLCanvasElement;
+  const pipe = new InputPipe(mod as never, canvas, { streamWidth: 1920, streamHeight: 1080, pointer: "capture", deadzone: 0.05 });
+  const doc = (globalThis as { document?: unknown }).document;
+  (globalThis as { document?: unknown }).document = { pointerLockElement: canvas };
+  const pointer = (phase: "down" | "move" | "up", buttons: number) =>
+    (pipe as unknown as { pointer(e: unknown, phase: string): void }).pointer(
+      { pointerType: "mouse", buttons, movementX: 0, movementY: 0, preventDefault() {} },
+      phase,
+    );
+  try {
+    // Left down, right down, left up, right up: the browser sends the middle two as moves.
+    pointer("down", 1);
+    pointer("move", 3);
+    pointer("move", 2);
+    pointer("up", 0);
+    assert.deepEqual(sent, ["4:1", "4:3", "5:1", "5:3"]);
+  } finally {
+    (globalThis as { document?: unknown }).document = doc;
+  }
+});
+
+test("a wheel turned down scrolls down: the wire is up-positive, the browser down-positive", () => {
+  const sent: Array<[number, number, number]> = [];
+  const mod = { _pf_input: (kind: number, code: number, x: number) => sent.push([kind, code, x]) };
+  const pipe = new InputPipe(mod as never, {} as HTMLCanvasElement, { streamWidth: 1920, streamHeight: 1080, pointer: "absolute", deadzone: 0.05 });
+  const wheel = (deltaX: number, deltaY: number) =>
+    (pipe as unknown as { scroll(e: unknown): void }).scroll({ deltaMode: 0, deltaX, deltaY, preventDefault() {} });
+  wheel(0, 100);
+  wheel(100, 0);
+  assert.deepEqual(sent, [
+    [6, 0, -120],
+    [6, 1, 120],
+  ]);
+});

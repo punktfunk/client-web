@@ -276,6 +276,11 @@ export class Engine {
   private pendingKnock: StreamOptions | null = null;
   /** When the request for access went out, while it waits; `0` otherwise. */
   private knockSince = 0;
+  /** Moved by every `reset`: a `connect` that comes back from an await to a newer one was
+   *  cancelled or replaced, and says nothing. */
+  private epoch = 0;
+  /** The fingerprint the last `connect` was told to expect, for the reconnects this engine makes. */
+  private expect: string | undefined;
 
   private constructor(
     private readonly mod: PunktfunkModule,
@@ -299,6 +304,7 @@ export class Engine {
     };
     if (opts.uiCanvas) mod.__pfUiCanvas = opts.uiCanvas;
     mod.__pfOnDeviceReady = () => this.onDeviceReady();
+    mod.__pfOnDeviceFailed = () => this.onDeviceFailed();
     mod.__pfOnCtlReady = () => this.onControlStream();
     mod.__pfOnClosed = (code, reason) => this.onClosed(code, reason);
     mod.__pfOnRefused = (code, reason) => this.onClosed(code, reason);
@@ -318,7 +324,11 @@ export class Engine {
    */
   static async create(opts: EngineOptions): Promise<Engine> {
     if (!decodeSupported()) {
-      throw new Error("this browser cannot decode video (no WebCodecs)");
+      throw new Error("this browser can't decode video. Open this page in a current Chrome, Edge, Safari or Firefox");
+    }
+    // WebTransport and the device key exist only there; plain http on a LAN address is not one.
+    if (!isSecureContext) {
+      throw new Error("this page isn't on an https address, so the browser won't stream from it. Open it over https");
     }
     const [mod, codecs, channels, gpu] = await Promise.all([loadModule(), decodableCodecs(), playableChannels(), webgpuUsable()]);
     return new Engine(mod, opts, codecs, channels, gpu);
@@ -355,7 +365,7 @@ export class Engine {
    * throw: the consumer renders `blocked`, `unreachable`, `untrusted` or `error`, and each
    * says what a person can do about it.
    */
-  async connect(address: string | HostTarget, opts: { expectFingerprint?: string } = {}): Promise<void> {
+  async connect(address: string | HostTarget, opts: { expectFingerprint?: string | undefined } = {}): Promise<void> {
     let origin: string;
     if (typeof address === "string") {
       try {
@@ -366,7 +376,15 @@ export class Engine {
     } else {
       origin = address.api.replace(/\/+$/, "");
     }
+    // A PIN or a request for access held for one host's reconnect is never sent to another.
+    if (origin !== this.origin) {
+      this.pendingPin = null;
+      this.pendingKnock = null;
+    }
     this.reset();
+    const epoch = this.epoch;
+    const stale = () => epoch !== this.epoch;
+    this.expect = opts.expectFingerprint;
     this.origin = origin;
     this.target = address;
     this.planeHost =
@@ -381,6 +399,7 @@ export class Engine {
       // no certificate to accept, so `blocked` cannot happen; the host's own 404 is the one
       // failure with a sentence of its own.
       const b = await pf.bootstrap(pf.bootstrapUrl(origin, this.planeHost));
+      if (stale()) return;
       if (b.reach === "unreachable") return this.set({ kind: "unreachable", origin });
       if (b.reach === "no-plane") {
         return this.set({
@@ -394,17 +413,21 @@ export class Engine {
       // Tell "certificate not accepted" apart from "nothing there" before saying anything: the
       // two are the same opaque error, and only one of them has a fix a person can follow.
       const { reach: state, said } = await pf.reachWhy(origin);
+      if (stale()) return;
       if (state === "unreachable") {
         return said ? this.set({ kind: "error", origin, message: said }) : this.set({ kind: "unreachable", origin });
       }
       if (state === "blocked") {
         return this.set({ kind: "blocked", origin, acceptUrl: pf.acceptUrl(origin) });
       }
+      let plane: pf.Plane;
       try {
-        this.plane = await pf.fetchPlane(origin);
+        plane = await pf.fetchPlane(origin);
       } catch (e) {
-        return this.set({ kind: "error", origin, message: message(e) });
+        return stale() ? undefined : this.set({ kind: "error", origin, message: message(e) });
       }
+      if (stale()) return;
+      this.plane = plane;
     }
     // Pairing keeps the identity the attestation names. Without one, every pairing is lost at once.
     if (!this.plane.cert_hash_sig || !this.plane.host_cert_der) {
@@ -429,8 +452,9 @@ export class Engine {
       } catch (e) {
         // Refuse before dialling. A host that cannot prove it is the one we paired with may still
         // be reachable — that is exactly the case this exists to catch.
-        return this.set({ kind: "untrusted", origin, reason: message(e) });
+        return stale() ? undefined : this.set({ kind: "untrusted", origin, reason: message(e) });
       }
+      if (stale()) return;
     }
     pf.hosts.remember(origin, typeof this.target === "object" && this.target ? { plane: this.target.plane } : {});
     // Every management call from here rides the plane, pinned to the hash just verified. The
@@ -470,7 +494,7 @@ export class Engine {
         // reconnect back through the credential the host just refused.
         pf.hosts.unpair(origin);
         this.mod._pf_wt_close?.();
-        void this.connect(this.target ?? origin);
+        void this.connect(this.target ?? origin, { expectFingerprint: this.expect });
         return;
       }
       default:
@@ -497,7 +521,7 @@ export class Engine {
         this.pendingKnock = opts;
         pf.hosts.unpair(origin);
         this.mod._pf_wt_close?.();
-        void this.connect(this.target ?? origin);
+        void this.connect(this.target ?? origin, { expectFingerprint: this.expect });
         return;
       default:
         return;
@@ -629,6 +653,9 @@ export class Engine {
     this.tier = this.tunable.statsTier;
     this.hud = [];
     this.lastDropped = 0;
+    // The wasm frame count starts again at zero with each session.
+    this.lastFrames = 0;
+    this.lastSecond = performance.now();
     this.launchNotice = this.sdrNotice
       ? { text: "This browser can't show HDR video, so the stream is in SDR.", at: performance.now() }
       : null;
@@ -723,7 +750,8 @@ export class Engine {
    */
   fullscreen(on = !document.fullscreenElement): void {
     const keyboard = (navigator as { keyboard?: { lock?: () => Promise<void>; unlock?: () => void } }).keyboard;
-    if (on && !document.fullscreenElement) {
+    // An iPhone has no element fullscreen at all, and the call would throw before anything else.
+    if (on && !document.fullscreenElement && document.documentElement.requestFullscreen) {
       void document.documentElement
         .requestFullscreen()
         .then(() => keyboard?.lock?.())
@@ -896,8 +924,9 @@ export class Engine {
     this.offeredSince = 0;
     this.knockSince = 0;
     this.pendingStream = null;
+    this.epoch++;
     // `pendingPin` and `pendingKnock` survive: each is set right before the reconnect that calls
-    // this.
+    // this. `connect` drops them for another host.
   }
 
   /**
@@ -913,6 +942,17 @@ export class Engine {
     const device = this.mod.__pfDevice;
     if (!fingerprint || !device) return this.set({ kind: "needs-pairing", origin });
     this.checkHost(origin, fingerprint, device);
+  }
+
+  /** The device key could not be loaded or made, so nothing can sign for this browser. */
+  private onDeviceFailed(): void {
+    const origin = this.origin;
+    if (!origin) return;
+    this.set({
+      kind: "error",
+      origin,
+      message: "this browser couldn't open its device key. Allow this site to store data, then try again",
+    });
   }
 
   /** Open the plane. Only after `onDeviceReady`: the wasm side must already hold the key's SPKI. */
@@ -939,6 +979,7 @@ export class Engine {
     const knock = this.pendingKnock;
     this.pendingKnock = null;
     if (knock) {
+      this.streamed = knock;
       this.knockSince = performance.now();
       this.set({ kind: "awaiting-approval", origin, name: this.deviceName });
       return this.hello(knock);
@@ -1054,6 +1095,8 @@ export class Engine {
   // --- the frame loop ------------------------------------------------------------------
   private frame(): void {
     if (!this.running) return;
+    // Armed first: a throw below costs this frame, not the loop that pumps every later one.
+    requestAnimationFrame(() => this.frame());
     // Signing is asynchronous and the phase can change on either side of it, so this is polled
     // rather than pushed. One check per frame costs nothing next to the draw.
     if (this.mod._pf_cred_phase() === CRED.NEEDS_SIGNATURE) this.mod._pf_device_sign();
@@ -1061,7 +1104,6 @@ export class Engine {
     this.mod._pf_session_pump();
     this.video?.present();
     this.updateSession();
-    requestAnimationFrame(() => this.frame());
   }
 
   private pumpCredential(): void {
@@ -1073,8 +1115,9 @@ export class Engine {
       // The fingerprint stored is the long-lived identity's, not the plane's throwaway
       // certificate, which is replaced every twelve days.
       void pf.hostFingerprint(this.plane).then((fp) => {
+        // Kept even if the page has moved on: the host has stored this device by now.
         if (fp) pf.hosts.remember(origin, { fingerprint: fp });
-        this.set({ kind: "paired", origin });
+        if (this.origin === origin) this.set({ kind: "paired", origin });
       });
     } else if (phase === CRED.FAILED) {
       this.settled = true;
@@ -1105,6 +1148,13 @@ export class Engine {
         this.offeredSince = 0;
         this.set({ kind: "forgotten", origin });
       }
+      return;
+    }
+    // The host sent something this page can't read: nothing after it will be either.
+    if (phase === SESSION.FAILED) {
+      this.stopSession();
+      this.set({ kind: "error", origin, message: "this page couldn't read what the host sent", skew: true });
+      this.mod._pf_wt_close?.();
       return;
     }
     if (phase !== SESSION.LIVE) return;
@@ -1142,6 +1192,8 @@ export class Engine {
       this.input.tune({ streamWidth: v.width, streamHeight: v.height });
     }
     this.input?.poll();
+    // A pad chord in `poll` can end the stream; what follows would report it live again.
+    if (!this.video) return;
     if (v?.width) {
       const input = this.input !== null;
       this.cursor.tick(this.mod, this.opts.videoCanvas, input, this.tunable.pointer === "absolute", this.input?.captured ?? false, v.width);

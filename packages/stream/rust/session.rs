@@ -67,6 +67,9 @@ struct Client {
     codec: u8,
     width: u32,
     height: u32,
+    /// The size the last `Reconfigure` asked for, until the host answers it. A resize back to the
+    /// size still on screen must go out too, or the host settles on the one in between.
+    asked: Option<(u32, u32)>,
     /// `Welcome::host_caps`: what this host understands beyond the base wire (gamepad snapshots,
     /// text input). Input chooses its vocabulary by it.
     host_caps: u8,
@@ -149,6 +152,7 @@ impl Client {
             access_seq: 0,
             cursor_serial: 0,
             cursor_flags: 0,
+            asked: None,
         }
     }
 }
@@ -199,6 +203,7 @@ pub extern "C" fn pf_session_reset() {
         c.codec = 0;
         c.width = 0;
         c.height = 0;
+        c.asked = None;
         c.host_caps = 0;
         c.host_caps2 = 0;
         c.audio_channels = 0;
@@ -214,19 +219,22 @@ pub extern "C" fn pf_session_reset() {
     });
     crate::audio::reset();
     crate::rumble::reset();
+    crate::transport::reset();
 }
 
 /// Ask the host to switch to `width` x `height` at `fps` without reconnecting (a window resize).
 ///
-/// No-op unless a session is live and the size actually changed. Dimensions must be even (4:2:0);
-/// the caller rounds. The host answers with `Reconfigured`, handled in [`pf_ctl_recv`].
+/// No-op unless a session is live and the size differs from the one last asked for, or the
+/// current one when nothing is pending. Dimensions must be even (4:2:0); the caller rounds. The
+/// host answers with `Reconfigured`, handled in [`pf_ctl_recv`].
 #[unsafe(no_mangle)]
 pub extern "C" fn pf_session_reconfigure(width: u32, height: u32, fps: u32) {
     CLIENT.with(|c| {
-        let c = c.borrow();
-        if c.phase != Phase::Live || (c.width == width && c.height == height) {
+        let mut c = c.borrow_mut();
+        if c.phase != Phase::Live || c.asked.unwrap_or((c.width, c.height)) == (width, height) {
             return;
         }
+        c.asked = Some((width, height));
         send(&Reconfigure {
             mode: punktfunk_core::config::Mode {
                 width,
@@ -623,6 +631,7 @@ fn on_frame(c: &mut Client, ty: u64, body: &[u8]) {
             // the new size; the next IDR carries matching parameter sets. On refusal the active
             // mode is unchanged, so there is nothing to do.
             if let Ok(r) = Reconfigured::from_body(body) {
+                c.asked = None;
                 if r.accepted {
                     c.width = r.mode.width;
                     c.height = r.mode.height;
@@ -775,12 +784,13 @@ pub extern "C" fn pf_session_pump() -> u32 {
             let key = i32::from(crate::keyframe::is_keyframe(&frame.data, codec));
             // SAFETY: the page reads `len` bytes at `ptr` and returns before this does; `frame`
             // owns the buffer for the whole call. R3: what crosses is the encoded access unit,
-            // never a decoded pixel.
+            // never a decoded pixel. Whole µs, as WebCodecs keeps a timestamp and the page looks
+            // each frame's flags up by it.
             unsafe {
                 pf_video_au(
                     frame.data.as_ptr(),
                     frame.data.len() as u32,
-                    frame.pts_ns as f64 / 1000.0,
+                    (frame.pts_ns / 1000) as f64,
                     key,
                     frame.flags,
                 )

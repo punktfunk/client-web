@@ -72,7 +72,7 @@ export function SettingsDialog({ screen, actions }: { screen: SettingsScreen; ac
       <DialogContent className="max-w-3xl">
         <DialogHeader>
           <DialogTitle>Settings</DialogTitle>
-          <DialogDescription>Stream settings take effect on the next stream; the rest apply now.</DialogDescription>
+          <DialogDescription>Mouse, controller and statistics settings apply now; the rest take effect on the next stream.</DialogDescription>
         </DialogHeader>
         <SettingsTabs screen={screen} actions={actions} />
         <DialogFooter>
@@ -244,7 +244,7 @@ function SettingsTabs({ screen, actions }: { screen: SettingsScreen; actions: Ac
                 onChange={(codec) => set({ codec })}
               />
             </Row>
-            <Row label="Video plane" hint="Automatic uses WebGPU where the browser has it.">
+            <Row label="Video plane" hint="Automatic uses WebGPU where the browser has it. Once a stream has played, a change waits for the page to reload.">
               <Segmented
                 label="Video plane"
                 value={v.videoBackend}

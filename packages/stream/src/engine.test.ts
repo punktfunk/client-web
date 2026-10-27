@@ -105,3 +105,30 @@ test("a door's redirect dials the seat's plane once, with the credential bound t
   redirect(9785, seat);
   assert.equal(engine.current.kind, "error", "a second redirect ends the connect");
 });
+
+test("a connect left before its host answers says nothing afterwards", async () => {
+  const { engine } = engineIn("ready");
+  let answer = (_: Response) => {};
+  const fetched = globalThis.fetch;
+  globalThis.fetch = () => new Promise<Response>((resolve) => (answer = resolve));
+  try {
+    const connecting = engine.connect("https://192.168.1.30:47990");
+    assert.equal(engine.current.kind, "reaching");
+    engine.disconnect();
+    answer(new Response(null, { status: 504 }));
+    await connecting;
+    assert.deepEqual(engine.current, { kind: "idle" }, "Cancel stays cancelled");
+  } finally {
+    globalThis.fetch = fetched;
+  }
+});
+
+test("a session the page can't read ends as a version mismatch, not a hang", () => {
+  const { engine, mod, calls } = engineIn("ready");
+  engine.startStream({ width: 1280, height: 720 });
+  mod._pf_session_phase = () => 3;
+  (engine as unknown as { updateSession(): void }).updateSession();
+  assert.equal(engine.current.kind, "error");
+  assert.equal((engine.current as { skew?: boolean }).skew, true);
+  assert.ok(calls.includes("_pf_session_reset") && calls.includes("_pf_wt_close"));
+});

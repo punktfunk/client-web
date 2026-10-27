@@ -166,6 +166,8 @@ export class AudioPipe {
   private ctx: AudioContext | null = null;
   private node: AudioWorkletNode | null = null;
   private decoder: AudioDecoder | null = null;
+  /** When the decoder was last replaced (`performance.now()`). */
+  private rebuiltAt = 0;
   private state: AudioState = "off";
   private errors = 0;
   private underruns = 0;
@@ -227,28 +229,17 @@ export class AudioPipe {
     node.connect(ctx.destination);
     this.node = node;
 
-    const decoder = new AudioDecoder({
-      output: (frame) => this.play(frame),
-      error: () => {
-        this.errors++;
-      },
-    });
-    decoder.configure({
-      codec: "opus",
-      sampleRate: SAMPLE_RATE,
-      numberOfChannels: this.channels,
-      ...(this.description ? { description: this.description } : {}),
-    });
-    this.decoder = decoder;
+    this.decoder = this.makeDecoder();
 
     this.state = ctx.state === "running" ? "playing" : "suspended";
-    // Autoplay: a gesture anywhere on the page is enough, and the stream's own input is one.
+    // Autoplay: a gesture anywhere on the page is enough, and the stream's own input is one. A
+    // touch counts only as it lifts, which is all iOS honours.
     const resume = () => {
       void ctx.resume().then(() => {
         if (this.ctx === ctx) this.state = "playing";
       });
     };
-    for (const type of ["pointerdown", "keydown", "touchstart"] as const) {
+    for (const type of ["pointerdown", "pointerup", "keydown", "touchend"] as const) {
       window.addEventListener(type, resume, { passive: true });
       this.off.push(() => window.removeEventListener(type, resume));
     }
@@ -264,9 +255,32 @@ export class AudioPipe {
     this.decode(data, ptsNs);
   }
 
+  private makeDecoder(): AudioDecoder {
+    const decoder = new AudioDecoder({
+      output: (frame) => this.play(frame),
+      error: () => {
+        this.errors++;
+      },
+    });
+    decoder.configure({
+      codec: "opus",
+      sampleRate: SAMPLE_RATE,
+      numberOfChannels: this.channels,
+      ...(this.description ? { description: this.description } : {}),
+    });
+    return decoder;
+  }
+
   private decode(data: Uint8Array, ptsNs: number): void {
-    const decoder = this.decoder;
-    if (!decoder || decoder.state !== "configured") return;
+    let decoder = this.decoder;
+    if (!decoder) return;
+    // One bad packet closes a decoder for good. Opus packets stand alone, so a fresh one loses
+    // only that packet; at most one a second, so a stream it can't decode at all does not spin.
+    if (decoder.state === "closed" && performance.now() - this.rebuiltAt >= 1000) {
+      this.rebuiltAt = performance.now();
+      decoder = this.decoder = this.makeDecoder();
+    }
+    if (decoder.state !== "configured") return;
     try {
       decoder.decode(new EncodedAudioChunk({ type: "key", timestamp: ptsNs / 1000, data }));
     } catch {
