@@ -29,6 +29,7 @@ export type LibraryEntry = api.OperatorGameEntry;
 export type HostInfo = api.HostInfo;
 export type HostStatus = api.RuntimeStatus;
 export type HostAction = api.ActionInfo;
+export type ListedProfile = api.ProfilePublic;
 
 /** The host speaks a wire shape this page does not: one side is newer than the other. */
 export class VersionSkew extends Error {
@@ -108,6 +109,23 @@ export class Host {
     return URL.createObjectURL(await res.blob());
   }
 
+  /** The box's profiles, or `null` for a box without any: its 404, as a host older than the
+   *  route answers too. */
+  async profiles(): Promise<ReadonlyArray<ListedProfile> | null> {
+    try {
+      return await this.run("profiles", (c) => c.enumerateProfiles(undefined));
+    } catch (e) {
+      if (statusOf(e) === 404) return null;
+      throw e;
+    }
+  }
+
+  /** Start profile `id`'s stopped seat. Its row says `starting` until the seat is up; a device
+   *  the host won't let start that seat gets its 403 back as `statusOf`. */
+  wakeProfile(id: string): Promise<ListedProfile> {
+    return this.run("profile wake", (c) => c.wakeProfile(id, undefined));
+  }
+
   /** The host actions this device sees, power among them, and whether its access allows each. */
   async actions(): Promise<ReadonlyArray<HostAction>> {
     return (await this.run("actions", (c) => c.listActions(undefined))).actions;
@@ -172,6 +190,11 @@ export class Host {
       throw translate(operation, e);
     }
   }
+}
+
+/** The HTTP status a call failed with, when the host answered at all. */
+export function statusOf(e: unknown): number | undefined {
+  return (e as { response?: { status?: number } } | null)?.response?.status;
 }
 
 /** The host's own sentence for a refusal, when its body carries one, else `fallback`. */

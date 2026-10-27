@@ -18,6 +18,7 @@
 // over the short-lived WebTransport hash, and `verify` refuses to dial a host that cannot produce
 // it.
 
+import type { ProfilePick } from "./profiles.ts";
 import { derToRaw, fromBase64, hexToBytes } from "@punktfunk/host/core";
 
 const CTX = "punktfunk-wt-cert-v1:";
@@ -234,6 +235,8 @@ export interface KnownHost {
   label?: string;
   /** Where the plane is dialled when the API is reached through the page's server. */
   plane?: string;
+  /** The profile this browser plays as on a box with profiles. */
+  profile?: ProfilePick;
   seen?: number;
 }
 
@@ -281,6 +284,14 @@ export const hosts = {
     const trimmed = label.trim();
     if (trimmed) host.label = trimmed;
     else delete host.label;
+    save(all);
+  },
+  /** Keep `pick` as the profile this browser plays as on `origin`, or forget it. */
+  setProfile(origin: string, pick: ProfilePick | null): void {
+    const all = hosts.all();
+    const host = (all[origin] ??= {});
+    if (pick) host.profile = pick;
+    else delete host.profile;
     save(all);
   },
   /** Drop the pairing but keep the host: it is still one this browser knows, just not one it is
