@@ -132,3 +132,11 @@ test("a session the page can't read ends as a version mismatch, not a hang", () 
   assert.equal((engine.current as { skew?: boolean }).skew, true);
   assert.ok(calls.includes("_pf_session_reset") && calls.includes("_pf_wt_close"));
 });
+
+test("an approval whose seat isn't up ends paired, not refused", async () => {
+  const { engine, mod } = engineIn("needs-pairing");
+  engine.requestAccess({ width: 1280, height: 720 });
+  refuse(mod, 0x6f, "that profile's seat isn't available on this host");
+  close(mod, 0x6f);
+  assert.deepEqual(engine.current, { kind: "paired", origin: ORIGIN }, "the transport's close changes nothing");
+});
