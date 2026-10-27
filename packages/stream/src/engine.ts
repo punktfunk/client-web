@@ -216,6 +216,8 @@ export interface StreamOptions {
   bitrateKbps?: number;
   /** What the host should launch. Its `id` goes on the wire; unset streams the desktop. */
   launch?: LibraryEntry;
+  /** The id of the profile to play as; unset lets the host pick (`profiles.ts`). */
+  profile?: string;
 }
 
 export class Engine {
@@ -664,7 +666,8 @@ export class Engine {
     this.accessNotice = null;
     this.mod._pf_session_audio?.(this.tunable.audio ? this.surround : 2);
     const id = opts.launch?.id ?? "";
-    withStr(this.mod, [id, this.deviceName], (p, len, n, nl) =>
+    const profile = opts.profile ?? "";
+    withStr(this.mod, [id, this.deviceName, profile], (p, len, n, nl, pr, prl) =>
       this.mod._pf_session_hello(
         opts.width,
         opts.height,
@@ -674,6 +677,8 @@ export class Engine {
         id ? len : 0,
         n,
         nl,
+        profile ? pr : 0,
+        profile ? prl : 0,
       ),
     );
   }

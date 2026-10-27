@@ -58,6 +58,8 @@ export interface PunktfunkModule {
     launchLen: number,
     namePtr: number,
     nameLen: number,
+    profilePtr: number,
+    profileLen: number,
   ): number;
   /** Drain the ring and hand each finished access unit to the page. Returns how many. */
   _pf_session_pump(): number;
