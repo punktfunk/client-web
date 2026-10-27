@@ -3,7 +3,7 @@
 // added from a sheet, or from the page itself while there is none.
 
 import { cn } from "@unom/ui/lib/utils";
-import { LibraryBig, Link2, Monitor, MoreHorizontal, Pencil, Play, Plus, Power, Trash2 } from "lucide-react";
+import { LibraryBig, Link2, Monitor, MoreHorizontal, Pencil, Play, Plus, Power, Trash2, UserRound } from "lucide-react";
 import { motion } from "motion/react";
 import { type JSX, useState } from "react";
 import { GROUP, ROW_GAP, staggerProps } from "@/components/stagger";
@@ -183,6 +183,12 @@ function HostTile({ host, actions }: { host: HostCard; actions: Actions }): JSX.
             <MenuItem onSelect={() => actions.browse(host.origin)}>
               <LibraryBig />
               Browse library
+            </MenuItem>
+          )}
+          {paired && (
+            <MenuItem onSelect={() => actions.switchProfile(host.origin)}>
+              <UserRound />
+              Switch profile…
             </MenuItem>
           )}
           {host.wake && (

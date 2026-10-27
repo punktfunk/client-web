@@ -40,6 +40,9 @@ const CRED = { EMPTY: 0, READY: 1, NEEDS_SIGNATURE: 2, PAIRING: 3, PAIRED: 4, FA
 const SESSION = { IDLE: 0, OFFERED: 1, LIVE: 2, FAILED: 3 } as const;
 /** The host's application close codes this engine reads (`punktfunk_core::reject`). */
 const CLOSE = { QUIT: 0x51, PAIR_DENIED: 0x64, ACCESS_EXPIRED: 0x69, HOST_POWER: 0x6b } as const;
+/** Where the stream plays was refused: an unknown profile, no seat, a seat taken or not up. The
+ *  host decides these only after it admitted the device. */
+const PLACEMENT_REFUSED = new Set([0x6c, 0x6d, 0x6e, 0x6f]);
 /** pf-glue's code for a session that never opened: no host was heard at all. */
 const NEVER_OPENED = -2;
 
@@ -216,6 +219,8 @@ export interface StreamOptions {
   bitrateKbps?: number;
   /** What the host should launch. Its `id` goes on the wire; unset streams the desktop. */
   launch?: LibraryEntry;
+  /** The id of the profile to play as; unset lets the host pick (`profiles.ts`). */
+  profile?: string;
 }
 
 export class Engine {
@@ -505,7 +510,9 @@ export class Engine {
   /**
    * Ask for access without a PIN: someone approves this browser in the host's console. Valid
    * where `pair` is, and the same reconnect applies. Approval streams `opts` on this connection;
-   * a denial or a request nobody answers ends in `pair-refused` with the host's reason.
+   * a denial or a request nobody answers ends in `pair-refused` with the host's reason. An
+   * approval whose stream the host can't place ends in `paired`: the device is in, and the next
+   * connect picks the profile and readies its seat first.
    */
   requestAccess(opts: StreamOptions): void {
     const origin = this.origin;
@@ -664,7 +671,8 @@ export class Engine {
     this.accessNotice = null;
     this.mod._pf_session_audio?.(this.tunable.audio ? this.surround : 2);
     const id = opts.launch?.id ?? "";
-    withStr(this.mod, [id, this.deviceName], (p, len, n, nl) =>
+    const profile = opts.profile ?? "";
+    withStr(this.mod, [id, this.deviceName, profile], (p, len, n, nl, pr, prl) =>
       this.mod._pf_session_hello(
         opts.width,
         opts.height,
@@ -674,6 +682,8 @@ export class Engine {
         id ? len : 0,
         n,
         nl,
+        profile ? pr : 0,
+        profile ? prl : 0,
       ),
     );
   }
@@ -944,6 +954,14 @@ export class Engine {
     this.checkHost(origin, fingerprint, device);
   }
 
+  /** A request for access was approved: the host is pinned as a PIN pairing pins it, from its
+   *  attested identity. */
+  private async pinApproved(origin: string): Promise<void> {
+    const plane = this.plane;
+    const fp = plane ? await pf.hostFingerprint(plane) : null;
+    if (fp) pf.hosts.remember(origin, { fingerprint: fp });
+  }
+
   /** The device key could not be loaded or made, so nothing can sign for this browser. */
   private onDeviceFailed(): void {
     const origin = this.origin;
@@ -1037,8 +1055,14 @@ export class Engine {
     }
     switch (this.state.kind) {
       case "awaiting-approval":
-        // Denied, unanswered, or replaced by a newer request: the host's sentence says which.
         this.knockSince = 0;
+        if (PLACEMENT_REFUSED.has(code)) {
+          // Paired now, so the transport's own close that follows finds nothing to report.
+          void this.pinApproved(origin);
+          this.stopSession();
+          return this.set({ kind: "paired", origin });
+        }
+        // Denied, unanswered, or replaced by a newer request: the host's sentence says which.
         this.stopSession();
         return this.set({ kind: "pair-refused", origin, ...(said ? { reason: said } : {}) });
       // No connection is open here: a close is the one `cancelRequest` or `leave` just made.
@@ -1160,14 +1184,8 @@ export class Engine {
     if (phase !== SESSION.LIVE) return;
     this.offeredSince = 0;
     if (this.knockSince) {
-      // Approved. The host is pinned as a PIN pairing pins it, from its attested identity.
       this.knockSince = 0;
-      const plane = this.plane;
-      if (plane) {
-        void pf.hostFingerprint(plane).then((fp) => {
-          if (fp) pf.hosts.remember(origin, { fingerprint: fp });
-        });
-      }
+      void this.pinApproved(origin);
     }
     const v = this.video?.snapshot();
 

@@ -380,11 +380,13 @@ fn take_frame(inbox: &mut Vec<u8>) -> Result<Option<(u64, Vec<u8>)>, PunktfunkEr
 ///
 /// `launch` is a library id (`OperatorGameEntry::id`) or null: the host resolves it to a command
 /// on the real-display source and streams the desktop otherwise. `name` is this device's name.
+/// `profile` is the id of the profile to play as, or null for the one the host picks.
 ///
 /// # Safety
-/// `launch` and `name` are each null or point to their length in readable UTF-8 bytes, valid for
-/// the call.
+/// `launch`, `name` and `profile` are each null or point to their length in readable UTF-8
+/// bytes, valid for the call.
 #[unsafe(no_mangle)]
+#[allow(clippy::too_many_arguments)]
 pub unsafe extern "C" fn pf_session_hello(
     width: u32,
     height: u32,
@@ -394,11 +396,15 @@ pub unsafe extern "C" fn pf_session_hello(
     launch_len: u32,
     name: *const u8,
     name_len: u32,
+    profile: *const u8,
+    profile_len: u32,
 ) -> i32 {
     // SAFETY: the caller guarantees `launch_len` readable bytes at `launch` for this call.
     let launch = unsafe { utf8_arg(launch, launch_len) };
     // SAFETY: as above, `name_len` bytes at `name`.
     let name = unsafe { utf8_arg(name, name_len) };
+    // SAFETY: as above, `profile_len` bytes at `profile`.
+    let profile = unsafe { utf8_arg(profile, profile_len) };
     CLIENT.with(|c| {
         let mut c = c.borrow_mut();
         let hello = Hello {
@@ -455,7 +461,7 @@ pub unsafe extern "C" fn pf_session_hello(
             suites: Vec::new(),
             // `PROFILES`: this page follows a `Redirect` to the seat a door sends it to.
             features: FeatureSet::default().with(reg::FEATURE_PROFILES),
-            profile: None,
+            profile,
             access_only: false,
             // One canvas, one screen.
             screens: Vec::new(),

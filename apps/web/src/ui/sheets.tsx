@@ -26,6 +26,61 @@ export function Connecting({ screen, actions }: Props<"connecting">): JSX.Elemen
   );
 }
 
+/** Who plays on a box with profiles. The saved pick leads, so it is where focus starts. */
+export function Profiles({ screen, actions }: Props<"profiles">): JSX.Element {
+  const cards = [...screen.cards].sort((a, b) => Number(b.id === screen.saved) - Number(a.id === screen.saved));
+  return (
+    <Sheet title={`Who's playing on ${screen.host}?`}>
+      {screen.gone && <Sub>{screen.gone} is gone from this host.</Sub>}
+      {screen.error ? (
+        <ErrorLine text={screen.error} />
+      ) : cards.length === 0 ? (
+        <Sub>No profiles on this host.</Sub>
+      ) : (
+        <div className="grid grid-cols-[repeat(auto-fill,minmax(7rem,1fr))] gap-3">
+          {cards.map((c, i) => (
+            <button
+              key={c.id}
+              type="button"
+              autoFocus={i === 0}
+              onClick={() => actions.pickProfile(c.id)}
+              className="flex min-w-0 flex-col items-center gap-2 rounded-xl p-3 text-center outline-none transition-colors hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring"
+            >
+              <span
+                className={`grid size-16 place-items-center rounded-full text-lg font-bold text-white ${c.accent ? "" : "bg-brand"} ${c.id === screen.saved ? "ring-2 ring-primary ring-offset-2 ring-offset-background" : ""}`}
+                style={c.accent ? { background: c.accent } : undefined}
+                aria-hidden="true"
+              >
+                {c.initials}
+              </span>
+              <span className="w-full truncate font-semibold">{c.name}</span>
+              {c.note && <span className="text-xs text-muted-foreground">{c.note}</span>}
+            </button>
+          ))}
+        </div>
+      )}
+      <Row>
+        <Button variant="secondary" autoFocus={cards.length === 0} onClick={() => actions.back()}>
+          {cards.length ? "Cancel" : "Close"}
+        </Button>
+      </Row>
+    </Sheet>
+  );
+}
+
+/** A profile's seat coming up. Cancel is the way out; there is no timeout. */
+export function SeatWait({ screen, actions }: Props<"seat">): JSX.Element {
+  return (
+    <Sheet title={screen.title}>
+      {screen.detail && <Sub>{screen.detail}</Sub>}
+      <Spinner className="mx-auto my-8 block size-12" />
+      <Row>
+        <Button variant="secondary" autoFocus onClick={() => actions.back()}>Cancel</Button>
+      </Row>
+    </Sheet>
+  );
+}
+
 export function Accept({ screen, actions }: Props<"accept">): JSX.Element {
   return (
     <Sheet title="Accept this host's certificate">

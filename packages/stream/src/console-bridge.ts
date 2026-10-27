@@ -2,6 +2,8 @@
 // Android and Apple speak too. The shapes are serde's: an enum is externally tagged, so a unit
 // variant is its name as a string and a struct variant is `{ Name: { …fields } }`.
 
+import type { ProfilePick } from "./profiles.ts";
+
 /** `pf_console_push` kinds. The numbers are Apple's (`clients/apple/native/src/console.rs`). */
 export const CONSOLE_PUSH = {
   HOSTS: 0,
@@ -18,6 +20,8 @@ export const CONSOLE_PUSH = {
   KNOWN_HOSTS: 13,
   PADS: 14,
   NAVIGATE: 15,
+  /** `{fp_hex, answer}`: `{Listed: rows}`, `"NoProfiles"` or `{Failed: why}`, for `FetchProfiles`. */
+  PROFILES: 20,
 } as const;
 
 /** `pf_console_state` bits. */
@@ -52,6 +56,8 @@ export interface ConsoleHostRow {
   pin: null;
   bound_preset: null;
   running?: string;
+  /** The pick saved for this host; the console applies it only while `remember` is set. */
+  profile?: ProfilePick | null;
 }
 
 /** A title as the console's shelf draws it (`pf_console_ui::LibraryGame`). */
@@ -80,6 +86,8 @@ export type ConsoleAction =
         title: string;
         preset: string | null;
         request_access: boolean;
+        /** The profile to play as, which the console's own gate picked; `null` names none. */
+        profile?: string | null;
       };
     }
   | { CopyText: string }

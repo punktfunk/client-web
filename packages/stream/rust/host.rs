@@ -345,6 +345,14 @@ const PUSH_KNOWN_HOSTS: u32 = 13;
 const PUSH_PADS: u32 = 14;
 /// `{}` for Home, `{"library": HostRow}` for a shelf — re-roots before the next frame.
 const PUSH_NAVIGATE: u32 = 15;
+/// `{"fp_hex", "answer": ProfilesAnswer}` — what a host answered `FetchProfiles` with.
+const PUSH_PROFILES: u32 = 20;
+
+#[derive(serde::Deserialize)]
+struct ProfilesPush {
+    fp_hex: String,
+    answer: pf_console_ui::model::ProfilesAnswer,
+}
 
 /// Hand the shell a model update. A bad kind or bad JSON is a logged no-op.
 ///
@@ -395,6 +403,9 @@ pub unsafe extern "C" fn pf_console_push(kind: u32, ptr: *const u8, len: u32) {
                 app.pads = v.into_pads();
             }),
             PUSH_NAVIGATE => json::<EntryJson>(text).map(|v| app.console.navigate(v.into_entry())),
+            PUSH_PROFILES => {
+                json::<ProfilesPush>(text).map(|v| console.set_profiles(&v.fp_hex, v.answer))
+            }
             _ => None,
         };
         if done.is_none() {

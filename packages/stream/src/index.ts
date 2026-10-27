@@ -18,7 +18,21 @@ export {
 export { DEFAULTS, HUD_CORNERS, type HudCorner, settings, STATS_SCALES, type Settings, type StatsTier } from "./settings.ts";
 export { ASPECTS, aspectOf, customSize, nearest } from "./resolutions.ts";
 export type { AudioSnapshot, AudioState } from "./audio.ts";
-export { Host, type HostAction, type HostInfo, type HostStatus, type LibraryEntry, VersionSkew } from "./host.ts";
+export { Host, type HostAction, type HostInfo, type HostStatus, type LibraryEntry, type ListedProfile, statusOf, VersionSkew } from "./host.ts";
+export {
+  initials,
+  pickerDecision,
+  pickOf,
+  type ProfileDecision,
+  profileNote,
+  type ProfilePick,
+  type ProfileRow,
+  SEAT_POLL_MS,
+  type SeatGate,
+  seatGate,
+  wakeFailed,
+  wakingLine,
+} from "./profiles.ts";
 export { type GameEnd, gameEndNotice, gameEndOf, gameGone } from "./game-end.ts";
 export { captureLog, pageLog } from "./logs.ts";
 export {
