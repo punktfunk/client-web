@@ -200,13 +200,25 @@ export class InputPipe {
    *
    * The mode decides whether a click on the picture grabs the mouse; this is the shell's own
    * button, and it has to work either way. Taking the lock needs a user gesture, so this only
-   * succeeds when called from one — the browser rejects it otherwise, and the promise is caught
-   * because a refusal is not an error worth propagating.
+   * succeeds when called from one.
    */
   capture(on: boolean): void {
     if (on === this.captured) return;
-    if (on) void Promise.resolve(this.canvas.requestPointerLock()).catch(() => {});
+    if (on) this.lock();
     else document.exitPointerLock();
+  }
+
+  /**
+   * Lock the pointer to the canvas with the mouse's own counts, before the OS's acceleration:
+   * the host applies its pointer curve once, as for a local mouse. A browser that cannot drop
+   * the acceleration rejects with `NotSupportedError` and gets a plain lock. Any other refusal
+   * (no gesture, an exit too recent) is not an error worth propagating.
+   */
+  private lock(): void {
+    const plain = () => Promise.resolve(this.canvas.requestPointerLock()).catch(() => {});
+    void Promise.resolve(this.canvas.requestPointerLock({ unadjustedMovement: true })).catch((e: unknown) =>
+      (e as DOMException | undefined)?.name === "NotSupportedError" ? plain() : undefined,
+    );
   }
 
   attach(): void {
@@ -331,10 +343,8 @@ export class InputPipe {
     if (phase === "down") {
       this.canvas.focus();
       // Pointer lock can only be taken from a gesture, so the first click in capture mode is
-      // what arms it. `catch` because the browser refuses one that follows an exit too closely.
-      if (this.opts.pointer === "capture" && !this.captured) {
-        void Promise.resolve(this.canvas.requestPointerLock()).catch(() => {});
-      }
+      // what arms it.
+      if (this.opts.pointer === "capture" && !this.captured) this.lock();
     }
     // Locked, the cursor does not move and only the delta means anything; unlocked, the local
     // cursor maps onto the remote one, which is what a desktop wants — the pointer tracks on
