@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="assets/logo/logo-sidebar.png" alt="punktfunk" width="300">
+  <img src="assets/logo/logo-sidebar.png" alt="Punktfunk" width="300">
 </p>
 
 <p align="center">
@@ -11,7 +11,7 @@
 
 ---
 
-Point a tab at a punktfunk host and stream your desktop or a game. No install, no extension, no
+Point a tab at a Punktfunk host and stream your desktop or a game. No install, no extension, no
 plugin: WebTransport carries the same `punktfunk/2` media a native client gets, WebCodecs
 decodes them, and the picture lands on a canvas — a decoded frame goes straight into a texture and
 never enters the wasm heap.
@@ -52,7 +52,7 @@ host's own OpenAPI spec.
 - **Settings that persist** — size, frame rate, bitrate, video plane, audio, input capture, mouse
   mode, deadzone.
 - **Two interfaces on one state machine** — the React web shell, and `?ui=console`, the same
-  `pf-console-ui` shell every other punktfunk client draws.
+  `pf-console-ui` shell every other Punktfunk client draws.
 
 Needs a browser with WebTransport and WebCodecs; verified against a real host on Safari 27 and
 Firefox 156.
@@ -94,7 +94,7 @@ no credential of its own; the browser's device key stays the only one.
 Served by the container, a page reaches its hosts on its own origin and none of this section's
 certificate step applies. It does for a host typed by address.
 
-A punktfunk host signs its own certificate. No browser will let a page `fetch` such a host — not
+A Punktfunk host signs its own certificate. No browser will let a page `fetch` such a host — not
 with CORS relaxed, not with `no-cors`, which fails the same way because the connection never
 completes. **So the first time you connect to a host, the page sends you to accept it once**
 (`https://<host>:47990/api/v1/health`), and after that the exception is your browser's.
@@ -171,7 +171,7 @@ So Skia is built with `EMCC_CFLAGS=-fwasm-exceptions`, and that archive is publi
 [unom package registry](https://git.unom.io/unom/-/packages/generic/skia-binaries/0.153.3).
 `build.sh` downloads it and keeps a copy under `~/.cache/punktfunk/skia-wasm/`, so later builds
 work offline. A key nobody published — after a `skia-safe` bump — builds from source (30 minutes, under
-emsdk 4.0.9: skia-bindings 0.99's bindgen does not run under 6.x) and lands in the same cache; publish that archive and pin its digest in punktfunk's
+emsdk 4.0.9: skia-bindings 0.99's bindgen does not run under 6.x) and lands in the same cache; publish that archive and pin its digest in Punktfunk's
 `ci/skia-binaries.sh`, whose CI checks the same crates for wasm. If rust-skia ever ships a
 wasm-EH archive, delete this whole arrangement.
 
@@ -236,7 +236,7 @@ review rule.
 
 ## Two interfaces
 
-The shell every other punktfunk client draws is `pf-console-ui`: Skia on a canvas, navigated with
+The shell every other Punktfunk client draws is `pf-console-ui`: Skia on a canvas, navigated with
 a D-pad. It is the right thing across a room with a controller and the wrong thing in a browser
 tab, where the input is a mouse and the first thing anyone must do is **type an address** — which
 a gamepad shell cannot offer at all.
@@ -338,4 +338,4 @@ A `v*` tag builds everything above and attaches the app as
 ## License
 
 Dual-licensed under [MIT](LICENSE-MIT) or [Apache 2.0](LICENSE-APACHE), matching upstream
-punktfunk, at your option — `SPDX-License-Identifier: MIT OR Apache-2.0`.
+Punktfunk, at your option — `SPDX-License-Identifier: MIT OR Apache-2.0`.
