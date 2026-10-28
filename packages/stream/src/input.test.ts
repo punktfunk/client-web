@@ -124,6 +124,31 @@ test("a second mouse button held with the first is pressed and released", () => 
   }
 });
 
+test("the lock asks for the mouse's own counts, and falls back to a plain lock only when unsupported", async () => {
+  const lockWith = async (refusal: string | undefined) => {
+    const asked: unknown[] = [];
+    const canvas = {
+      requestPointerLock(options?: PointerLockOptions) {
+        asked.push(options);
+        return refusal && options ? Promise.reject(new DOMException("refused", refusal)) : Promise.resolve();
+      },
+    } as HTMLCanvasElement;
+    const pipe = new InputPipe({} as never, canvas, { streamWidth: 1920, streamHeight: 1080, pointer: "capture", deadzone: 0.05 });
+    const doc = (globalThis as { document?: unknown }).document;
+    (globalThis as { document?: unknown }).document = { pointerLockElement: null };
+    try {
+      pipe.capture(true);
+      await new Promise((r) => setTimeout(r, 0));
+    } finally {
+      (globalThis as { document?: unknown }).document = doc;
+    }
+    return asked;
+  };
+  assert.deepEqual(await lockWith(undefined), [{ unadjustedMovement: true }]);
+  assert.deepEqual(await lockWith("NotSupportedError"), [{ unadjustedMovement: true }, undefined]);
+  assert.deepEqual(await lockWith("SecurityError"), [{ unadjustedMovement: true }], "no gesture, no second try");
+});
+
 test("a wheel turned down scrolls down: the wire is up-positive, the browser down-positive", () => {
   const sent: Array<[number, number, number]> = [];
   const mod = { _pf_input: (kind: number, code: number, x: number) => sent.push([kind, code, x]) };
