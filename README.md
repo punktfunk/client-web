@@ -335,6 +335,10 @@ A `v*` tag builds everything above and attaches the app as
 - The release payload is **8.2 MB of wasm, 3.5 MB gzipped**. The live heap under a stream is
   unmeasured.
 
+## Use of AI
+
+This project uses AI for writing code.
+
 ## License
 
 Dual-licensed under [MIT](LICENSE-MIT) or [Apache 2.0](LICENSE-APACHE), matching upstream
