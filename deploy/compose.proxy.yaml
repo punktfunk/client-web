@@ -3,6 +3,10 @@
 #
 # The page's origin is your proxy's domain: add it to each host's Browser origins (console,
 # Streaming, advanced), or leave that list empty to allow any page.
+#
+# On networks that block UDP the page streams through this server. For that, the proxy must
+# pass the browser's Host header through unchanged, or the stream is refused. The host then
+# sees every such stream as coming from the proxy's address, so it treats it as local.
 services:
   punktfunk-web:
     image: git.unom.io/unom/punktfunk-client-web:latest

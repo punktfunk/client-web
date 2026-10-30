@@ -2,10 +2,11 @@
 //! origin.
 //!
 //! Same origin is the point: Safari will not let a page `fetch` a self-signed host cross-origin,
-//! whatever the user clicks. The WebTransport plane is not proxied and cannot be: the browser pins
-//! the plane's certificate hash, which the host signs with its identity, so video, audio and input
-//! go straight from the browser to the host.
+//! whatever the user clicks. The WebTransport plane goes straight from the browser to the host,
+//! pinned to the hash the host signs with its identity. Where UDP is blocked, `bridge` carries
+//! that same session over a WebSocket to this server, which dials the plane under the same pin.
 
+mod bridge;
 mod config;
 mod hosts;
 mod proxy;
@@ -16,11 +17,12 @@ use axum::http::{header, HeaderMap, HeaderValue, StatusCode};
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
 use axum::routing::{any, get, post};
-use axum::{Json, Router};
+use axum::{Extension, Json, Router};
 use hosts::Hosts;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
+use tokio::sync::Semaphore;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -42,7 +44,8 @@ async fn main() -> anyhow::Result<()> {
 
     let handle = axum_server::Handle::new();
     tokio::spawn(shutdown(handle.clone()));
-    let service = app.into_make_service();
+    // The bridge tells the host who the real client is.
+    let service = app.into_make_service_with_connect_info::<std::net::SocketAddr>();
     match tls::config(&cfg).await? {
         Some(tls) => {
             tracing::info!("serving the browser client at https://{}", cfg.listen);
@@ -71,19 +74,23 @@ pub(crate) fn router(hosts: Arc<Hosts>, dist: PathBuf) -> Router {
         .route("/h/{id}/{*rest}", any(proxy::listed))
         .route("/a/{target}/{*rest}", any(proxy::typed))
         .route("/wake/{id}", post(wake))
+        .route("/w/{id}", get(bridge::listed))
+        .route("/wa/{target}", get(bridge::typed))
         .with_state(hosts)
+        .layer(Extension(Arc::new(Semaphore::new(bridge::SESSIONS))))
         .fallback_service(tower_http::services::ServeDir::new(dist))
         .layer(axum::middleware::from_fn(cache))
 }
 
-/// The hosts the page lists, and whether it may reach others by address through `/a/`. `api` is
-/// relative, so a page served under a path still resolves it.
+/// The hosts the page lists, and whether it may reach others by address through `/a/`. `api` and
+/// `bridge` are relative, so a page served under a path still resolves them. A typed host's bridge
+/// is `wa/<ip:port>`, which the page composes itself, as it does `a/<ip:port>`.
 async fn config_json(State(state): State<Arc<Hosts>>) -> impl IntoResponse {
     let hosts: Vec<_> = state
         .all()
         .into_iter()
         .map(|h| {
-            let mut j = serde_json::json!({ "id": h.id, "name": h.name, "api": format!("h/{}", h.id), "plane": h.addr });
+            let mut j = serde_json::json!({ "id": h.id, "name": h.name, "api": format!("h/{}", h.id), "bridge": format!("w/{}", h.id), "plane": h.addr });
             if !state.macs(&h.id).is_empty() {
                 j["wake"] = format!("wake/{}", h.id).into();
             }
@@ -199,6 +206,7 @@ mod tests {
             let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
             assert_eq!(json["add"], add);
             assert_eq!(json["hosts"][0]["api"], "h/desk");
+            assert_eq!(json["hosts"][0]["bridge"], "w/desk");
             assert_eq!(json["hosts"][0]["plane"], "10.0.0.2");
         }
         let _ = std::fs::remove_dir_all(dir);

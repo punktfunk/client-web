@@ -10,9 +10,9 @@ publish = false
 
 [dependencies]
 anyhow = "1"
-axum = "0.8"
+axum = { version = "0.8", features = ["ws"] }
 axum-server = { version = "0.8", features = ["tls-rustls-no-provider"] }
-futures-util = { version = "0.3", default-features = false }
+futures-util = { version = "0.3", default-features = false, features = ["sink"] }
 rcgen = "0.14"
 reqwest = { version = "0.13", default-features = false, features = ["stream", "rustls-no-provider", "http2"] }
 rustls = { version = "0.23", default-features = false, features = ["std"] }
@@ -26,12 +26,18 @@ tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "fs", "
 tower-http = { version = "0.7", features = ["fs"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+# The bridge dials the plane the way a browser does (`bridge/plane.rs`). aws-lc-rs, the provider
+# core's `tls` installs: a second rustls provider in the tree makes `ClientConfig::builder()` panic.
+wtransport = { version = "0.7", default-features = false, features = ["aws-lc-rs"] }
 # Pinned to the rev packages/stream builds against: the same PinVerify and address ranking the
 # native clients use, so this server trusts and reaches a host exactly the way they do.
 punktfunk-core = { git = "https://git.unom.io/unom/punktfunk", rev = "9a230631e9867b02fb5298a8cc6f6feb544b274f", default-features = false, features = ["tls"] }
 
 [dev-dependencies]
 tower = { version = "0.5", features = ["util"] }
+tokio-tungstenite = "0.29"
+# A loopback plane for the bridge tests: `Identity::self_signed`.
+wtransport = { version = "0.7", default-features = false, features = ["aws-lc-rs", "self-signed"] }
 
 [profile.release]
 lto = "thin"
