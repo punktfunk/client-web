@@ -207,7 +207,8 @@ Rust owns the protocol; TypeScript owns the browser. The library owns everything
 
 **`server`** — `punktfunk-client-web-server`: the built client, `/config.json`, `/h/<host>/…`
 proxied to each host's management API, pinned, and `/w/<host>`, which carries a session over a
-WebSocket where the network blocks UDP. `Dockerfile` and `deploy/` package it.
+WebSocket where the network blocks UDP. Behind a reverse proxy, keep the Host header; the bridge
+sees only the proxy's address. `Dockerfile` and `deploy/` package it.
 
 **`apps/web`**
 
