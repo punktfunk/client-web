@@ -90,6 +90,9 @@ struct Client {
     depth: u8,
     hdr: bool,
     full_range: bool,
+    /// How the page's decoder runs, as `pf_video_decoder` last said: `0` unknown, `1` hardware,
+    /// `2` software. The overlay's decoder line names it.
+    decoder_accel: u32,
     /// Access units delivered, so the page can tell "connected" from "streaming".
     frames: u64,
     /// The stats overlay's window. No clock handshake runs in a browser, so its offset stays
@@ -147,6 +150,7 @@ impl Client {
             depth: 8,
             hdr: false,
             full_range: false,
+            decoder_accel: 0,
             frames: 0,
             hud: new_hud(),
             receipts: VecDeque::with_capacity(RECEIPTS),
@@ -214,6 +218,7 @@ pub extern "C" fn pf_session_reset() {
         c.inbox.clear();
         c.frames = 0;
         c.codec = 0;
+        c.decoder_accel = 0;
         c.width = 0;
         c.height = 0;
         c.asked = None;
@@ -323,14 +328,17 @@ thread_local! {
     static PREFERRED: std::cell::Cell<u8> = const { std::cell::Cell::new(0) };
 }
 
-/// The codecs this browser decodes (`CODEC_*` bits), from the page's `isConfigSupported` probe,
-/// whether it presents BT.2020 PQ, and the one codec bit to ask for first (`0`: the host's
-/// order). H.264 is always kept: a GPU-less host has nothing else. A preference this browser
-/// cannot decode is dropped rather than sent.
+/// The codecs this browser decodes (`CODEC_*` bits), from the page's `isConfigSupported` probe
+/// less those it failed to decode, whether it presents BT.2020 PQ, and the one codec bit to ask
+/// for first (`0`: the host's order). An empty mask offers H.264: the host reads `0` as an old
+/// HEVC-only client. A preference this browser cannot decode is dropped rather than sent.
 #[unsafe(no_mangle)]
 pub extern "C" fn pf_session_codecs(mask: u32, hdr: u32, preferred: u32) {
-    let supported = punktfunk_core::quic::CODEC_HEVC | punktfunk_core::quic::CODEC_AV1;
-    let offered = (mask as u8 & supported) | punktfunk_core::quic::CODEC_H264;
+    use punktfunk_core::quic::{CODEC_AV1, CODEC_H264, CODEC_HEVC};
+    let offered = match mask as u8 & (CODEC_H264 | CODEC_HEVC | CODEC_AV1) {
+        0 => CODEC_H264,
+        m => m,
+    };
     CODECS.with(|c| c.set(offered));
     HDR.with(|h| h.set(hdr != 0));
     PREFERRED.with(|p| p.set(preferred as u8 & offered));
@@ -944,6 +952,13 @@ pub extern "C" fn pf_hud_decoded(pts_us: f64, decoded_ms: f64) {
     });
 }
 
+/// How the page's decoder runs, once it has produced a frame: `0` unknown, `1` hardware,
+/// `2` software.
+#[unsafe(no_mangle)]
+pub extern "C" fn pf_video_decoder(accel: u32) {
+    CLIENT.with(|c| c.borrow_mut().decoder_accel = accel);
+}
+
 /// The page drew the frame stamped `pts_us`: decoded at `decoded_ms`, drawn at `presented_ms`.
 #[unsafe(no_mangle)]
 pub extern "C" fn pf_hud_presented(pts_us: f64, decoded_ms: f64, presented_ms: f64) {
@@ -976,7 +991,12 @@ pub extern "C" fn pf_hud_drain(skipped: u32) {
         snap.auto_rate = c.bitrate_kbps == 0;
         (snap.width, snap.height, snap.refresh_hz) = (c.width, c.height, c.fps);
         snap.codec = hud::codec_label(c.codec).into();
-        snap.decoder = "WebCodecs".into();
+        snap.decoder = match c.decoder_accel {
+            1 => "WebCodecs, hardware",
+            2 => "WebCodecs, software",
+            _ => "WebCodecs",
+        }
+        .into();
         let rtt = crate::transport::rtt_us();
         snap.rtt_us = (rtt > 0).then_some(rtt);
         hud::quality(&snap, &mut c.quality);

@@ -108,6 +108,8 @@ export interface PunktfunkModule {
   _pf_hud_drain(skipped: number): void;
   /** The connection dot as of the last drain: `0` starting, `1` good, `2` fair, `3` poor. */
   _pf_hud_quality(): number;
+  /** How the decoder that works runs, for the overlay: `0` unknown, `1` hardware, `2` software. */
+  _pf_video_decoder?(accel: number): void;
   /** Format the last window at `tier` (0–3) in the Advanced vocabulary or not; byte length. */
   _pf_hud_text(tier: number, advanced: number): number;
   /** Where `_pf_hud_text` left its bytes: `<role>\t<text>\n` per line. */

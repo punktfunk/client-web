@@ -143,6 +143,8 @@ const PQ_PASSTHROUGH: VideoColorSpaceInit = {
 };
 
 export interface VideoStats {
+  /** The wire codec `Welcome` named (`CODEC_*`); `0` before it. */
+  codec: number;
   /** Access units handed to the decoder. */
   submitted: number;
   /** Frames the decoder produced. A gap against `submitted` is loss or a decoder still filling. */
@@ -158,6 +160,14 @@ export interface VideoStats {
   height: number;
   backend: "webgpu" | "webgl2" | null;
 }
+
+/** The order a decoder is tried in. One that fails before its first frame moves to the next:
+ *  `isConfigSupported` can say yes to a configuration `configure` then refuses. */
+const ACCELERATIONS: HardwareAcceleration[] = ["prefer-hardware", "no-preference", "prefer-software"];
+
+/** What `_pf_video_decoder` is told once a decoder works: `1` hardware, `2` software, `0` the
+ *  browser's own pick, which it does not reveal. */
+const DECODER_KIND: Record<HardwareAcceleration, number> = { "prefer-hardware": 1, "no-preference": 0, "prefer-software": 2 };
 
 /**
  * Which plane to draw on.
@@ -206,20 +216,22 @@ export class VideoPipe {
   /** This decoder has asked the host for that key frame. */
   private askedKey = false;
   private closed = false;
-  private codec = 0;
   /** `Welcome`'s bit depth, HDR and range, for the decoder string, the plane and `PQ_PASSTHROUGH`. */
   private depth = 8;
   private hdr = false;
   private fullRange = false;
   /** The first frame of an HDR configure has been checked for `PQ_PASSTHROUGH`. */
   private hdrChecked = false;
-  /** `no-preference` once the browser refused `prefer-hardware` for this stream. */
+  /** Where in `ACCELERATIONS` this stream's decoder is. */
   private accel: HardwareAcceleration = "prefer-hardware";
+  /** The decoder has produced a frame, so its acceleration works here. */
+  private stuck = false;
   private rebuilding = false;
   private lastRebuildMs = -Infinity;
   /** When `pending` left the decoder, for the overlay's display stage. */
   private pendingDecodedMs = 0;
   private stats: VideoStats = {
+    codec: 0,
     submitted: 0,
     decoded: 0,
     dropped: 0,
@@ -237,8 +249,8 @@ export class VideoPipe {
     private readonly prefer: "auto" | "webgl2" | "webgpu" = "auto",
     /** The browser converted an HDR frame itself: this stream cannot be shown right. */
     private readonly onHdrRefused?: () => void,
-    /** The browser decodes this stream neither in hardware nor in software. */
-    private readonly onUndecodable?: () => void,
+    /** The browser decodes this stream's codec (`CODEC_*`) under no acceleration. */
+    private readonly onUndecodable?: (codec: number) => void,
   ) {}
 
   /** Install the callbacks the glue calls. Idempotent, so a reconnect can call it again. */
@@ -247,12 +259,15 @@ export class VideoPipe {
       this.depth = depth;
       this.hdr = hdr;
       this.fullRange = fullRange;
+      // A new configuration from the host starts at hardware again; only a rebuild moves down.
+      this.accel = "prefer-hardware";
       void this.configure(codec, width, height);
     };
     this.mod.__pfOnAccessUnit = (data, ptsUs, key, flags) => this.submit(data, ptsUs, key, flags);
   }
 
   private async configure(codec: number, width: number, height: number): Promise<void> {
+    this.stats.codec = codec;
     this.stats.width = width;
     this.stats.height = height;
     if (!this.plane) {
@@ -266,20 +281,23 @@ export class VideoPipe {
     this.plane.configure(width, height);
     this.plane.setDynamicRange(this.hdr ? "high" : "standard");
 
-    this.codec = codec;
     this.closeDecoder();
     this.meta.clear();
     this.needKey = true;
     this.askedKey = false;
-    const decoder = new VideoDecoder({
-      output: (frame) => this.onFrame(frame),
-      error: (e) => {
-        this.stats.errors++;
-        console.error("punktfunk: decoder", e);
-        void this.rebuild();
-      },
-    });
-    decoder.configure(this.config(this.accel));
+    this.stuck = false;
+    const fail = (e: unknown) => {
+      this.stats.errors++;
+      console.error("punktfunk: decoder", e);
+      void this.rebuild();
+    };
+    const decoder = new VideoDecoder({ output: (frame) => this.onFrame(frame), error: fail });
+    // A configuration the engine rejects outright throws here rather than calling `error`.
+    try {
+      decoder.configure(this.config(this.accel));
+    } catch (e) {
+      fail(e);
+    }
     this.hdrChecked = false;
     this.decoder = decoder;
   }
@@ -288,7 +306,7 @@ export class VideoPipe {
    *  host sends parameter sets inline with every key frame, which lets a browser join mid-stream. */
   private config(hardwareAcceleration: HardwareAcceleration): VideoDecoderConfig {
     return {
-      codec: codecString(this.codec, this.depth),
+      codec: codecString(this.stats.codec, this.depth),
       codedWidth: this.stats.width,
       codedHeight: this.stats.height,
       optimizeForLatency: true,
@@ -340,30 +358,30 @@ export class VideoPipe {
     }
   }
 
-  // A decoder that errored is closed for good. Build a fresh one the way the browser still takes
-  // this stream — one without a hardware decoder for it refuses `prefer-hardware` — and resume on
-  // the next IDR; the gate holds the last picture meanwhile. At most twice a second.
+  // A decoder that errored is closed for good. Build a fresh one and resume on the next IDR; the
+  // gate holds the last picture meanwhile. One that never produced a frame failed its
+  // acceleration, so the next starts past it in `ACCELERATIONS`. At most twice a second.
   private async rebuild(): Promise<void> {
     if (this.rebuilding || !this.plane) return;
     this.rebuilding = true;
     const wait = this.lastRebuildMs + 500 - performance.now();
     if (wait > 0) await new Promise((r) => setTimeout(r, wait));
-    const accel = await this.acceleration();
+    const accel = await this.acceleration(ACCELERATIONS.indexOf(this.accel) + (this.stuck ? 0 : 1));
     this.rebuilding = false;
     // Closed meanwhile, or a reconfigure already built a working decoder.
     if (!this.plane || this.decoder?.state === "configured") return;
     this.lastRebuildMs = performance.now();
-    if (!accel) return this.onUndecodable?.();
+    if (!accel) return this.onUndecodable?.(this.stats.codec);
     this.accel = accel;
-    void this.configure(this.codec, this.stats.width, this.stats.height);
+    void this.configure(this.stats.codec, this.stats.width, this.stats.height);
     this.mod._pf_request_keyframe();
     this.askedKey = true;
   }
 
-  /** The first of `prefer-hardware` and `no-preference` the browser takes for this stream, or
-   *  null when it decodes it neither way. */
-  private async acceleration(): Promise<HardwareAcceleration | null> {
-    for (const accel of ["prefer-hardware", "no-preference"] as const) {
+  /** The first of `ACCELERATIONS` from index `from` on that the browser says it takes for this
+   *  stream, or null when none is left. */
+  private async acceleration(from: number): Promise<HardwareAcceleration | null> {
+    for (const accel of ACCELERATIONS.slice(from)) {
       try {
         if ((await VideoDecoder.isConfigSupported(this.config(accel))).supported) return accel;
       } catch {
@@ -378,6 +396,11 @@ export class VideoPipe {
   // than queued. Presenting happens on the page's own rAF, which is where pacing belongs.
   private onFrame(frame: VideoFrame): void {
     this.stats.decoded++;
+    // The first frame proves the acceleration: the overlay names it, and a later error keeps it.
+    if (!this.stuck) {
+      this.stuck = true;
+      this.mod._pf_video_decoder?.(DECODER_KIND[this.accel]);
+    }
     // An engine that ignores the override hands over light it has already converted, which no
     // shader here can undo. Said once; the engine streams SDR instead.
     if (this.hdr && !this.hdrChecked) {

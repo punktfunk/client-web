@@ -249,3 +249,39 @@ test("the connection dot is the wire's rating, read once a second", () => {
   assert.equal(second(3), "poor");
   assert.equal(second(0), "starting");
 });
+
+test("a codec this browser can't decode gives way to another on offer, once each", () => {
+  const { engine, mod } = engineIn("ready");
+  const offers: number[] = [];
+  mod._pf_session_codecs = (mask: number) => offers.push(mask);
+  Object.assign(engine, { codecs: { mask: 0x03, tenBit: false } });
+  const undecodable = (codec: number) => (engine as unknown as { undecodable(codec: number): void }).undecodable(codec);
+  engine.configure({ codec: "hevc" });
+  engine.startStream({ width: 1280, height: 720 });
+  const before = dialled.length;
+  undecodable(0x02);
+  assert.equal(engine.current.kind, "starting", "no error while H.264 is left");
+  assert.deepEqual(offers, [0x03, 0x01], "the same stream, offered without HEVC");
+  assert.equal(dialled.length, before + 1);
+
+  // The session that took over names its codec once `Welcome` has.
+  Object.assign(mod, { _pf_session_phase: () => 2, _pf_session_audio_channels: () => 0, _pf_hud_text: () => 0 });
+  const snapshot = () => ({ codec: 0x01, width: 0, height: 0, decoded: 0, dropped: 0, uploadMs: 0, backend: null });
+  Object.assign(engine, { video: { snapshot, close() {} } });
+  (engine as unknown as { updateSession(): void }).updateSession();
+  const live = engine.current as import("./engine.ts").EngineState;
+  assert.equal(
+    live.kind === "streaming" && live.stats.launchNotice,
+    "This browser can't decode HEVC, so the stream uses H.264, ignoring the Video codec setting.",
+  );
+
+  // H.264 fails too: nothing is left, and HEVC is not offered again.
+  undecodable(0x01);
+  assert.equal(engine.current.kind, "error");
+  assert.deepEqual(offers, [0x03, 0x01]);
+
+  // A stream the player starts offers every codec again.
+  (engine as unknown as { set(s: unknown): void }).set({ kind: "ready", origin: ORIGIN });
+  engine.startStream({ width: 1280, height: 720 });
+  assert.equal(offers.at(-1), 0x03);
+});
