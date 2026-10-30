@@ -330,8 +330,8 @@ A `v*` tag builds everything above and attaches the app as
   session overflows just by being constructed — and the symptom is `RuntimeError: Out of bounds
   memory access` from *every* export, including ones that do nothing. It reads like a corrupt
   module, not a stack overflow.
-- **Automatic bitrate does not run in the browser.** The session streams at the bitrate the
-  settings name.
+- **Automatic bitrate runs on loss and the host's acks alone.** The page measures no clock
+  offset, so no one-way delay, and asks for no probe burst.
 - **The console still speaks as a native app** under `?ui=console`: it offers Quit, and says hosts
   on the network appear by themselves, which a browser cannot discover.
 - The release payload is **8.2 MB of wasm, 3.5 MB gzipped**. The live heap under a stream is

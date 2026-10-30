@@ -13,20 +13,23 @@
 //! R3 holds throughout. An access unit leaves as a `(ptr, len)` view for `VideoDecoder`; no
 //! decoded pixel ever enters this heap.
 
+use crate::abr::Abr;
 use crate::credential;
 use crate::recovery::{self, Ask, Asks, Step};
 use crate::transport::{send_feedback, WebTransportDatagrams};
 use punktfunk_core::config::{CompositorPref, GamepadPref, Mode, Role};
 use punktfunk_core::error::PunktfunkError;
 use punktfunk_core::hud::{self, StatsSnapshot, StatsVerbosity};
+use punktfunk_core::packet::FLAG_PROBE;
 use punktfunk_core::quic::v2::features::FeatureSet;
 use punktfunk_core::quic::v2::field::split_frame;
 use punktfunk_core::quic::v2::hello::{ClientHello, Ready, ServerHello};
 use punktfunk_core::quic::v2::msg::{Redirect, V2Message};
 use punktfunk_core::quic::v2::registry as reg;
 use punktfunk_core::quic::{
-    AccessUpdate, AuthChallenge, CursorRenderMode, CursorShape, Hello, LaunchOutcome, LinkFacts,
-    PairChallenge, PairResult, Reconfigure, Reconfigured, Refused,
+    AccessUpdate, AuthChallenge, BitrateChanged, CursorRenderMode, CursorShape, Hello,
+    LaunchOutcome, LinkFacts, PairChallenge, PairResult, Reconfigure, Reconfigured, Refused,
+    SetBitrate,
 };
 use punktfunk_core::reanchor::{GateVerdict, ReanchorGate};
 use punktfunk_core::session::{MediaV2, Session};
@@ -63,6 +66,10 @@ struct Client {
     /// than emscripten's default stack. Constructing a `Client` that embedded one by value
     /// overflowed before the function body ran, which surfaces as an out-of-bounds trap.
     session: Option<Box<Session>>,
+    /// Automatic bitrate, built with the session and dropped with it.
+    abr: Option<Box<Abr>>,
+    /// The rate `Hello` asked for; `0` is Automatic.
+    bitrate_kbps: u32,
     /// The negotiated video format, for the page's `VideoDecoder.configure`.
     codec: u8,
     width: u32,
@@ -129,6 +136,8 @@ impl Client {
             phase: Phase::Idle,
             inbox: Vec::new(),
             session: None,
+            abr: None,
+            bitrate_kbps: 0,
             codec: 0,
             width: 0,
             height: 0,
@@ -201,6 +210,7 @@ pub extern "C" fn pf_session_reset() {
         let mut c = c.borrow_mut();
         c.phase = Phase::Idle;
         c.session = None;
+        c.abr = None;
         c.inbox.clear();
         c.frames = 0;
         c.codec = 0;
@@ -455,7 +465,8 @@ pub unsafe extern "C" fn pf_session_hello(
         send(&ClientHello {
             hello,
             client_label: None,
-            abr_features: 0,
+            // Acks name why a rate fell short, which the driver learns host caps from.
+            abr_features: punktfunk_core::quic::EXT_ABR_ACK_REASON,
             preset: None,
             link: LinkFacts::default(),
             probe_only: false,
@@ -471,6 +482,7 @@ pub unsafe extern "C" fn pf_session_hello(
             screens: Vec::new(),
         });
         c.fps = fps;
+        c.bitrate_kbps = bitrate_kbps;
         c.phase = Phase::Offered;
         1
     })
@@ -645,9 +657,17 @@ fn on_frame(c: &mut Client, ty: u64, body: &[u8]) {
                 if r.accepted {
                     c.width = r.mode.width;
                     c.height = r.mode.height;
+                    if let Some(abr) = c.abr.as_mut() {
+                        abr.on_mode(r.mode);
+                    }
                     // SAFETY: plain integers to a JavaScript function that returns before this does.
                     unsafe { video_config(c) };
                 }
+            }
+        }
+        BitrateChanged::TYPE => {
+            if let Some(abr) = c.abr.as_mut() {
+                abr.on_ack(body);
             }
         }
         AccessUpdate::TYPE => {
@@ -726,6 +746,8 @@ fn on_server_hello(c: &mut Client, server: ServerHello) {
     match Session::new(cfg, media, Box::new(WebTransportDatagrams)) {
         Ok(session) => {
             c.session = Some(Box::new(session));
+            let drops = u64::from(crate::transport::pf_rx_dropped());
+            c.abr = Some(Box::new(Abr::new(&welcome, c.bitrate_kbps, drops)));
             c.phase = Phase::Live;
             send(&Ready {});
             // SAFETY: plain integers to a JavaScript function that returns before this does.
@@ -764,6 +786,7 @@ pub extern "C" fn pf_session_pump() -> u32 {
             pending_rfi,
             last_ask,
             asks,
+            abr,
             ..
         } = &mut *c;
         let codec = *codec;
@@ -777,6 +800,10 @@ pub extern "C" fn pf_session_pump() -> u32 {
             if frame.data.is_empty() {
                 break;
             }
+            // Probe filler measures the link and is never a picture.
+            if frame.flags & u32::from(FLAG_PROBE) != 0 {
+                continue;
+            }
             // Frames are numbered consecutively: a jump is a lost frame, and everything after it
             // predicts from a picture the decoder never got. Hold at once (the decoder still takes
             // every frame, so a wave can heal it) and ask for the range.
@@ -786,6 +813,9 @@ pub extern "C" fn pf_session_pump() -> u32 {
                 Step::Straggler => continue,
             }
             asks.on_frame(frame.frame_index, frame.flags);
+            if let Some(abr) = abr.as_mut() {
+                abr.on_au(frame.flags);
+            }
             hud.note_received(frame.pts_ns, frame.received_ns, frame.data.len(), true);
             if receipts.len() >= RECEIPTS {
                 receipts.pop_front();
@@ -821,10 +851,21 @@ pub extern "C" fn pf_session_pump() -> u32 {
             if let Some(ask) = recovery::take_ask(want_keyframe, pending_rfi) {
                 *last_ask = Some(now);
                 send_feedback(&asks.ask(ask, now));
+                if let (Ask::Keyframe, Some(abr)) = (ask, abr.as_mut()) {
+                    abr.on_keyframe_ask();
+                }
             }
         }
         if let Some(again) = asks.resend(now) {
             send_feedback(&again);
+        }
+        if let Some(abr) = abr.as_mut() {
+            let drops = u64::from(crate::transport::pf_rx_dropped());
+            // Live is the control stream's lifetime: its close resets the session.
+            abr.tick(session, drops, |kbps| {
+                send(&SetBitrate { bitrate_kbps: kbps });
+                true
+            });
         }
         delivered
     })
@@ -854,6 +895,9 @@ pub extern "C" fn pf_gate_no_output() {
         if c.gate.on_no_output(now) && c.phase == Phase::Live {
             c.last_ask = Some(now);
             send_feedback(&c.asks.ask(Ask::Keyframe, now));
+            if let Some(abr) = c.abr.as_mut() {
+                abr.on_keyframe_ask();
+            }
         }
     });
 }
@@ -888,11 +932,14 @@ pub extern "C" fn pf_hud_decoded(pts_us: f64, decoded_ms: f64) {
     let key = pts_us as u64;
     let decoded_ns = ms_to_ns(decoded_ms);
     CLIENT.with(|c| {
-        let c = c.borrow();
+        let mut c = c.borrow_mut();
         c.hud.note_decoded(key * 1000, decoded_ns);
         if let Some(&(_, received_ns)) = c.receipts.iter().rev().find(|(p, _)| *p == key) {
-            c.hud
-                .note_decode_us(decoded_ns.saturating_sub(received_ns) / 1000, false);
+            let us = decoded_ns.saturating_sub(received_ns) / 1000;
+            c.hud.note_decode_us(us, false);
+            if let Some(abr) = c.abr.as_mut() {
+                abr.on_decode_us(us);
+            }
         }
     });
 }
@@ -914,7 +961,7 @@ pub extern "C" fn pf_hud_drain(skipped: u32) {
     CLIENT.with(|c| {
         let mut c = c.borrow_mut();
         c.hud.note_skipped(skipped, 0);
-        let counters = c.session.as_ref().map_or_else(hud::Counters::default, |s| {
+        let mut counters = c.session.as_ref().map_or_else(hud::Counters::default, |s| {
             let st = s.stats();
             hud::Counters {
                 frames_dropped: st.frames_dropped,
@@ -922,7 +969,11 @@ pub extern "C" fn pf_hud_drain(skipped: u32) {
                 ..hud::Counters::default()
             }
         });
+        if let Some(abr) = &c.abr {
+            (counters.target_kbps, counters.rate_cut) = (abr.target_kbps, abr.rate_cut);
+        }
         let mut snap = c.hud.drain(&counters);
+        snap.auto_rate = c.bitrate_kbps == 0;
         (snap.width, snap.height, snap.refresh_hz) = (c.width, c.height, c.fps);
         snap.codec = hud::codec_label(c.codec).into();
         snap.decoder = "WebCodecs".into();
@@ -966,7 +1017,13 @@ pub extern "C" fn pf_hud_text_ptr() -> *const u8 {
 /// One per-frame host timing datagram (0xCF): the host's own share, for the overlay.
 pub fn on_host_timing(datagram: &[u8]) {
     if let Some(t) = punktfunk_core::quic::decode_host_timing_datagram(datagram) {
-        CLIENT.with(|c| c.borrow().hud.note_host_timing(&t));
+        CLIENT.with(|c| {
+            let mut c = c.borrow_mut();
+            c.hud.note_host_timing(&t);
+            if let Some(abr) = c.abr.as_mut() {
+                abr.on_host_timing(&t);
+            }
+        });
     }
 }
 
