@@ -106,6 +106,8 @@ export interface PunktfunkModule {
   _pf_request_keyframe(): void;
   /** Close the overlay window. `skipped`: frames replaced before drawing since the last call. */
   _pf_hud_drain(skipped: number): void;
+  /** The connection dot as of the last drain: `0` starting, `1` good, `2` fair, `3` poor. */
+  _pf_hud_quality(): number;
   /** Format the last window at `tier` (0–3) in the Advanced vocabulary or not; byte length. */
   _pf_hud_text(tier: number, advanced: number): number;
   /** Where `_pf_hud_text` left its bytes: `<role>\t<text>\n` per line. */

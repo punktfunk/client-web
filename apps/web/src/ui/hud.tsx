@@ -22,18 +22,15 @@ const FADE = { duration: 0.18, ease: "easeOut" } as const;
 const DROP = { initial: { opacity: 0, y: -8 }, animate: { opacity: 1, y: 0 }, exit: { opacity: 0, y: -8 }, transition: FADE };
 const RISE = { initial: { opacity: 0, y: 8 }, animate: { opacity: 1, y: 0 }, exit: { opacity: 0, y: 8 }, transition: FADE };
 
-/** Connection quality, from what the decoder saw.
- *
- * Drops alone, because drops are the only loss signal the engine reports today; jitter and
- * packet loss are on `SessionStats` but not yet filled in, and a dot that lies is worse than a
- * coarse one. The thresholds are what reads as "smooth" and "visibly hitching" at 60 fps. */
-function quality(s: SessionStats): { variant: BadgeVariant; text: string } {
-  if (!s.decoded) return { variant: "outline", text: "starting" };
-  const lost = s.dropped / Math.max(1, s.decoded + s.dropped);
-  if (lost < 0.005) return { variant: "success", text: "good" };
-  if (lost < 0.03) return { variant: "warning", text: "fair" };
-  return { variant: "destructive", text: "poor" };
-}
+/** The connection dot is the wire's verdict, rated in core (`hud::quality`) from loss, repairs
+ *  and round trip. Presentation skips are the page's own pacing, not loss: they stay in the
+ *  overlay's skipped line. */
+const QUALITY: Record<SessionStats["quality"], { variant: BadgeVariant; text: string }> = {
+  starting: { variant: "outline", text: "starting" },
+  good: { variant: "success", text: "good" },
+  fair: { variant: "warning", text: "fair" },
+  poor: { variant: "destructive", text: "poor" },
+};
 
 export function Hud({ screen, actions }: { screen: Extract<Screen, { kind: "streaming" }>; actions: Actions }): JSX.Element {
   const [idle, setIdle] = useState(false);
@@ -56,7 +53,7 @@ export function Hud({ screen, actions }: { screen: Extract<Screen, { kind: "stre
       for (const type of types) window.removeEventListener(type, wake);
     };
   }, []);
-  const q = quality(stats);
+  const q = QUALITY[stats.quality];
   const notice = screen.notice ?? stats.launchNotice ?? stats.accessNotice;
   const line = [
     stats.width ? `${stats.width}×${stats.height}` : "",

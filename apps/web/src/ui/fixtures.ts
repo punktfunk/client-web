@@ -35,7 +35,7 @@ const art = new Map(entries.map((e, i) => [e.id, cover(i * 31)] as const));
 const stats = {
   origin: "https://192.168.1.25:47990",
   width: 2560, height: 1440, fps: 60, accessUnits: 18_432,
-  decoded: 18_400, dropped: 12, uploadMs: 0.8, backend: "webgpu" as const,
+  decoded: 18_400, dropped: 12, quality: "good" as const, uploadMs: 0.8, backend: "webgpu" as const,
   pointerCaptured: false,
   audio: { state: "playing" as const, frames: 91_204, lost: 3, errors: 0, underruns: 1 },
   hud: [

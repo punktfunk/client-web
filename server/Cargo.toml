@@ -31,7 +31,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 wtransport = { version = "0.7", default-features = false, features = ["aws-lc-rs"] }
 # Pinned to the rev packages/stream builds against: the same PinVerify and address ranking the
 # native clients use, so this server trusts and reaches a host exactly the way they do.
-punktfunk-core = { git = "https://git.unom.io/unom/punktfunk", rev = "9a230631e9867b02fb5298a8cc6f6feb544b274f", default-features = false, features = ["tls"] }
+punktfunk-core = { git = "https://git.unom.io/unom/punktfunk", rev = "eb990a68305046336025ba115c9fff2ba395238a", default-features = false, features = ["tls"] }
 
 [dev-dependencies]
 tower = { version = "0.5", features = ["util"] }
