@@ -434,6 +434,30 @@ pub unsafe extern "C" fn pf_console_art(id: *const u8, id_len: u32, bytes: *cons
     with_app((), |app| app.art.push_back((id.to_string(), bytes)));
 }
 
+/// A profile's picture, encoded, under the URL `ConsoleCmd::FetchAvatar` named.
+///
+/// # Safety
+/// `url` points to `url_len` readable bytes of UTF-8 and `bytes` to `len` readable bytes, for the
+/// call.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pf_console_avatar(
+    url: *const u8,
+    url_len: u32,
+    bytes: *const u8,
+    len: u32,
+) {
+    // SAFETY: the caller guarantees `url_len` readable bytes at `url`.
+    let Some(url) = (unsafe { utf8(url, url_len) }) else {
+        return;
+    };
+    if bytes.is_null() || len == 0 {
+        return;
+    }
+    // SAFETY: the caller guarantees `len` readable bytes at `bytes`.
+    let bytes = unsafe { std::slice::from_raw_parts(bytes, len as usize) }.to_vec();
+    with_app((), |app| app.handles.console.set_avatar(url, bytes));
+}
+
 /// The page's key table, by index. Order is the wire between `console.ts` and here; append only.
 const KEYS: [Key; 13] = [
     Key::Left,

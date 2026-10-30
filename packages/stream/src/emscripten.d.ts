@@ -47,6 +47,7 @@ export interface PunktfunkModule {
   _pf_console_leave_out(what: number): void;
   _pf_console_push(kind: number, ptr: number, len: number): void;
   _pf_console_art(idPtr: number, idLen: number, bytesPtr: number, len: number): void;
+  _pf_console_avatar(urlPtr: number, urlLen: number, bytesPtr: number, len: number): void;
 
   // --- the transport ---------------------------------------------------------------------
   /** Close `__pfCarrier`, with the host's application close code when one is given. */

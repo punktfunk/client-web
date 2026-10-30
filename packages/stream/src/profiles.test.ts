@@ -3,7 +3,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { initials, pickerDecision, profileNote, seatGate, type ProfileRow } from "./profiles.ts";
+import { initials, pickOf, pickerDecision, profileNote, seatGate, type ProfileRow } from "./profiles.ts";
 
 const row = (id: string, display_name: string, more: Partial<ProfileRow> = {}): ProfileRow => ({ id, display_name, ...more });
 const MIA = row("a1", "Mia");
@@ -12,6 +12,11 @@ const KID = row("b2", "Kid", { seat: { state: "stopped" } });
 test("a box without profiles sends none, or the link's", () => {
   assert.deepEqual(pickerDecision(null, null), { picker: false, remember: null });
   assert.deepEqual(pickerDecision(null, null, "Kid"), { picker: false, send: "Kid", remember: null });
+});
+
+test("a pick carries the picture only when there is one", () => {
+  assert.equal(pickOf(row("a1", "Mia", { avatar: "/api/v1/profiles/a1/avatar?v=1" })).avatar, "/api/v1/profiles/a1/avatar?v=1");
+  assert.equal("avatar" in pickOf(row("a1", "Mia", { avatar: null })), false);
 });
 
 test("one profile plays without asking; a saved one still listed plays", () => {
