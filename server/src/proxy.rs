@@ -6,7 +6,7 @@
 use crate::hosts::Hosts;
 use axum::body::{Body, HttpBody as _};
 use axum::extract::{Path, Request, State};
-use axum::http::{header, HeaderMap, HeaderName, HeaderValue, StatusCode};
+use axum::http::{header, HeaderMap, HeaderName, HeaderValue, StatusCode, Uri};
 use axum::response::{IntoResponse, Response};
 use futures_util::StreamExt;
 use punktfunk_core::tls::PinVerify;
@@ -87,13 +87,7 @@ pub async fn typed(
             .into_response();
     };
     // The page's own server, named as a host, would answer itself with the page.
-    // HTTP/2 carries the address in the URI authority; HTTP/1.1 in `Host`.
-    let own = req.uri().authority().map(|a| a.as_str()).or_else(|| {
-        req.headers()
-            .get(header::HOST)
-            .and_then(|h| h.to_str().ok())
-    });
-    if own == Some(target.as_str()) {
+    if own_authority(req.uri(), req.headers()) == Some(target.as_str()) {
         return (
             StatusCode::BAD_REQUEST,
             "That is this server's own address, not a host.",
@@ -126,6 +120,14 @@ fn upstream_url(addr: &str, port: u16, req: &Request) -> Option<reqwest::Url> {
     reqwest::Url::parse(&format!("https://{addr}:{port}/{rest}{query}")).ok()
 }
 
+/// This server's `host[:port]` as the browser addressed it: the URI authority over HTTP/2, `Host`
+/// over HTTP/1.1.
+pub(crate) fn own_authority<'a>(uri: &'a Uri, headers: &'a HeaderMap) -> Option<&'a str> {
+    uri.authority()
+        .map(|a| a.as_str())
+        .or_else(|| headers.get(header::HOST).and_then(|h| h.to_str().ok()))
+}
+
 /// Where a first-contact pin is kept.
 enum Learn {
     Listed(String),
@@ -134,7 +136,7 @@ enum Learn {
 
 /// `ip`, `ip:port` or `[v6]:port`, when the address is one a home network uses: RFC 1918,
 /// loopback, link-local, the 100.64/10 range Tailscale hands out, or IPv6 unique-local.
-fn private_target(s: &str) -> Option<(IpAddr, u16)> {
+pub(crate) fn private_target(s: &str) -> Option<(IpAddr, u16)> {
     let (ip, port) = match s.parse::<SocketAddr>() {
         Ok(sa) => (sa.ip(), sa.port()),
         Err(_) => (

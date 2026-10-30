@@ -205,8 +205,9 @@ Rust owns the protocol; TypeScript owns the browser. The library owns everything
 | `src/emscripten.d.ts` | The wasm exports and the `--js-library` scope, typed once. |
 | `build.rs` | Names the glue to cargo, which does not track a `--js-library` input. |
 
-**`server`** — `punktfunk-client-web-server`: the built client, `/config.json`, and `/h/<host>/…`
-proxied to each host's management API, pinned. `Dockerfile` and `deploy/` package it.
+**`server`** — `punktfunk-client-web-server`: the built client, `/config.json`, `/h/<host>/…`
+proxied to each host's management API, pinned, and `/w/<host>`, which carries a session over a
+WebSocket where the network blocks UDP. `Dockerfile` and `deploy/` package it.
 
 **`apps/web`**
 
