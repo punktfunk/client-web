@@ -28,6 +28,8 @@ import { HostCursor } from "./cursor.ts";
 import type { HostTarget } from "./pf-connect.ts";
 import { deviceName } from "./platform.ts";
 import { type TunnelFetch, tunnelFetch } from "./tunnel.ts";
+import { type Feed, wasmFeed } from "./carrier/feed.ts";
+import { WtCarrier } from "./carrier/wt.ts";
 
 export type { AudioSnapshot, AudioState } from "./audio.ts";
 export type { MicState } from "./mic.ts";
@@ -43,7 +45,7 @@ const CLOSE = { QUIT: 0x51, PAIR_DENIED: 0x64, ACCESS_EXPIRED: 0x69, HOST_POWER:
 /** Where the stream plays was refused: an unknown profile, no seat, a seat taken or not up. The
  *  host decides these only after it admitted the device. */
 const PLACEMENT_REFUSED = new Set([0x6c, 0x6d, 0x6e, 0x6f]);
-/** pf-glue's code for a session that never opened: no host was heard at all. */
+/** A carrier that never opened: no host was heard at all. */
 const NEVER_OPENED = -2;
 
 /** How long `Offered` may last before the host is taken to have refused the credential. It
@@ -286,6 +288,8 @@ export class Engine {
   private epoch = 0;
   /** The fingerprint the last `connect` was told to expect, for the reconnects this engine makes. */
   private expect: string | undefined;
+  /** Where every carrier puts what it receives. */
+  private readonly feed: Feed;
 
   private constructor(
     private readonly mod: PunktfunkModule,
@@ -307,6 +311,7 @@ export class Engine {
       statsTier: opts.statsTier ?? TUNABLE_DEFAULTS.statsTier,
       advancedStats: opts.advancedStats ?? TUNABLE_DEFAULTS.advancedStats,
     };
+    this.feed = wasmFeed(mod);
     if (opts.uiCanvas) mod.__pfUiCanvas = opts.uiCanvas;
     mod.__pfOnDeviceReady = () => this.onDeviceReady();
     mod.__pfOnDeviceFailed = () => this.onDeviceFailed();
@@ -980,11 +985,18 @@ export class Engine {
     // door's seat answers on its own port of the same address.
     const port = this.seatPlane?.port ?? this.plane.port;
     const hash = this.seatPlane?.certHash ?? this.plane.cert_hash_sha256;
-    const url = `https://${this.planeHost}:${port}/pf2`;
-    const ok = withStr(this.mod, [url, hash], (u, _ul, h) => this.mod._pf_wt_connect(u, h));
-    if (!ok) {
-      this.set({ kind: "error", origin: this.origin, message: "the browser refused the WebTransport session" });
+    // One connection at a time. A dial while the last one is still up — the reconnect after a
+    // pairing ceremony, before the host's own close lands — must not inherit its control stream.
+    this.mod._pf_wt_close?.();
+    const carrier = new WtCarrier(this.feed, `https://${this.planeHost}:${port}/pf2`, hash);
+    this.mod.__pfCarrier = carrier;
+    let opening: Promise<void>;
+    try {
+      opening = carrier.open();
+    } catch {
+      return this.set({ kind: "error", origin: this.origin, message: "the browser refused the WebTransport session" });
     }
+    opening.catch(() => this.onClosed(NEVER_OPENED, ""));
   }
 
   /** The control stream is open: say at once what this dial was for. */

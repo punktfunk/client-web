@@ -9,6 +9,18 @@ import assert from "node:assert/strict";
 
 // The engine schedules its frame loop on construction; nothing here runs it.
 globalThis.requestAnimationFrame = () => 0;
+
+/** A WebTransport that is dialled and never answers. `dialled` is every URL, in order. */
+const dialled: string[] = [];
+class SilentTransport {
+  ready = new Promise<never>(() => {});
+  closed = new Promise<never>(() => {});
+  constructor(url: string) {
+    dialled.push(url);
+  }
+  close() {}
+}
+Object.assign(globalThis, { WebTransport: SilentTransport });
 const { Engine } = await import("./engine.ts");
 
 const ORIGIN = "https://192.168.1.21:47990";
@@ -57,7 +69,7 @@ test("a denied request says why, and does not read as a forgotten pairing", () =
   const { engine, mod, calls } = engineIn("needs-pairing");
   engine.requestAccess({ width: 1280, height: 720 });
   assert.deepEqual(engine.current, { kind: "awaiting-approval", origin: ORIGIN, name: "Safari on Mac" });
-  assert.ok(calls.includes("_pf_wt_connect"), "asking dials the plane");
+  assert.equal(dialled.at(-1), "https://192.168.1.21:9778/pf2", "asking dials the plane");
 
   refuse(mod, DENIED, "the request was denied on the host");
   assert.deepEqual(engine.current, {
@@ -84,9 +96,9 @@ test("a cancelled request goes back to pairing, and its close is not an error", 
 
 test("a door's redirect dials the seat's plane once, with the credential bound to it", () => {
   const { engine, mod, calls } = engineIn("ready");
-  const dialled: string[] = [];
+  const bound: string[] = [];
   mod.stringToNewUTF8 = (s: string) => {
-    dialled.push(s);
+    bound.push(s);
     return 0;
   };
   engine.startStream({ width: 1280, height: 720 });
@@ -98,7 +110,7 @@ test("a door's redirect dials the seat's plane once, with the credential bound t
   redirect(9784, seat);
   assert.ok(calls.slice(before).includes("_pf_wt_close"), "the door's connection is closed first");
   assert.ok(calls.includes("_pf_device_init"), "the credential binds to the seat's plane");
-  assert.ok(dialled.includes(seat));
+  assert.ok(bound.includes(seat));
   (mod.__pfOnDeviceReady as () => void)();
   assert.ok(dialled.includes("https://192.168.1.21:9784/pf2"), "then the seat's own port");
 
