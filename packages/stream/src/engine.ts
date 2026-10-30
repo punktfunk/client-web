@@ -28,6 +28,9 @@ import { HostCursor } from "./cursor.ts";
 import type { HostTarget } from "./pf-connect.ts";
 import { deviceName } from "./platform.ts";
 import { type TunnelFetch, tunnelFetch } from "./tunnel.ts";
+import { type Feed, wasmFeed } from "./carrier/feed.ts";
+import { WtCarrier } from "./carrier/wt.ts";
+import { bridgeUrl, WsCarrier } from "./carrier/ws.ts";
 
 export type { AudioSnapshot, AudioState } from "./audio.ts";
 export type { MicState } from "./mic.ts";
@@ -43,8 +46,18 @@ const CLOSE = { QUIT: 0x51, PAIR_DENIED: 0x64, ACCESS_EXPIRED: 0x69, HOST_POWER:
 /** Where the stream plays was refused: an unknown profile, no seat, a seat taken or not up. The
  *  host decides these only after it admitted the device. */
 const PLACEMENT_REFUSED = new Set([0x6c, 0x6d, 0x6e, 0x6f]);
-/** pf-glue's code for a session that never opened: no host was heard at all. */
+/** A carrier that never opened: no host was heard at all. */
 const NEVER_OPENED = -2;
+
+/** WebTransport, or a WebSocket through the page server's bridge. */
+type CarrierKind = "wt" | "ws";
+/** The carrier that last opened for each origin, for the page's lifetime: a reconnect or a door's
+ *  redirect does not wait out a dead WebTransport twice. Not persisted, so a laptop that leaves a
+ *  UDP-blocked network tries UDP again on the next load. */
+const carrierHint = new Map<string, CarrierKind>();
+/** A UDP blackhole is silence, not an error. 3 s is well past a QUIC handshake on a path that
+ *  carries one. */
+const WT_SILENCE_MS = 3000;
 
 /** How long `Offered` may last before the host is taken to have refused the credential. It
  *  closes the session without a message, so nothing else says so. */
@@ -209,6 +222,9 @@ export interface EngineOptions {
    * `localhost`, the plane does not. Left unset, the hostname the address was typed with is used.
    */
   readonly transportHost?: string;
+  /** Pins the carrier, for a test harness: `wt` never falls back, `ws` dials the page server's
+   *  bridge straight away. Unset, the engine picks, and a player never has to. */
+  readonly carrier?: CarrierKind;
 }
 
 export interface StreamOptions {
@@ -286,6 +302,12 @@ export class Engine {
   private epoch = 0;
   /** The fingerprint the last `connect` was told to expect, for the reconnects this engine makes. */
   private expect: string | undefined;
+  /** Where every carrier puts what it receives. */
+  private readonly feed: Feed;
+  /** What the current dial rides, and how it gives way to the bridge while it may. */
+  private carrierKind: CarrierKind | null = null;
+  private fallback: (() => void) | null = null;
+  private silence: ReturnType<typeof setTimeout> | undefined;
 
   private constructor(
     private readonly mod: PunktfunkModule,
@@ -307,6 +329,7 @@ export class Engine {
       statsTier: opts.statsTier ?? TUNABLE_DEFAULTS.statsTier,
       advancedStats: opts.advancedStats ?? TUNABLE_DEFAULTS.advancedStats,
     };
+    this.feed = wasmFeed(mod);
     if (opts.uiCanvas) mod.__pfUiCanvas = opts.uiCanvas;
     mod.__pfOnDeviceReady = () => this.onDeviceReady();
     mod.__pfOnDeviceFailed = () => this.onDeviceFailed();
@@ -719,13 +742,16 @@ export class Engine {
     if (!len) return [];
     const ptr = this.mod._pf_hud_text_ptr();
     const text = UTF8.decode(this.mod.HEAPU8.subarray(ptr, ptr + len));
-    return text
+    const lines = text
       .split("\n")
       .filter(Boolean)
-      .map((line) => {
+      .map((line): HudLine => {
         const tab = line.indexOf("\t");
         return { role: ROLES[Number(line.slice(0, tab))] ?? "primary", text: line.slice(tab + 1) };
       });
+    // For a player who wonders why this stream is laggier than the network suggests.
+    if (this.carrierKind === "ws") lines.push({ role: "muted", text: "Carrier: WebSocket via page server" });
+    return lines;
   }
 
   /** What the engine is currently tuned to. */
@@ -934,6 +960,8 @@ export class Engine {
     this.offeredSince = 0;
     this.knockSince = 0;
     this.pendingStream = null;
+    clearTimeout(this.silence);
+    this.fallback = null;
     this.epoch++;
     // `pendingPin` and `pendingKnock` survive: each is set right before the reconnect that calls
     // this. `connect` drops them for another host.
@@ -980,11 +1008,56 @@ export class Engine {
     // door's seat answers on its own port of the same address.
     const port = this.seatPlane?.port ?? this.plane.port;
     const hash = this.seatPlane?.certHash ?? this.plane.cert_hash_sha256;
-    const url = `https://${this.planeHost}:${port}/pf2`;
-    const ok = withStr(this.mod, [url, hash], (u, _ul, h) => this.mod._pf_wt_connect(u, h));
-    if (!ok) {
-      this.set({ kind: "error", origin: this.origin, message: "the browser refused the WebTransport session" });
+    const pin = this.opts.carrier;
+    const wt = pin === "wt" || (!pin && "WebTransport" in globalThis && carrierHint.get(this.origin) !== "ws");
+    this.openCarrier(wt ? "wt" : "ws", port, hash);
+  }
+
+  /**
+   * Dial `kind` and install it where the glue's shims reach it. A WebTransport that the browser
+   * refuses, that never opens, or that stays silent for `WT_SILENCE_MS` gives way to the page
+   * server's bridge when the target has one; the carrier that opens is remembered for the origin.
+   */
+  private openCarrier(kind: CarrierKind, port: number, hash: string): void {
+    const origin = this.origin;
+    if (!origin) return;
+    // One connection at a time. A dial while the last one is still up — the reconnect after a
+    // pairing ceremony, before the host's own close lands — must not inherit its control stream.
+    this.mod._pf_wt_close?.();
+    clearTimeout(this.silence);
+    const bridge = typeof this.target === "object" ? this.target?.bridge : undefined;
+    const fallback = kind === "wt" && bridge && this.opts.carrier !== "wt" ? () => this.openCarrier("ws", port, hash) : null;
+    this.fallback = fallback;
+    const carrier =
+      kind === "wt"
+        ? new WtCarrier(this.feed, `https://${this.planeHost}:${port}/pf2`, hash)
+        : bridge
+          ? new WsCarrier(this.feed, bridgeUrl(bridge, port, hash))
+          : null;
+    let opening: Promise<void> | null = null;
+    if (carrier) {
+      this.mod.__pfCarrier = carrier;
+      this.carrierKind = kind;
+      try {
+        opening = carrier.open();
+      } catch {
+        // The browser would not even dial.
+      }
     }
+    if (!carrier || !opening) {
+      if (fallback) return fallback();
+      carrierHint.delete(origin);
+      return this.set({ kind: "error", origin, message: "the browser refused the WebTransport session" });
+    }
+    if (fallback) this.silence = setTimeout(() => this.mod.__pfCarrier === carrier && fallback(), WT_SILENCE_MS);
+    opening.then(
+      () => {
+        clearTimeout(this.silence);
+        this.fallback = null;
+        carrierHint.set(origin, kind);
+      },
+      () => this.onClosed(NEVER_OPENED, ""),
+    );
   }
 
   /** The control stream is open: say at once what this dial was for. */
@@ -1044,8 +1117,11 @@ export class Engine {
   private onClosed(code: number, reason: string): void {
     const origin = this.origin;
     if (!origin || this.state.kind === "idle") return;
+    // The bridge failed here: the next dial tries WebTransport first again.
+    if (code < 0 && this.carrierKind === "ws") carrierHint.delete(origin);
     const said = reason.trim();
     if (code === NEVER_OPENED) {
+      if (this.fallback) return this.fallback();
       this.stopSession();
       return this.set({
         kind: "error",

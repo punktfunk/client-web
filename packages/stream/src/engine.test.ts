@@ -4,18 +4,48 @@
 // The engine uses constructor parameter properties, so `npm test` runs node with
 // `--experimental-transform-types` rather than plain type stripping.
 
-import { test } from "node:test";
+import { test, type TestContext } from "node:test";
 import assert from "node:assert/strict";
 
 // The engine schedules its frame loop on construction; nothing here runs it.
 globalThis.requestAnimationFrame = () => 0;
+
+/** Every carrier dialled, in order: a WebTransport URL, or `ws <url>` for the bridge. */
+const dialled: string[] = [];
+/** What the next WebTransport does: never answer, refuse to be made, or fail before it opens. */
+let transport: "silent" | "refuse" | "fail" = "silent";
+class FakeTransport {
+  ready = transport === "fail" ? Promise.reject(new Error("handshake failed")) : new Promise<never>(() => {});
+  closed = new Promise<never>(() => {});
+  constructor(url: string) {
+    if (transport === "refuse") throw new TypeError("refused");
+    dialled.push(url);
+  }
+  close() {}
+}
+/** The page server's bridge, opened or dropped by hand. */
+const sockets: FakeSocket[] = [];
+class FakeSocket {
+  readyState = 0;
+  onopen: (() => void) | null = null;
+  onclose: ((e: { code: number; reason: string }) => void) | null = null;
+  constructor(url: string) {
+    dialled.push(`ws ${url}`);
+    sockets.push(this);
+  }
+  send() {}
+  close() {}
+}
+Object.assign(globalThis, { WebTransport: FakeTransport, WebSocket: FakeSocket, location: { href: "https://page.example/" } });
+const flush = () => new Promise((r) => setImmediate(r));
 const { Engine } = await import("./engine.ts");
 
 const ORIGIN = "https://192.168.1.21:47990";
 const DENIED = 0x64;
 
-/** An engine sitting in `kind` for `ORIGIN`, and the wasm exports it has called since. */
-function engineIn(kind: "needs-pairing" | "ready") {
+/** An engine sitting in `kind` for `origin`, and the wasm exports it has called since. With
+ *  `bridge`, the target offers the page server's WebSocket route. */
+function engineIn(kind: "needs-pairing" | "ready", bridge?: string, origin = ORIGIN) {
   const calls: string[] = [];
   const base: Record<string, unknown> = {
     HEAPU8: new Uint8Array(0),
@@ -38,13 +68,14 @@ function engineIn(kind: "needs-pairing" | "ready") {
   const Ctor = Engine as unknown as new (mod: unknown, opts: unknown) => import("./engine.ts").Engine;
   const engine = new Ctor(mod, { videoCanvas: {}, deviceName: "Safari on Mac" });
   Object.assign(engine, {
-    origin: ORIGIN,
+    origin,
+    ...(bridge ? { target: { api: origin, plane: "192.168.1.21", bridge } } : {}),
     planeHost: "192.168.1.21",
     plane: { port: 9778, cert_hash_sha256: "00".repeat(32) },
     // What `connect` binds the credential to.
     boundHash: "00".repeat(32),
   });
-  (engine as unknown as { set(s: unknown): void }).set({ kind, origin: ORIGIN });
+  (engine as unknown as { set(s: unknown): void }).set({ kind, origin });
   return { engine, mod: base, calls };
 }
 
@@ -57,7 +88,7 @@ test("a denied request says why, and does not read as a forgotten pairing", () =
   const { engine, mod, calls } = engineIn("needs-pairing");
   engine.requestAccess({ width: 1280, height: 720 });
   assert.deepEqual(engine.current, { kind: "awaiting-approval", origin: ORIGIN, name: "Safari on Mac" });
-  assert.ok(calls.includes("_pf_wt_connect"), "asking dials the plane");
+  assert.equal(dialled.at(-1), "https://192.168.1.21:9778/pf2", "asking dials the plane");
 
   refuse(mod, DENIED, "the request was denied on the host");
   assert.deepEqual(engine.current, {
@@ -84,9 +115,9 @@ test("a cancelled request goes back to pairing, and its close is not an error", 
 
 test("a door's redirect dials the seat's plane once, with the credential bound to it", () => {
   const { engine, mod, calls } = engineIn("ready");
-  const dialled: string[] = [];
+  const bound: string[] = [];
   mod.stringToNewUTF8 = (s: string) => {
-    dialled.push(s);
+    bound.push(s);
     return 0;
   };
   engine.startStream({ width: 1280, height: 720 });
@@ -98,7 +129,7 @@ test("a door's redirect dials the seat's plane once, with the credential bound t
   redirect(9784, seat);
   assert.ok(calls.slice(before).includes("_pf_wt_close"), "the door's connection is closed first");
   assert.ok(calls.includes("_pf_device_init"), "the credential binds to the seat's plane");
-  assert.ok(dialled.includes(seat));
+  assert.ok(bound.includes(seat));
   (mod.__pfOnDeviceReady as () => void)();
   assert.ok(dialled.includes("https://192.168.1.21:9784/pf2"), "then the seat's own port");
 
@@ -139,4 +170,63 @@ test("an approval whose seat isn't up ends paired, not refused", async () => {
   refuse(mod, 0x6f, "that profile's seat isn't available on this host");
   close(mod, 0x6f);
   assert.deepEqual(engine.current, { kind: "paired", origin: ORIGIN }, "the transport's close changes nothing");
+});
+
+const HASH = "00".repeat(32);
+const BRIDGED = `ws wss://page.example/w/abc?port=9778&hash=${HASH}`;
+const dial = (engine: object) => (engine as { dial(): void }).dial();
+
+test("a WebTransport the browser refuses gives way to the bridge", (t: TestContext) => {
+  t.after(() => (transport = "silent"));
+  const { engine } = engineIn("ready", "w/abc", "https://page.example/h/refuse");
+  transport = "refuse";
+  engine.startStream({ width: 1280, height: 720 });
+  assert.equal(dialled.at(-1), BRIDGED);
+  assert.equal(engine.current.kind, "starting");
+});
+
+test("a WebTransport that fails before it opens gives way to the bridge", async (t: TestContext) => {
+  t.after(() => (transport = "silent"));
+  const { engine } = engineIn("ready", "w/abc", "https://page.example/h/fail");
+  transport = "fail";
+  engine.startStream({ width: 1280, height: 720 });
+  await flush();
+  assert.equal(dialled.at(-1), BRIDGED);
+  assert.equal(engine.current.kind, "starting", "no error on the way");
+});
+
+test("a silent WebTransport gives way after three seconds, and only with a bridge", (t: TestContext) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const { engine } = engineIn("ready", "w/abc", "https://page.example/h/silent");
+  engine.startStream({ width: 1280, height: 720 });
+  assert.equal(dialled.at(-1), "https://192.168.1.21:9778/pf2");
+  t.mock.timers.tick(2999);
+  assert.equal(dialled.at(-1), "https://192.168.1.21:9778/pf2");
+  t.mock.timers.tick(1);
+  assert.equal(dialled.at(-1), BRIDGED);
+
+  const direct = engineIn("ready", undefined, "https://192.168.1.40:47990");
+  direct.engine.startStream({ width: 1280, height: 720 });
+  t.mock.timers.tick(10_000);
+  assert.equal(dialled.at(-1), "https://192.168.1.21:9778/pf2", "no bridge, no fallback");
+});
+
+test("the bridge is remembered for the origin, and forgotten when it fails", async (t: TestContext) => {
+  t.mock.timers.enable({ apis: ["setTimeout", "setInterval"] });
+  const { engine } = engineIn("needs-pairing", "w/abc", "https://page.example/h/hint");
+  engine.pair("1234");
+  t.mock.timers.tick(3000);
+  sockets.at(-1)!.readyState = 1;
+  sockets.at(-1)!.onopen!();
+  await flush();
+  assert.equal(engine.current.kind, "pairing", "the PIN went over the bridge");
+
+  const before = dialled.length;
+  dial(engine);
+  assert.deepEqual(dialled.slice(before), [BRIDGED], "the reconnect skips WebTransport");
+
+  sockets.at(-1)!.onclose!({ code: 1006, reason: "" });
+  await flush();
+  dial(engine);
+  assert.equal(dialled.at(-1), "https://192.168.1.21:9778/pf2", "WebTransport first again");
 });

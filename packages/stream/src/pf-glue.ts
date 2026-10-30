@@ -1,4 +1,4 @@
-// The one file that names a browser or graphics object. Emscripten links it with `--js-library`,
+// The JavaScript inside the wasm module. Emscripten links it with `--js-library`,
 // so these functions run inside the module's own scope — which is where `GL`, emscripten's WebGL
 // bookkeeping, lives. Nothing in `src/` may name a GL or GPU type, and that is a review rule.
 //
@@ -11,22 +11,12 @@
 //
 // The declarations for `mergeInto`, `Module`, `HEAPU8` and friends are in `emscripten.d.ts`.
 
-interface PfNet {
-  wt: WebTransport | null;
-  writer: WritableStreamDefaultWriter<Uint8Array> | null;
-  ctl: WritableStreamDefaultWriter<Uint8Array> | null;
-  reading: boolean;
-  /** The connection's smoothed round trip in µs, from the last `getStats()`; 0 = unknown. */
-  rttUs: number;
-}
-
 interface PfCred {
   key: CryptoKeyPair | null;
   load(): Promise<CryptoKeyPair>;
   db(): Promise<IDBDatabase>;
 }
 
-declare const pfNet: PfNet;
 declare const pfCred: PfCred;
 
 mergeInto(LibraryManager.library, {
@@ -63,247 +53,39 @@ mergeInto(LibraryManager.library, {
     return 1;
   },
 
-  // --- the datagram plane ---------------------------------------------------------------------
+  // --- the carrier ----------------------------------------------------------------------------
   //
-  // Datagrams never become JavaScript objects that outlive one call. The read loop claims a ring
-  // slot from Rust and copies the bytes straight into wasm memory; nothing is allocated per
-  // packet on either side. At 4-5k/s a `Uint8Array` per datagram is garbage the collector would
-  // be chasing during the stream.
-  //
-  // `$` marks a JavaScript-only helper (not callable from Rust); `__deps` is how emscripten knows
-  // to keep one that only other library members use.
-  $pfNet: {
-    wt: null,
-    writer: null,
-    ctl: null,
-    reading: false,
-    rttUs: 0,
-  },
-
-  pf_wt_connect__deps: ["$pfNet", "$UTF8ToString", "pf_wt_close"],
-  pf_wt_connect: function (urlPtr: number, hashPtr: number): number {
-    const url = UTF8ToString(urlPtr);
-    const hex = UTF8ToString(hashPtr);
-    // One connection at a time. A dial while the last one is still up — the reconnect after a
-    // pairing ceremony, before the host's own close lands — must not inherit its control
-    // stream, or the new session never opens one.
-    _pf_wt_close();
-    try {
-      const opts: WebTransportOptions = { allowPooling: false };
-      if (hex && hex.length === 64) {
-        const bytes = new Uint8Array(32);
-        for (let i = 0; i < 32; i++) bytes[i] = parseInt(hex.substr(i * 2, 2), 16);
-        // allowPooling must stay false alongside this: the pair is a TypeError otherwise.
-        opts.serverCertificateHashes = [{ algorithm: "sha-256", value: bytes }];
-      }
-      pfNet.wt = new WebTransport(url, opts);
-    } catch (e) {
-      console.error("punktfunk: WebTransport constructor refused", e);
-      return 0;
-    }
-    // The host's close code and reason are how it says why — a setup failure, a refused
-    // credential — so they go to the engine. Only for the connection that is still current: a
-    // dial replaces this one, and its close is old news.
-    const wt = pfNet.wt;
-    wt.closed.then(
-      function (info) {
-        if (pfNet.wt === wt && Module.__pfOnClosed) Module.__pfOnClosed(info.closeCode ?? 0, info.reason ?? "");
-      },
-      function (e) {
-        // WebKit rejects here on any close by the host, with nothing attached — not even the
-        // close code. `Refused` on a stream is what carries the reason in that engine.
-        const err = e as { message?: string };
-        if (pfNet.wt === wt && Module.__pfOnClosed) Module.__pfOnClosed(-1, err.message ?? "");
-      },
-    );
-    pfNet.wt.ready.then(
-      function () {
-        // WebKit follows the current spec with `createWritable()`; Chromium still exposes the
-        // older `writable` attribute. A client that knows only one fails on the other engine.
-        const datagrams = pfNet.wt!.datagrams as unknown as {
-          createWritable?: () => WritableStream<Uint8Array>;
-          writable: WritableStream<Uint8Array>;
-          readable: ReadableStream<Uint8Array>;
-        };
-        const w = datagrams.createWritable ? datagrams.createWritable() : datagrams.writable;
-        pfNet.writer = w.getWriter();
-        if (Module._pf_wt_ctl_open) Module._pf_wt_ctl_open();
-        // A stream the host opens carries one thing: why it is about to close, as one `Refused`
-        // frame. It is read to its end and handed over whole, apart from the control stream.
-        const feed = function (reader: ReadableStreamDefaultReader<Uint8Array>, got: Uint8Array[]): void {
-          reader.read().then(
-            function (r) {
-              if (!r.done) {
-                got.push(r.value);
-                feed(reader, got);
-                return;
-              }
-              const len = got.reduce(function (n, c) {
-                return n + c.length;
-              }, 0);
-              if (len === 0) return;
-              const p = _malloc(len);
-              let at = p;
-              for (const c of got) {
-                HEAPU8.set(c, at);
-                at += c.length;
-              }
-              Module._pf_uni_recv(p, len);
-              _free(p);
-            },
-            function () {},
-          );
-        };
-        const unis = function (reader: ReadableStreamDefaultReader<ReadableStream<Uint8Array>>): void {
-          reader.read().then(
-            function (r) {
-              if (r.done) return;
-              feed(r.value.getReader(), []);
-              unis(reader);
-            },
-            function () {},
-          );
-        };
-        unis(pfNet.wt!.incomingUnidirectionalStreams.getReader());
-        if (!pfNet.reading) {
-          pfNet.reading = true;
-          // The session is pumped once per burst, on a task right after it: a frame starts
-          // decoding when its last datagram lands, not at the next animation frame.
-          const tick = new MessageChannel();
-          let queued = false;
-          tick.port1.onmessage = function () {
-            queued = false;
-            if (Module.__pfOnData) Module.__pfOnData();
-          };
-          const pump = function (reader: ReadableStreamDefaultReader<Uint8Array>): void {
-            reader.read().then(
-              function (r) {
-                if (r.done) {
-                  pfNet.reading = false;
-                  return;
-                }
-                let slot = Module._pf_rx_claim();
-                // A keyframe can outrun the ring inside one burst: drain it now instead of dropping.
-                if (slot < 0 && Module.__pfOnData) {
-                  Module.__pfOnData();
-                  slot = Module._pf_rx_claim();
-                }
-                // A slot holds any datagram the protocol allows; a longer one would run into the next.
-                if (slot >= 0 && r.value.length <= Module._pf_rx_stride()) {
-                  HEAPU8.set(r.value, Module._pf_rx_base() + slot * Module._pf_rx_stride());
-                  Module._pf_rx_commit(slot, r.value.length);
-                }
-                if (!queued) {
-                  queued = true;
-                  tick.port2.postMessage(0);
-                }
-                pump(reader);
-              },
-              function () {
-                pfNet.reading = false;
-              },
-            );
-          };
-          pump(datagrams.readable.getReader());
-        }
-      },
-      function (e) {
-        console.error("punktfunk: WebTransport session failed:", (e as { message?: string })?.message, e);
-        // A session that never opened leaves `closed` pending in WebKit, so this is the engine's only word.
-        if (pfNet.wt === wt && Module.__pfOnClosed) Module.__pfOnClosed(-2, "");
-      },
-    );
-    return 1;
-  },
-
-  pf_wt_send__deps: ["$pfNet"],
+  // How session bytes reach the host lives in `src/carrier/`, as ordinary modules. Rust still
+  // calls these, and each hands over to the carrier the engine installed for this dial.
   pf_wt_send: function (ptr: number, len: number): number {
-    if (!pfNet.writer) return 0;
+    const c = Module.__pfCarrier;
     // `slice`, not `subarray`: the write is queued, and a view into wasm memory can be detached
     // by a heap growth or overwritten by the next packet before it is read.
-    pfNet.writer.write(HEAPU8.slice(ptr, ptr + len)).catch(function () {});
-    return 1;
+    return c && c.sendDatagram(HEAPU8.slice(ptr, ptr + len)) ? 1 : 0;
   },
 
-  pf_wt_close__deps: ["$pfNet"],
   pf_wt_close: function (code?: number): void {
-    if (pfNet.wt) {
-      try {
-        // A close code is how a player's choice reaches the host: `QUIT_CLOSE_CODE` ends the
-        // title, a plain close leaves it running.
-        pfNet.wt.close(code ? { closeCode: code, reason: "" } : undefined);
-      } catch {
-        // Already closed, or never opened. Either way there is nothing to do.
-      }
-    }
-    pfNet.wt = null;
-    pfNet.writer = null;
-    pfNet.ctl = null;
-    pfNet.reading = false;
-    pfNet.rttUs = 0;
+    const c = Module.__pfCarrier;
+    Module.__pfCarrier = undefined;
+    if (c) c.close(code);
   },
 
-  // The connection's smoothed round trip in µs, from the last `getStats()`. Each call asks for
-  // a fresh reading, which the next call returns; a browser without `getStats` stays at 0.
-  pf_wt_rtt_us__deps: ["$pfNet"],
   pf_wt_rtt_us: function (): number {
-    const wt = pfNet.wt;
-    const getStats =
-      wt && (wt as unknown as { getStats?: () => Promise<{ smoothedRtt?: number }> }).getStats;
-    if (wt && typeof getStats === "function") {
-      getStats.call(wt).then(
-        function (s) {
-          if (pfNet.wt === wt) pfNet.rttUs = Math.round((s.smoothedRtt ?? 0) * 1000);
-        },
-        function () {},
-      );
-    }
-    return pfNet.rttUs;
+    const c = Module.__pfCarrier;
+    return c ? c.rttUs() : 0;
   },
 
-  // --- the control stream ---------------------------------------------------------------------
-  //
-  // The same punktfunk/2 frames the native client puts on a quinn stream. Rust owns the codec;
-  // this owns the stream. A stream hands over arbitrary chunk boundaries, so whatever arrives goes
-  // straight to Rust, which reassembles.
-  pf_wt_ctl_open__deps: ["$pfNet"],
   pf_wt_ctl_open: function (): number {
-    if (!pfNet.wt || pfNet.ctl) return 0;
-    pfNet.wt.createBidirectionalStream().then(
-      function (stream) {
-        pfNet.ctl = stream.writable.getWriter();
-        // Every punktfunk/2 stream opens with its type; the control stream's is 0.
-        pfNet.ctl.write(new Uint8Array([0])).catch(function () {});
-        const pump = function (reader: ReadableStreamDefaultReader<Uint8Array>): void {
-          reader.read().then(
-            function (r) {
-              if (r.done) return;
-              const p = _malloc(r.value.length);
-              HEAPU8.set(r.value, p);
-              Module._pf_ctl_recv(p, r.value.length);
-              _free(p);
-              pump(reader);
-            },
-            function () {},
-          );
-        };
-        pump(stream.readable.getReader());
-        // Rust sends its hello once the stream exists, not before: the host has nothing to reply on.
-        if (Module.__pfOnCtlReady) Module.__pfOnCtlReady();
-      },
-      function (e) {
-        console.error("punktfunk: control stream refused", e);
-      },
-    );
+    const c = Module.__pfCarrier;
+    if (!c) return 0;
+    c.openControl();
     return 1;
   },
 
-  pf_wt_ctl_send__deps: ["$pfNet"],
   pf_wt_ctl_send: function (ptr: number, len: number): void {
-    if (!pfNet.ctl) return;
-    // A copy, for the same reason the datagram writer takes one: the write is queued and a view
-    // into wasm memory can be detached by a heap growth before it is read.
-    pfNet.ctl.write(HEAPU8.slice(ptr, ptr + len)).catch(function () {});
+    const c = Module.__pfCarrier;
+    // A copy, for the same reason `pf_wt_send` takes one.
+    if (c) c.sendControl(HEAPU8.slice(ptr, ptr + len));
   },
 
   // --- the device credential --------------------------------------------------------------

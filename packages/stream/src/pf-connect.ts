@@ -116,11 +116,15 @@ export const acceptUrl = (origin: string): string => `${origin}/api/v1/health`;
  * server's route for the host. With `tunnel`, `api` is the host's own https origin, which the page
  * can never `fetch`: the plane's hash comes over plain HTTP on that port ([`bootstrapUrl`]) and
  * every call after it rides the plane's `/mgmt` tunnel. That is a packaged page's only route.
+ *
+ * `bridge` is the page server's WebSocket route to the plane (`w/<id>`, `wa/<ip:port>`, relative
+ * to the page), for a network that blocks UDP. Absent, the engine dials WebTransport only.
  */
 export interface HostTarget {
   readonly api: string;
   readonly plane: string;
   readonly tunnel?: boolean;
+  readonly bridge?: string;
 }
 
 /** Where a packaged page reads the plane's hash: plain HTTP on the management port, at the

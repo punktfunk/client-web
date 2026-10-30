@@ -11,6 +11,24 @@
 //     members are already in scope. Nothing there may be imported, and nothing outside a function
 //     body may be referenced from inside one — see `tsconfig.json`.
 
+/**
+ * How session bytes reach the host: `src/carrier/`. The engine picks one per dial; once closed,
+ * a carrier says nothing more — no feed call, and a pending `open` never settles.
+ */
+export interface Carrier {
+  /** Dial. Resolves once the session is open; rejects with why. Throws when the browser refuses
+   *  to dial at all. */
+  open(): Promise<void>;
+  /** One datagram out. `false` when nothing is open. */
+  sendDatagram(bytes: Uint8Array): boolean;
+  /** Open the control stream; bytes in arrive through `feed.control`. */
+  openControl(): void;
+  sendControl(bytes: Uint8Array): void;
+  close(code?: number): void;
+  /** Smoothed round trip in µs, 0 when unknown. */
+  rttUs(): number;
+}
+
 export interface PunktfunkModule {
   // --- the console -----------------------------------------------------------------------
   /** Bring up GL, Skia and the shell on a canvas already sized in device pixels. `0` on failure. */
@@ -31,7 +49,7 @@ export interface PunktfunkModule {
   _pf_console_art(idPtr: number, idLen: number, bytesPtr: number, len: number): void;
 
   // --- the transport ---------------------------------------------------------------------
-  _pf_wt_connect(urlPtr: number, hashPtr: number): number;
+  /** Close `__pfCarrier`, with the host's application close code when one is given. */
   _pf_wt_close(code?: number): void;
   _pf_wt_ctl_open(): number;
   _pf_ctl_recv(ptr: number, len: number): void;
@@ -128,6 +146,9 @@ export interface PunktfunkModule {
   HEAPU8: Uint8Array;
   stringToNewUTF8(s: string): number;
 
+  /** The carrier the glue's `pf_wt_*` shims hand over to. The engine installs one per dial. */
+  __pfCarrier?: Carrier | undefined;
+
   // --- callbacks the page installs ---------------------------------------------------------
   //
   // `pf-glue.ts` calls these, so they are the page's half of the same boundary. All optional:
@@ -191,8 +212,6 @@ declare global {
   function _malloc(bytes: number): number;
   function _free(ptr: number): void;
   function UTF8ToString(ptr: number, maxBytes?: number): string;
-  /** A library member calling another: emscripten exposes each under its C name. */
-  function _pf_wt_close(code?: number): void;
   /** Emscripten's WebGL bookkeeping. The only place a GL object may be named. */
   const GL: {
     createContext(canvas: HTMLCanvasElement, attrs: Record<string, unknown>): number;
