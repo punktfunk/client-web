@@ -197,6 +197,8 @@ const TUNABLE_DEFAULTS: TunableOptions = {
 
 /** `CODEC_*` bits, as `Hello::preferred_codec` names one. */
 const CODEC_BIT: Record<TunableOptions["codec"], number> = { auto: 0, h264: 0x01, hevc: 0x02, av1: 0x04 };
+/** A `CODEC_*` bit as the player reads it. */
+const CODEC_NAME: Record<number, string> = { 0x01: "H.264", 0x02: "HEVC", 0x04: "AV1" };
 
 export interface EngineOptions {
   /** The lower canvas: decoded video goes here and nowhere else. */
@@ -298,6 +300,11 @@ export class Engine {
   private streamed: StreamOptions | null = null;
   /** The stream is an SDR restart, which the next session says once. */
   private sdrNotice = false;
+  /** Codec bits this browser failed to decode since the player started the stream. The offer
+   *  leaves them out, so two failing codecs can't alternate. */
+  private refused = 0;
+  /** The codec the stream fell back from, until the session that replaced it names its own. */
+  private fellBackFrom = 0;
   /** A request for access, sent as `Hello` when the next control stream opens. Survives `reset`,
    *  as `pendingPin` does, for the reconnect that clears a stale pairing first. */
   private pendingKnock: StreamOptions | null = null;
@@ -598,10 +605,9 @@ export class Engine {
    */
   startStream(opts: StreamOptions): void {
     if (!this.origin || this.state.kind !== "ready") return;
-    // HDR is offered per stream: the window may have moved to another display, and the plane
-    // may have been switched to WebGL2, since the last one.
-    const hdr = this.tunable.hdr && this.codecs.tenBit && hdrDisplay(this.tunable.videoBackend, this.gpu);
-    this.mod._pf_session_codecs?.(this.codecs.mask, hdr ? 1 : 0, CODEC_BIT[this.tunable.codec]);
+    this.refused = 0;
+    this.fellBackFrom = 0;
+    this.offer(false);
     this.set({ kind: "starting", origin: this.origin });
     this.streamed = opts;
     this.pendingStream = opts;
@@ -609,27 +615,47 @@ export class Engine {
   }
 
   /**
-   * The browser converted an HDR frame itself, which nothing here can undo: the same stream again
-   * in SDR, on a fresh connection. The title keeps running on the host; `hdrDisplay` now says no
-   * for this browser build, so this happens once.
+   * What the next `Hello` offers: this browser's codecs less those it refused, the player's pick
+   * first, and HDR unless `sdr`. HDR is asked per stream: the window may have moved to another
+   * display, and the plane may have been switched to WebGL2, since the last one.
    */
-  private restartInSdr(): void {
+  private offer(sdr: boolean): void {
+    const hdr = !sdr && this.tunable.hdr && this.codecs.tenBit && hdrDisplay(this.tunable.videoBackend, this.gpu);
+    this.mod._pf_session_codecs?.(this.codecs.mask & ~this.refused, hdr ? 1 : 0, CODEC_BIT[this.tunable.codec]);
+  }
+
+  /** The same stream again on a fresh connection, offering what `offer` allows now. The title
+   *  keeps running on the host. False when no stream is up to restart. */
+  private restart(sdr: boolean): boolean {
     const origin = this.origin;
     const opts = this.streamed;
-    if (!origin || !opts || (this.state.kind !== "streaming" && this.state.kind !== "starting")) return;
+    if (!origin || !opts || (this.state.kind !== "streaming" && this.state.kind !== "starting")) return false;
     this.stopSession();
-    this.mod._pf_session_codecs?.(this.codecs.mask, 0, CODEC_BIT[this.tunable.codec]);
-    this.sdrNotice = true;
+    this.offer(sdr);
     this.set({ kind: "starting", origin });
     this.pendingStream = opts;
     this.dialBox();
+    return true;
   }
 
-  /** The browser decodes this stream neither in hardware nor in software. The title keeps
-   *  running on the host, as on a Leave. */
-  private undecodable(): void {
+  /** The browser converted an HDR frame itself, which nothing here can undo: the same stream in
+   *  SDR. `hdrDisplay` now says no for this browser build, so this happens once. */
+  private restartInSdr(): void {
+    if (this.restart(true)) this.sdrNotice = true;
+  }
+
+  /** The browser decodes the stream's codec under no acceleration. Another codec on offer takes
+   *  over, once per codec per stream the player starts. With none left the stream ends, and the
+   *  title keeps running on the host, as on a Leave. */
+  private undecodable(codec: number): void {
     const origin = this.origin;
     if (!origin || (this.state.kind !== "streaming" && this.state.kind !== "starting")) return;
+    const fresh = (this.refused & codec) === 0;
+    this.refused |= codec;
+    if (fresh && (this.codecs.mask & ~this.refused) !== 0 && this.restart(false)) {
+      this.fellBackFrom = codec;
+      return;
+    }
     this.stopSession();
     // `error` before the close, so the close it answers with finds nothing left to report.
     this.set({
@@ -683,7 +709,7 @@ export class Engine {
       this.opts.videoCanvas,
       this.tunable.videoBackend,
       () => setTimeout(() => this.restartInSdr(), 0),
-      () => this.undecodable(),
+      (codec) => this.undecodable(codec),
     );
     this.video.attach();
     this.tier = this.tunable.statsTier;
@@ -1309,6 +1335,13 @@ export class Engine {
     }
 
     const now = performance.now();
+    // A codec fallback names the codec that took over, which only `Welcome` says.
+    if (this.fellBackFrom && v?.codec) {
+      const pinned = this.refused & CODEC_BIT[this.tunable.codec] ? ", ignoring the Video codec setting" : "";
+      const text = `This browser can't decode ${CODEC_NAME[this.fellBackFrom]}, so the stream uses ${CODEC_NAME[v.codec]}${pinned}.`;
+      this.launchNotice = { text, at: now };
+      this.fellBackFrom = 0;
+    }
     this.readAccess(now);
     const frames = this.mod._pf_session_frames();
     let second = false;
