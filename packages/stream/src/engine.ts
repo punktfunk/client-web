@@ -957,6 +957,16 @@ export class Engine {
         this.mod._free(p);
       }
     },
+    /** A profile's picture, encoded, under the URL `FetchAvatar` named. */
+    avatar: (url: string, bytes: Uint8Array): void => {
+      const p = this.mod._malloc(bytes.length);
+      try {
+        this.mod.HEAPU8.set(bytes, p);
+        withStr(this.mod, [url], (up, ul) => this.mod._pf_console_avatar(up, ul, p, bytes.length));
+      } finally {
+        this.mod._free(p);
+      }
+    },
     /** What the console raised: a bridge event or `{cmd}`, parsed. One listener. */
     onEvent: (fn: (event: ConsoleEvent) => void): void => {
       this.mod.__pfOnConsole = (json) => {

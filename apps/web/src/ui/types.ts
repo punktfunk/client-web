@@ -59,12 +59,14 @@ export interface HostCard extends KnownHost {
   waking?: boolean;
 }
 
-/** One card on the profile picker: initials on the profile's accent, and what its seat is doing
- *  when that matters to the pick. */
+/** One card on the profile picker: its picture, else initials on the profile's accent, and what
+ *  its seat is doing when that matters to the pick. */
 export interface ProfileCard {
   id: string;
   name: string;
   initials: string;
+  /** Something an `<img>` can show. */
+  picture?: string;
   /** `#RRGGBB`; the brand's when absent. */
   accent?: string;
   note?: string;

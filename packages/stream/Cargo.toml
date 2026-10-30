@@ -23,7 +23,7 @@ anyhow = "1"
 sha2 = "0.11"
 # `transport::Transport`, the wire codecs and the SPAKE2 ceremony. `pake`, not `quic`: the
 # browser plane is WebTransport, so the ceremony is wanted and the quinn runtime under it is not.
-punktfunk-core = { git = "https://git.unom.io/unom/punktfunk", rev = "eb990a68305046336025ba115c9fff2ba395238a", default-features = false, features = ["pake"] }
+punktfunk-core = { git = "https://git.unom.io/unom/punktfunk", rev = "dd871ad7e22f02131efee64ef53225e5d3e48490", default-features = false, features = ["pake"] }
 
 # wasm only. Off it this is a bin that prints how to build it, so `cargo test` on a developer's
 # desktop stays green and does not resolve skia-safe for a target that wants a second Skia
@@ -32,12 +32,12 @@ punktfunk-core = { git = "https://git.unom.io/unom/punktfunk", rev = "eb990a6830
 # The shell itself. `default-features = false`: `vulkan-overlay` is the desktop session binary's,
 # and it would put `vulkan` on skia-safe and change the prebuilt key away from
 # `ganesh-gl-jpegd-jpege-pdf-textlayout`, the one build.sh downloads for this target.
-pf-console-ui = { git = "https://git.unom.io/unom/punktfunk", rev = "eb990a68305046336025ba115c9fff2ba395238a", default-features = false }
+pf-console-ui = { git = "https://git.unom.io/unom/punktfunk", rev = "dd871ad7e22f02131efee64ef53225e5d3e48490", default-features = false }
 # The bridge's JSON both ways: the model the page pushes, what the shell raises.
 serde = "1"
 serde_json = "1"
 # The portable half — `trust::Settings` for the snapshot store the shell loads from.
-pf-client-core = { git = "https://git.unom.io/unom/punktfunk", rev = "eb990a68305046336025ba115c9fff2ba395238a", default-features = false }
+pf-client-core = { git = "https://git.unom.io/unom/punktfunk", rev = "dd871ad7e22f02131efee64ef53225e5d3e48490", default-features = false }
 # The SAME line pf-console-ui's wasm block carries, features included: two feature sets in one
 # build resolve two prebuilt keys, and the second one puts a source build of Skia on the critical
 # path. Only `host.rs` names it, to build the context and wrap the canvas.

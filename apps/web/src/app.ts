@@ -96,6 +96,8 @@ class App {
    *  is not connected, so the tab never opens blank on a shelf it has shown before. */
   private entries: LibraryEntry[] = [];
   private readonly art = new Map<string, string>();
+  /** Data URLs of the profile pictures read so far, by their path on the host. */
+  private readonly pictures = new Map<string, string>();
   private libraryFor: string | null = null;
   private libraryLoading = false;
   /** When the titles were last read. Not the same as "is the list empty": a host with nothing in
@@ -1060,15 +1062,27 @@ class App {
       hosts.setProfile(origin, decision.remember);
       return void this.settleSeat(gate, decision.send);
     }
-    this.gateShow(gate, {
+    const picker: Extract<Screen, { kind: "profiles" }> = {
       kind: "profiles",
       origin,
       host: this.nameOf(origin),
-      cards: gate.rows.map(cardOf),
+      cards: gate.rows.map((p) => cardOf(p, this.pictures)),
       ...(saved ? { saved: saved.id } : {}),
       ...(decision?.gone ? { gone: decision.gone } : {}),
       ...(listed === undefined ? { error: "Couldn't load the profiles." } : {}),
-    });
+    };
+    this.gateShow(gate, picker);
+    void this.readPictures(gate, picker);
+  }
+
+  /** Reads the pictures `gate`'s picker lacks, then shows them. One that won't load stays initials. */
+  private async readPictures(gate: Gate, picker: Extract<Screen, { kind: "profiles" }>): Promise<void> {
+    const missing = gate.rows.flatMap((p) => (p.avatar?.startsWith("/") && !this.pictures.has(p.avatar) ? [p.avatar] : []));
+    const read = await Promise.all(missing.map((url) => gate.host.art(url).catch(() => null)));
+    read.forEach((shown, i) => shown && this.pictures.set(missing[i]!, shown));
+    if (gate.screen === picker && read.some(Boolean)) {
+      this.gateShow(gate, { ...picker, cards: gate.rows.map((p) => cardOf(p, this.pictures)) });
+    }
   }
 
   private pickProfile(id: string): void {
@@ -1184,13 +1198,16 @@ function within<T>(p: Promise<T>, ms: number): Promise<T> {
   });
 }
 
-/** A picker card for `p`. An accent that isn't `#RRGGBB` falls back to the brand's. */
-function cardOf(p: ListedProfile): ProfileCard {
+/** A picker card for `p`, with its picture if `pictures` has it. An accent that isn't `#RRGGBB`
+ *  falls back to the brand's. */
+function cardOf(p: ListedProfile, pictures: ReadonlyMap<string, string>): ProfileCard {
   const note = profileNote(p);
+  const picture = p.avatar ? pictures.get(p.avatar) : undefined;
   return {
     id: p.id,
     name: p.display_name,
     initials: initials(p.display_name),
+    ...(picture ? { picture } : {}),
     ...(p.accent && /^#[0-9a-f]{6}$/i.test(p.accent) ? { accent: p.accent } : {}),
     ...(note ? { note } : {}),
   };

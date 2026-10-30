@@ -51,7 +51,11 @@ export function Profiles({ screen, actions }: Props<"profiles">): JSX.Element {
                 style={c.accent ? { background: c.accent } : undefined}
                 aria-hidden="true"
               >
-                {c.initials}
+                {c.picture ? (
+                  <img src={c.picture} alt="" className="size-16 rounded-full object-cover" />
+                ) : (
+                  c.initials
+                )}
               </span>
               <span className="w-full truncate font-semibold">{c.name}</span>
               {c.note && <span className="text-xs text-muted-foreground">{c.note}</span>}

@@ -28,10 +28,13 @@ export interface SeatRow {
   readonly steam_sign_in?: unknown;
 }
 
-/** The pick this browser keeps for a box. It carries the name, which a card shows. */
+/** The pick this browser keeps for a box. It carries the name and the picture's URL, which a
+ *  card shows. */
 export interface ProfilePick {
   readonly id: string;
   readonly display_name: string;
+  /** Host-relative URL of the picture. */
+  readonly avatar?: string;
   /** The player asked for it to be remembered. The console applies only such a pick. */
   readonly remember?: boolean;
 }
@@ -61,7 +64,11 @@ export const SEAT_POLL_MS = 2000;
 /** The host's refusal of another profile's seat (its 403), in its own words. */
 export const WAKE_REFUSED = "This device isn't allowed to start another profile's seat.";
 
-export const pickOf = (p: ProfileRow): ProfilePick => ({ id: p.id, display_name: p.display_name });
+export const pickOf = (p: ProfileRow): ProfilePick => ({
+  id: p.id,
+  display_name: p.display_name,
+  ...(p.avatar ? { avatar: p.avatar } : {}),
+});
 
 /** The profile `wanted` names: its id, else its name in any case, when only one has it. */
 export function findProfile(listed: readonly ProfileRow[], wanted: string): ProfileRow | undefined {

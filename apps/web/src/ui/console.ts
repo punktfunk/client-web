@@ -948,6 +948,12 @@ export class ConsoleUi implements Ui {
         this.actions?.connect(origin);
         return;
       }
+      case "FetchAvatar": {
+        // A host not reached yet is asked again once it lists its profiles.
+        const host = origin ? this.apiFor(origin) : undefined;
+        if (host) void this.answerAvatar(str("url"), host);
+        return;
+      }
       case "WakeProfile": {
         // No answer: the console reads the list again until the seat is up.
         const host = origin ? this.apiFor(origin) : undefined;
@@ -984,6 +990,21 @@ export class ConsoleUi implements Ui {
       this.pushProfiles(fp, listed ? { Listed: listed } : "NoProfiles");
     } catch (e) {
       this.pushProfiles(fp, { Failed: e instanceof Error ? e.message : String(e) });
+    }
+  }
+
+  /** A profile's picture for the console's faces. One that won't load leaves the initials. */
+  private async answerAvatar(url: string, host: Host): Promise<void> {
+    if (!url.startsWith("/")) return;
+    try {
+      const shown = await host.art(url);
+      if (!shown) return;
+      const blob = await (await fetch(shown)).blob();
+      URL.revokeObjectURL(shown);
+      // The browser reads what the console's own decoders can't.
+      this.engine.console.avatar(url, (await coverBytes(blob)) ?? new Uint8Array(await blob.arrayBuffer()));
+    } catch (e) {
+      console.warn("punktfunk: profile picture did not load", e);
     }
   }
 
