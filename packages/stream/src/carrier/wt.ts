@@ -11,6 +11,7 @@ export class WtCarrier implements Carrier {
   private ctl: WritableStreamDefaultWriter<Uint8Array> | null = null;
   /** The connection's smoothed round trip in µs, from the last `getStats()`; 0 = unknown. */
   private rtt = 0;
+  private opened = false;
 
   /** `url` is the plane's `https://<host>:<port>/pf2`; `certHash` its certificate's SHA-256 in hex. */
   constructor(
@@ -34,22 +35,24 @@ export class WtCarrier implements Carrier {
     }
     this.wt = wt;
     // The host's close code and reason are how it says why — a setup failure, a refused
-    // credential — so they go to the engine. Only while this is the open connection: a close
-    // after `close()` is old news.
+    // credential — so they go to the engine. Only once open, and only while this is the
+    // connection: before `ready`, its rejection speaks for the session (Chromium rejects both).
+    const live = () => this.wt === wt && this.opened;
     wt.closed.then(
       (info) => {
-        if (this.wt === wt) this.feed.closed(info.closeCode ?? 0, info.reason ?? "");
+        if (live()) this.feed.closed(info.closeCode ?? 0, info.reason ?? "");
       },
       (e) => {
         // WebKit rejects here on any close by the host, with nothing attached — not even the
         // close code. `Refused` on a stream is what carries the reason in that engine.
-        if (this.wt === wt) this.feed.closed(-1, (e as { message?: string }).message ?? "");
+        if (live()) this.feed.closed(-1, (e as { message?: string }).message ?? "");
       },
     );
     return new Promise((resolve, reject) => {
       wt.ready.then(
         () => {
           if (this.wt !== wt) return;
+          this.opened = true;
           // WebKit follows the current spec with `createWritable()`; Chromium still exposes the
           // older `writable` attribute. A client that knows only one fails on the other engine.
           const datagrams = wt.datagrams as unknown as {
@@ -110,6 +113,7 @@ export class WtCarrier implements Carrier {
     this.writer = null;
     this.ctl = null;
     this.rtt = 0;
+    this.opened = false;
     try {
       // A close code is how a player's choice reaches the host: `QUIT_CLOSE_CODE` ends the
       // title, a plain close leaves it running.
