@@ -318,8 +318,8 @@ A `v*` tag builds everything above and attaches the app as
 
 - **The microphone does not go back.** Host → browser audio plays; browser → host is the same
   plane the other way (`0xCB`) and is not written yet.
-- **Latency and packet loss are not reported.** `SessionStats` has the fields; only decoder drops
-  are filled in, so the quality dot is coarse rather than wrong.
+- **Latency and packet loss are not on `SessionStats`.** The stats overlay prints them and the
+  quality dot is rated from them in core; the engine's own counters stop at decoder drops.
 - **Codec and HDR are pinned** in `rust/session.rs`. Choosing either needs the wire, not a
   control.
 - **Resize renegotiation is off by default.** The observer is hard-debounced and the host rebuilds

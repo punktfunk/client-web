@@ -230,3 +230,22 @@ test("the bridge is remembered for the origin, and forgotten when it fails", asy
   dial(engine);
   assert.equal(dialled.at(-1), "https://192.168.1.21:9778/pf2", "WebTransport first again");
 });
+
+test("the connection dot is the wire's rating, read once a second", () => {
+  const { engine, mod } = engineIn("ready");
+  Object.assign(mod, {
+    _pf_session_phase: () => 2,
+    _pf_session_audio_channels: () => 0,
+    _pf_hud_text: () => 0,
+  });
+  const snapshot = () => ({ width: 0, height: 0, decoded: 60, dropped: 30, uploadMs: 0, backend: null });
+  Object.assign(engine, { video: { snapshot } });
+  const second = (rating: number) => {
+    mod._pf_hud_quality = () => rating;
+    Object.assign(engine, { lastSecond: performance.now() - 1000 });
+    (engine as unknown as { updateSession(): void }).updateSession();
+    return (engine.current as { stats: { quality: string } }).stats.quality;
+  };
+  assert.equal(second(3), "poor");
+  assert.equal(second(0), "starting");
+});

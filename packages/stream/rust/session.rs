@@ -96,6 +96,8 @@ struct Client {
     /// The last closed window, and its lines as last asked for.
     snap: Option<StatsSnapshot>,
     text: String,
+    /// The connection dot's last three windows.
+    quality: hud::QualityState,
     /// The shared post-loss freeze: the page withholds decoded frames until the stream
     /// re-anchors, as every native client does.
     gate: ReanchorGate,
@@ -142,6 +144,7 @@ impl Client {
             fps: 0,
             snap: None,
             text: String::new(),
+            quality: hud::QualityState::default(),
             gate: ReanchorGate::new(0),
             next_index: None,
             pending_rfi: None,
@@ -216,6 +219,7 @@ pub extern "C" fn pf_session_reset() {
         c.receipts.clear();
         c.snap = None;
         c.text.clear();
+        c.quality = hud::QualityState::default();
     });
     crate::audio::reset();
     crate::rumble::reset();
@@ -924,8 +928,16 @@ pub extern "C" fn pf_hud_drain(skipped: u32) {
         snap.decoder = "WebCodecs".into();
         let rtt = crate::transport::rtt_us();
         snap.rtt_us = (rtt > 0).then_some(rtt);
+        hud::quality(&snap, &mut c.quality);
         c.snap = Some(snap);
     });
+}
+
+/// The connection dot, `0` starting to `3` poor ([`hud::Quality::index`]), as of the last
+/// [`pf_hud_drain`].
+#[unsafe(no_mangle)]
+pub extern "C" fn pf_hud_quality() -> u32 {
+    CLIENT.with(|c| c.borrow().quality.shown().index())
 }
 
 /// The last window as overlay lines (`<role>\t<text>\n` each) for `tier` (`StatsVerbosity`

@@ -21,6 +21,8 @@ export interface SessionStats {
   accessUnits: number;
   decoded: number;
   dropped: number;
+  /** The connection dot: the wire's loss, repairs and round trip. */
+  quality: "starting" | "good" | "fair" | "poor";
   /** Average milliseconds uploading a frame to the video plane. */
   uploadMs: number;
   backend: "webgpu" | "webgl2" | null;

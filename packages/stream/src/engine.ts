@@ -73,6 +73,8 @@ export interface HudLine {
   text: string;
 }
 const ROLES: readonly HudLine["role"][] = ["primary", "detail", "muted", "warn"];
+/** `_pf_hud_quality`'s numbers, in order. */
+const QUALITY: readonly SessionStats["quality"][] = ["starting", "good", "fair", "poor"];
 const UTF8 = new TextDecoder();
 
 export interface SessionStats {
@@ -84,6 +86,9 @@ export interface SessionStats {
   accessUnits: number;
   decoded: number;
   dropped: number;
+  /** The connection, rated from the wire's loss, repairs and round trip; presentation skips
+   *  never count. `starting` until the first second closes. */
+  quality: "starting" | "good" | "fair" | "poor";
   /** Average milliseconds uploading a frame to the video plane. */
   uploadMs: number;
   backend: "webgpu" | "webgl2" | null;
@@ -277,6 +282,7 @@ export class Engine {
   /** What the last `streaming` notification showed, so an unchanged frame notifies no one. */
   private shown = "";
   private lastDropped = 0;
+  private quality: SessionStats["quality"] = "starting";
   /** The last launch notice and when it arrived (`performance.now()`). */
   private launchNotice: { text: string; at: number } | null = null;
   /** The session's last access advert, read when its counter moves, with its deadline on
@@ -683,6 +689,7 @@ export class Engine {
     this.tier = this.tunable.statsTier;
     this.hud = [];
     this.lastDropped = 0;
+    this.quality = "starting";
     // The wasm frame count starts again at zero with each session.
     this.lastFrames = 0;
     this.lastSecond = performance.now();
@@ -1314,6 +1321,7 @@ export class Engine {
       const dropped = v?.dropped ?? 0;
       this.mod._pf_hud_drain(Math.max(0, dropped - this.lastDropped));
       this.lastDropped = dropped;
+      this.quality = QUALITY[this.mod._pf_hud_quality()] ?? "starting";
       this.hud = this.readHud();
     }
     const state: EngineState = {
@@ -1326,6 +1334,7 @@ export class Engine {
         accessUnits: frames,
         decoded: v?.decoded ?? 0,
         dropped: v?.dropped ?? 0,
+        quality: this.quality,
         uploadMs: v?.uploadMs ?? 0,
         audio: this.audio?.snapshot() ?? { state: "off", frames: 0, lost: 0, errors: 0, underruns: 0 },
         backend: v?.backend ?? null,
