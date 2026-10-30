@@ -519,18 +519,18 @@ class App {
   /**
    * How to reach what a card or the address field names. A packaged page has one way, the
    * plane's tunnel. Otherwise a host the server lists, or one reached through it before, keeps
-   * its route; a typed IP address goes through the server when it offers that; anything else is
-   * dialled directly.
+   * its route and its bridge; a typed IP address goes through the server when it offers that;
+   * anything else is dialled directly.
    */
   private targetOf(address: string): string | HostTarget {
     if (packaged()) return tunnelTarget(address);
     const listed = this.configured.get(address);
     if (listed) return listed;
-    const known = this.engine.knownHosts().find((h) => h.origin === address);
-    if (known?.plane) return { api: address, plane: known.plane };
     // Already a route through the server (a retry, a card): the address names its own plane.
     const route = routeOf(address);
     if (route) return route;
+    const known = this.engine.knownHosts().find((h) => h.origin === address);
+    if (known?.plane) return { api: address, plane: known.plane };
     const routed = this.viaServer ? throughServer(address) : null;
     if (!routed) return address;
     // A host tried directly before moves to the server route, name and pairing included.
@@ -1268,8 +1268,8 @@ function tunnelTarget(address: string): string | HostTarget {
   }
 }
 
-/** A typed IP address as the page's server reaches it (`/a/<ip:port>/`). Names stay direct: the
- *  server proxies private IP addresses only. */
+/** A typed IP address as the page's server reaches it (`/a/<ip:port>/`, the bridge at
+ *  `/wa/<ip:port>`). Names stay direct: the server proxies private IP addresses only. */
 function throughServer(address: string): HostTarget | null {
   let url: URL;
   try {
@@ -1281,7 +1281,7 @@ function throughServer(address: string): HostTarget | null {
   if (!/^\d{1,3}(\.\d{1,3}){3}$/.test(ip) && !/^\[[0-9a-f:.]+\]$/i.test(ip)) return null;
   // The page's own server is not a host; routing it through itself only finds the page again.
   if (url.host === location.host) return null;
-  return { api: new URL(`a/${ip}:${url.port}`, location.href).href, plane: ip };
+  return { api: new URL(`a/${ip}:${url.port}`, location.href).href, plane: ip, bridge: `wa/${ip}:${url.port}` };
 }
 
 /** The target a server route (`…/a/<ip:port>`) stands for, or `null` for any other address. */
@@ -1290,7 +1290,7 @@ function routeOf(address: string): HostTarget | null {
   if (!address.startsWith(base)) return null;
   const ipPort = address.slice(base.length).split("/")[0] ?? "";
   const plane = ipPort.replace(/:\d+$/, "");
-  return plane ? { api: address.replace(/\/+$/, ""), plane } : null;
+  return plane ? { api: address.replace(/\/+$/, ""), plane, bridge: `wa/${ipPort}` } : null;
 }
 
 /** A host from the page server's `config.json`. `wake` is its wake URL when the server can. */
@@ -1308,14 +1308,15 @@ async function configuredHosts(): Promise<{ listed: Map<string, Configured>; via
   try {
     const r = await fetch("./config.json", { cache: "no-store" });
     const c = (await r.json()) as {
-      hosts?: Array<{ name: string; api: string; plane: string; wake?: string }>;
+      hosts?: Array<{ name: string; api: string; plane: string; wake?: string; bridge?: string }>;
       add?: boolean;
     };
     const listed = new Map(
       (c.hosts ?? []).map((h): [string, Configured] => {
         const api = new URL(h.api, location.href).href.replace(/\/+$/, "");
         const wake = h.wake ? new URL(h.wake, location.href).href : undefined;
-        return [api, { api, plane: h.plane, name: h.name, ...(wake ? { wake } : {}) }];
+        const bridge = h.bridge ? { bridge: h.bridge } : {};
+        return [api, { api, plane: h.plane, name: h.name, ...(wake ? { wake } : {}), ...bridge }];
       }),
     );
     return { listed, viaServer: c.add === true };

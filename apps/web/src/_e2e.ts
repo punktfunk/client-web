@@ -14,6 +14,9 @@
 // `?tunnel=1&host=<address>` reaches the host the way a packaged TV page does: the plane's hash
 // over plain HTTP on its management port, then every call over the plane's `/mgmt` tunnel. No
 // proxy and no certificate to accept — the one route that works from a page the host never served.
+//
+// `&bridge=w/<host>` offers the server's WebSocket bridge, which the engine falls back to on its
+// own; `?carrier=ws` dials the bridge straight away, `?carrier=wt` never falls back.
 import { Engine, type EngineState, type HostTarget, originOf } from "@punktfunk/stream";
 
 declare const __PF_TRANSPORT_HOST__: string | undefined;
@@ -42,8 +45,13 @@ const TUNNEL = q.get("tunnel") === "1";
 const target: string | HostTarget = TUNNEL
   ? { api: originOf(q.get("host") ?? ""), plane: new URL(originOf(q.get("host") ?? "")).hostname, tunnel: true }
   : API
-    ? { api: new URL(API, location.href).href.replace(/\/+$/, ""), plane: q.get("plane") ?? location.hostname }
+    ? {
+        api: new URL(API, location.href).href.replace(/\/+$/, ""),
+        plane: q.get("plane") ?? location.hostname,
+        ...(q.get("bridge") ? { bridge: q.get("bridge")! } : {}),
+      }
     : location.origin;
+const CARRIER = q.get("carrier");
 const key = typeof target === "string" ? target : target.api;
 const SECONDS = Number(q.get("seconds") ?? "8");
 const LAUNCH = q.get("launch") ?? "";
@@ -52,20 +60,26 @@ try {
   const engine = await Engine.create({
     videoCanvas: document.getElementById("v") as HTMLCanvasElement,
     ...(__PF_TRANSPORT_HOST__ ? { transportHost: __PF_TRANSPORT_HOST__ } : {}),
+    ...(CARRIER === "ws" || CARRIER === "wt" ? { carrier: CARRIER } : {}),
     deviceName: "e2e",
   });
   let latest: EngineState = engine.current;
   const last = () => latest;
   let streamingSince = 0;
   let final: any = null;
+  // Which carrier the current dial opened: WebTransport, or the server's WebSocket bridge.
+  const carrier = () => (engine as any).carrierKind ?? "none";
   engine.onState((s) => {
     latest = s;
     if (s.kind === "streaming") {
-      if (!streamingSince) streamingSince = performance.now();
+      if (!streamingSince) {
+        streamingSince = performance.now();
+        log("state streaming over " + carrier());
+      }
       final = s.stats;
       return;
     }
-    log("state " + s.kind + ("message" in s ? ": " + s.message : "") + ("reason" in s ? ": " + s.reason : ""));
+    log("state " + s.kind + ("message" in s ? ": " + s.message : "") + ("reason" in s ? ": " + s.reason : "") + " [" + carrier() + "]");
   });
 
   // A PIN means a fresh pairing: whatever this browser remembers of the host is stale.
