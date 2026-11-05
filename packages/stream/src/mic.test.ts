@@ -1,9 +1,9 @@
 // The microphone: a start overtaken by a stop, or by a stop and another start, closes what it
-// opened, so exactly one capture is ever live.
+// opened, so exactly one capture is ever live. The worklet's resampler brings any rate to 48 kHz.
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { MicPipe } from "./mic.ts";
+import { MicPipe, RESAMPLER } from "./mic.ts";
 
 /** Browser stand-ins for one test; `prompts` resolves each `getUserMedia` the page asked for. */
 function fakeBrowser() {
@@ -95,5 +95,27 @@ test("a stop while the worklet loads closes that start's capture", async () => {
     assert.ok(b.contexts.every((c) => c.closed));
   } finally {
     b.restore();
+  }
+});
+
+type Resampler = { push(x: Float32Array, emit: (v: number) => void): void };
+const Resampler = new Function(`${RESAMPLER}; return Resampler;`)() as new (from: number) => Resampler;
+
+/** One second of a ramp at `rate`, pushed in render quanta; what comes out at 48 kHz. */
+const resampled = (rate: number): number[] => {
+  const r = new Resampler(rate);
+  const out: number[] = [];
+  const ramp = Float32Array.from({ length: rate }, (_, i) => i);
+  for (let at = 0; at < ramp.length; at += 128) r.push(ramp.subarray(at, at + 128), (v) => out.push(v));
+  return out;
+};
+
+test("the resampler brings a ramp to 48 kHz across block edges, up and down", () => {
+  for (const rate of [44_100, 16_000, 96_000]) {
+    const out = resampled(rate);
+    // A second in is a second out, less the samples still waiting on the next block.
+    assert.ok(out.length <= 48_000 && out.length >= 48_000 - 3, `${rate}: ${out.length}`);
+    const step = rate / 48_000;
+    out.forEach((v, j) => assert.ok(Math.abs(v - j * step) < 1e-3, `${rate} sample ${j}: ${v}`));
   }
 });

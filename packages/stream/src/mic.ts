@@ -5,7 +5,7 @@
 // cancellation keeps the host's audio, playing from the speakers, out of what goes back.
 //
 // Capture is an `AudioWorklet` rather than `MediaStreamTrackProcessor`, which only Chromium has;
-// the worklet cuts 20 ms frames at 48 kHz, WebCodecs' `AudioEncoder` makes them Opus, and Rust
+// the worklet brings the device's rate to 48 kHz and cuts 20 ms frames, WebCodecs' `AudioEncoder` makes them Opus, and Rust
 // wraps each as the uplink datagram. The host decodes into its virtual microphone.
 
 import type { PunktfunkModule } from "./emscripten.ts";
@@ -16,24 +16,55 @@ const FRAME = 960;
 
 export type MicState = "off" | "starting" | "on" | "denied" | "unsupported";
 
-const WORKLET = `
+/**
+ * Linear resampling to 48 kHz, as source the worklet runs and a test can. `push` takes one block
+ * at the context's rate and hands each 48 kHz sample to `emit`; the last sample and the
+ * fractional position carry into the next block.
+ */
+// ponytail: linear interpolation with no low-pass, fine for voice. A windowed-sinc filter if
+// music, or rates far above 48 kHz, ever go up this path.
+export const RESAMPLER = `
+class Resampler {
+  constructor(from) {
+    this.step = from / ${SAMPLE_RATE};
+    this.pos = 0;
+    this.prev = 0;
+  }
+  push(x, emit) {
+    const n = x.length;
+    if (!n) return;
+    let p = this.pos;
+    for (; p < n - 1; p += this.step) {
+      const i = Math.floor(p);
+      const a = i < 0 ? this.prev : x[i];
+      emit(a + (x[i + 1] - a) * (p - i));
+    }
+    this.pos = p - n;
+    this.prev = x[n - 1];
+  }
+}`;
+
+const WORKLET = `${RESAMPLER}
 class PunktfunkMic extends AudioWorkletProcessor {
   constructor() {
     super();
     this.buf = new Float32Array(${FRAME});
     this.at = 0;
-  }
-  process(inputs) {
-    const ch = inputs[0] && inputs[0][0];
-    if (!ch) return true;
-    for (let i = 0; i < ch.length; i++) {
-      this.buf[this.at++] = ch[i];
+    this.resampler = sampleRate === ${SAMPLE_RATE} ? null : new Resampler(sampleRate);
+    this.add = (v) => {
+      this.buf[this.at++] = v;
       if (this.at === this.buf.length) {
         this.port.postMessage(this.buf, [this.buf.buffer]);
         this.buf = new Float32Array(${FRAME});
         this.at = 0;
       }
-    }
+    };
+  }
+  process(inputs) {
+    const ch = inputs[0] && inputs[0][0];
+    if (!ch) return true;
+    if (this.resampler) this.resampler.push(ch, this.add);
+    else for (let i = 0; i < ch.length; i++) this.add(ch[i]);
     return true;
   }
 }
@@ -86,7 +117,8 @@ export class MicPipe {
       return;
     }
     this.stream = stream;
-    const ctx = new AudioContext({ sampleRate: SAMPLE_RATE });
+    // The device's own rate: Firefox refuses a source whose rate differs from its context's.
+    const ctx = new AudioContext();
     this.ctx = ctx;
     const drop = () => {
       for (const t of stream.getTracks()) t.stop();
