@@ -286,10 +286,15 @@ export class ConsoleUi implements Ui {
     this.screen = screen;
     // A page-level change of screen counts as a move, as a key does.
     if (was?.kind !== screen.kind) this.inputAt = performance.now();
-    const web = (WEB_SCREENS.has(screen.kind) && !this.held) || !this.started;
-    this.fallback.render(web ? screen : { kind: "console" });
+    this.fallback.render(this.shellScreen(screen));
     if (!this.started) return;
     this.follow(was, screen);
+  }
+
+  /** What the web shell draws for `screen`: one of its own sheets while no launch hold covers
+   *  it, every screen before the console is up, and otherwise nothing. */
+  private shellScreen(screen: Screen): Screen {
+    return (WEB_SCREENS.has(screen.kind) && !this.held) || !this.started ? screen : { kind: "console" };
   }
 
   destroy(): void {
@@ -359,11 +364,12 @@ export class ConsoleUi implements Ui {
     }
     if (drew) this.cost(now - before, now, width, height);
     this.state = this.engine.console.state();
-    // A launch hold covers the stream until the game is up: the page's own overlay waits.
+    // A launch hold covers the stream until the game is up: the page's own overlay waits. A
+    // hold that ends short of the stream (cancelled, failed) leaves a console screen.
     const holding = !!(this.state & CONSOLE_STATE.HOLDS_LAUNCH);
     if (holding !== this.held && this.screen) {
       this.held = holding;
-      this.fallback.render(holding ? { kind: "console" } : this.screen);
+      this.fallback.render(this.shellScreen(this.screen));
     }
     const showing = this.showing();
     // The canvas takes the pointer only while the console is on it; over a stream the pointer
