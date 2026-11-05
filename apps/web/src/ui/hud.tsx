@@ -263,12 +263,12 @@ const ROLE_CLASS: Record<HudLine["role"], string> = {
   warn: "text-amber-500",
 };
 
-/** Where each corner puts the statistics. The top ones clear the toolbar. */
+/** Where each corner puts the statistics. The top ones clear the toolbar; the sides, a notch. */
 const CORNER_CLASS: Record<HudCorner, string> = {
-  topLeading: "top-[calc(3.5rem+var(--pf-inset))] left-inset",
-  topTrailing: "top-[calc(3.5rem+var(--pf-inset))] right-inset",
-  bottomLeading: "bottom-inset left-inset",
-  bottomTrailing: "bottom-inset right-inset",
+  topLeading: "top-[calc(3.5rem+var(--pf-inset))] left-[var(--pf-inset-left)]",
+  topTrailing: "top-[calc(3.5rem+var(--pf-inset))] right-[var(--pf-inset-right)]",
+  bottomLeading: "bottom-inset left-[var(--pf-inset-left)]",
+  bottomTrailing: "bottom-inset right-[var(--pf-inset-right)]",
 };
 
 /** The stats overlay every client draws, in this session's tier and vocabulary, then what only a

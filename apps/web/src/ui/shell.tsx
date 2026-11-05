@@ -96,8 +96,8 @@ function Shell({ shell }: { shell: WebShell }): JSX.Element {
     <>
       <ShellFrame screen={screen} actions={shell.act} />
       {/* Outside the frame, so a toast shows over a live picture and over the gamepad console
-          alike, and never comes and goes with a page. */}
-      <Toaster />
+          alike, and never comes and goes with a page. Clear of a notch at the right edge. */}
+      <Toaster offset={{ right: "max(24px, env(safe-area-inset-right))" }} />
     </>
   );
 }
