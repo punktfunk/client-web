@@ -6,7 +6,7 @@
 use crate::hosts::Hosts;
 use crate::proof::Outcome;
 use crate::visitor::Visitor;
-use axum::body::{Body, Bytes, HttpBody as _};
+use axum::body::{to_bytes, Body, Bytes, HttpBody as _};
 use axum::extract::{Path, Request, State};
 use axum::http::{header, HeaderMap, HeaderName, HeaderValue, Method, StatusCode, Uri};
 use axum::response::{IntoResponse, Response};
@@ -310,7 +310,7 @@ pub(crate) fn typed_target(hosts: &Hosts, s: &str) -> Result<(IpAddr, u16), &'st
 /// `learn`: the listed host whose first-contact certificate becomes its pin. A token, and the
 /// device exchange that earns one, go only over a connection whose leaf is the identity the page
 /// paired with, named in `pf-host`. Only health and the plane's hash are asked without it. A
-/// request without a token carries at most [`OPEN_BODY`].
+/// request without a token carries at most [`OPEN_BODY`], sent within [`OPEN_BODY_TIME`].
 async fn relay(
     hosts: &Hosts,
     addr: &str,
@@ -336,11 +336,15 @@ async fn relay(
     let body = match body.is_end_stream() {
         true => None,
         false if token => Some(reqwest::Body::wrap_stream(body.into_data_stream())),
-        false => match axum::body::to_bytes(body, OPEN_BODY).await {
-            Ok(bytes) => Some(reqwest::Body::from(bytes)),
-            Err(_) => {
+        false => match tokio::time::timeout(OPEN_BODY_TIME, to_bytes(body, OPEN_BODY)).await {
+            Ok(Ok(bytes)) => Some(reqwest::Body::from(bytes)),
+            Ok(Err(_)) => {
                 let why = "a request without a device token carries at most 4 KiB";
                 return api_error(StatusCode::PAYLOAD_TOO_LARGE, why);
+            }
+            Err(_) => {
+                let why = "a request without a device token sends its body within 10 s";
+                return api_error(StatusCode::REQUEST_TIMEOUT, why);
             }
         },
     };
@@ -424,6 +428,8 @@ async fn relay(
 
 /// What a request without a device token may carry: the device exchange's JSON is far less.
 const OPEN_BODY: usize = 4 << 10;
+/// How long that body may take. A trickled one would hold a connection for nothing.
+const OPEN_BODY_TIME: Duration = Duration::from_secs(10);
 /// The header the page names its paired host in, by identity fingerprint. Never forwarded.
 pub const HOST_HEADER: &str = "pf-host";
 const RELOAD: &str = "This page is out of date. Reload it and try again.";

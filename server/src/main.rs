@@ -76,7 +76,7 @@ async fn main() -> anyhow::Result<()> {
     } else {
         listen::CONNS
     };
-    let caps = listen::Capped::new(listen::CONNS, per_peer);
+    let caps = listen::Capped::new(listen::CONNS, per_peer, listen::IDLE);
     listen::serve(listener, app, tls, handle, caps).await?;
     Ok(())
 }
