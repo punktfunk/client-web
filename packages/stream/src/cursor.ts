@@ -32,6 +32,9 @@ export class HostCursor {
   private worn: Shape | null = null;
   /** The shape and size the canvas's cursor was last built from. */
   private built: { shape: Shape; w: number; h: number; css: string } | null = null;
+  /** What this last set the canvas's `cursor` to. Read back, a `url()` comes quoted and never
+   *  matches the string set. */
+  private assigned = "";
 
   /** Keep a bitmap the host sent. Called from the glue, possibly before the first frame. */
   shape(serial: number, w: number, h: number, hotX: number, hotY: number, rgba: Uint8Array): void {
@@ -61,7 +64,10 @@ export class HostCursor {
     }
     // Capture mode before the lock takes the arrow: a click is what captures.
     const css = input && desktop && !captured ? (forwarded ? this.css(mod, canvas, streamWidth) : "none") : "";
-    if (css !== canvas.style.cursor) canvas.style.cursor = css;
+    if (css !== this.assigned) {
+      this.assigned = css;
+      canvas.style.cursor = css;
+    }
   }
 
   /** The CSS `cursor` for the host's pointer at the size the picture is shown. */
@@ -100,6 +106,7 @@ export class HostCursor {
     this.sent = null;
     this.worn = null;
     this.built = null;
+    this.assigned = "";
     if (canvas.style?.cursor) canvas.style.cursor = "";
   }
 }

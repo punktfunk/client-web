@@ -14,6 +14,9 @@ services:
       TS_AUTHKEY: ${TS_AUTHKEY}
       TS_STATE_DIR: /var/lib/tailscale
       TS_SERVE_CONFIG: /config/serve.json
+      # Kernel networking. The page server shares this container's network and dials the hosts'
+      # tailnet addresses itself, which the image's default userspace mode does not carry.
+      TS_USERSPACE: "false"
     volumes:
       - tailscale:/var/lib/tailscale
       - ./tailscale-serve.json:/config/serve.json:ro

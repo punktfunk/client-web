@@ -75,6 +75,8 @@ export async function coverBytes(blob: Blob): Promise<Uint8Array | null> {
     const { width: w, height: h } = bitmap;
     scratch ??= new OffscreenCanvas(COVER_W, COVER_H).getContext("2d", { willReadFrequently: true });
     if (!scratch) return null;
+    // The scratch still holds the last cover, which a transparent one would show through.
+    scratch.clearRect(0, 0, w, h);
     scratch.drawImage(bitmap, 0, 0);
     bitmap.close();
     return bmp(w, h, scratch.getImageData(0, 0, w, h).data);

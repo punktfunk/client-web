@@ -43,9 +43,13 @@ export function wasmFeed(mod: PunktfunkModule): Feed {
         slot = mod._pf_rx_claim();
       }
       // A slot holds any datagram the protocol allows; a longer one would run into the next.
+      // Only a datagram given up here is a drop: the bitrate driver reads it as this
+      // receiver's own loss.
       if (slot >= 0 && bytes.length <= mod._pf_rx_stride()) {
         mod.HEAPU8.set(bytes, mod._pf_rx_base() + slot * mod._pf_rx_stride());
         mod._pf_rx_commit(slot, bytes.length);
+      } else {
+        mod._pf_rx_lost();
       }
       // The session is pumped once per burst, on a task right after it: a frame starts
       // decoding when its last datagram lands, not at the next animation frame.

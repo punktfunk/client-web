@@ -37,6 +37,7 @@ import {
   tvBack,
 } from "@punktfunk/stream";
 import { FrameMeter, type Row, type Step, Sweep, table } from "./console-cost.ts";
+import { hostRow, originFor } from "./console-hosts.ts";
 import { coverBytes } from "./cover.ts";
 import type { Actions, HostCard, Screen, Ui } from "./types.ts";
 
@@ -102,8 +103,9 @@ const RED_KEY = 403;
  *  measuring page prices it once more: a remote with no spare key still gets every screen. */
 const QUIET_MS = 15_000;
 
-/** The screens the console cannot draw; everything else is the console's. */
-const WEB_SCREENS = new Set<Screen["kind"]>(["accept", "trust", "link", "streaming"]);
+/** The screens the console cannot draw, and the page's settings sheet, which the web shell's
+ *  sidebar and stream overlay open and only it can close; everything else is the console's. */
+const WEB_SCREENS = new Set<Screen["kind"]>(["accept", "trust", "link", "streaming", "settings"]);
 
 /** How long the console waits on a `FetchProfiles` answer before it dials without one
  *  (`pf_console_ui` `PROFILES_WAIT`). */
@@ -130,6 +132,9 @@ export class ConsoleUi implements Ui {
   /** The web shell was told to stand aside for a launch hold over the stream. */
   private held = false;
   private screen: Screen | null = null;
+  /** The last screen `follow` saw. The settings sheet is no step of a flow, so the screen after
+   *  it follows the one before it: a stream it opened over still ends. */
+  private followed: Screen | null = null;
   /** Host rows by the key the console knows them by, and the origin each stands for. */
   private origins = new Map<string, string>();
   private hosts: HostCard[] = [];
@@ -286,10 +291,16 @@ export class ConsoleUi implements Ui {
     this.screen = screen;
     // A page-level change of screen counts as a move, as a key does.
     if (was?.kind !== screen.kind) this.inputAt = performance.now();
-    const web = (WEB_SCREENS.has(screen.kind) && !this.held) || !this.started;
-    this.fallback.render(web ? screen : { kind: "console" });
-    if (!this.started) return;
-    this.follow(was, screen);
+    this.fallback.render(this.shellScreen(screen));
+    if (!this.started || screen.kind === "settings") return;
+    this.follow(this.followed, screen);
+    this.followed = screen;
+  }
+
+  /** What the web shell draws for `screen`: one of its own sheets while no launch hold covers
+   *  it, every screen before the console is up, and otherwise nothing. */
+  private shellScreen(screen: Screen): Screen {
+    return (WEB_SCREENS.has(screen.kind) && !this.held) || !this.started ? screen : { kind: "console" };
   }
 
   destroy(): void {
@@ -359,11 +370,12 @@ export class ConsoleUi implements Ui {
     }
     if (drew) this.cost(now - before, now, width, height);
     this.state = this.engine.console.state();
-    // A launch hold covers the stream until the game is up: the page's own overlay waits.
+    // A launch hold covers the stream until the game is up: the page's own overlay waits. A
+    // hold that ends short of the stream (cancelled, failed) leaves a console screen.
     const holding = !!(this.state & CONSOLE_STATE.HOLDS_LAUNCH);
     if (holding !== this.held && this.screen) {
       this.held = holding;
-      this.fallback.render(holding ? { kind: "console" } : this.screen);
+      this.fallback.render(this.shellScreen(this.screen));
     }
     const showing = this.showing();
     // The canvas takes the pointer only while the console is on it; over a stream the pointer
@@ -531,8 +543,8 @@ export class ConsoleUi implements Ui {
     }
     this.imeText = field.text;
     this.ime.value = field.text;
-    // A PIN or a port wants the number pad; an address wants the dot beside the digits.
-    this.ime.inputMode = field.digits ? "numeric" : "decimal";
+    // A PIN or a port wants the number pad; a name, a title or an address the full keyboard.
+    this.ime.inputMode = field.digits ? "numeric" : "text";
     this.ime.focus();
     this.ime.setSelectionRange(field.text.length, field.text.length);
   }
@@ -613,6 +625,8 @@ export class ConsoleUi implements Ui {
         this.hosts = s.hosts;
         this.pushHosts();
         if (s.error) this.fetchFailed("The host did not answer", s.error);
+        // Home only with the engine on no host: what the console asked for will not follow.
+        this.dropPending();
         if (was?.kind === "streaming" || (this.dialled && was?.kind !== "home")) {
           this.dialled = false;
           c.phase(3);
@@ -651,6 +665,7 @@ export class ConsoleUi implements Ui {
         return;
       case "error":
         this.dialled = false;
+        this.dropPending();
         this.fetchFailed(s.head, s.text);
         c.phase(2, `${s.head}. ${s.text}`);
         this.pushPair("Idle");
@@ -658,6 +673,15 @@ export class ConsoleUi implements Ui {
       default:
         return;
     }
+  }
+
+  /** Forget the steps waiting on a connect that ended, so a later visit to that host does not
+   *  play, pair or knock unasked. */
+  private dropPending(): void {
+    this.pendingPlay = null;
+    this.profilesAsk = null;
+    this.pendingPin = null;
+    this.pendingKnock = null;
   }
 
   /** The shelf the console is waiting on could not be reached: say so on it, with a retry. */
@@ -768,42 +792,18 @@ export class ConsoleUi implements Ui {
     const known = new Map(this.engine.knownHosts().map((h) => [h.origin, h]));
     this.origins.clear();
     const rows = this.hosts.map((h) => {
-      const row = this.rowOf(h, known.get(h.origin)?.fingerprint ?? h.fingerprint);
+      const row = hostRow(h, known.get(h.origin)?.fingerprint ?? h.fingerprint);
       this.origins.set(row.key, h.origin);
       return row;
     });
     this.engine.console.push(CONSOLE_PUSH.HOSTS, rows);
   }
 
-  private rowOf(h: HostCard, fp: string | undefined): ConsoleHostRow {
-    const url = new URL(h.origin);
-    const addr = h.plane ?? url.hostname;
-    const mgmt = Number(url.port) || 47990;
-    return {
-      key: fp ?? `${addr}:${mgmt}`,
-      id: h.origin,
-      name: h.label ?? h.name ?? addr,
-      addr,
-      port: 9778,
-      fp_hex: fp ?? "",
-      paired: !!fp,
-      saved: true,
-      online: h.reach === "ok",
-      mgmt_port: mgmt,
-      can_wake: !!h.wake && h.reach !== "ok",
-      last_used: h.seen ? Math.floor(h.seen / 1000) : null,
-      os: "",
-      pin: null,
-      bound_preset: null,
-      profile: h.profile ?? null,
-    };
-  }
-
   /** The row for an origin, from the home list or, for one only just added, from what the
    *  engine knows. */
   private row(origin: string): ConsoleHostRow {
     const card = this.hosts.find((h) => h.origin === origin) ?? ({ origin } as HostCard);
-    return this.rowOf(card, this.fingerprint(origin));
+    return hostRow(card, this.fingerprint(origin));
   }
 
   private fingerprint(origin: string): string | undefined {
@@ -840,10 +840,7 @@ export class ConsoleUi implements Ui {
       return;
     }
     if (a === "CancelConnect") {
-      this.pendingPlay = null;
-      this.profilesAsk = null;
-      this.pendingPin = null;
-      this.pendingKnock = null;
+      this.dropPending();
       this.dialled = false;
       // A request for access is withdrawn, so a late approval admits nothing.
       if (this.engine.current.kind === "awaiting-approval") this.actions?.cancelRequest();
@@ -1045,7 +1042,8 @@ export class ConsoleUi implements Ui {
   }
 
   /** Wake a host and keep the console's wake card current: seconds while the page's own wake
-   *  polls it, then online (the console connects by itself if asked to) or timed out. */
+   *  polls it, then online (the console connects by itself if asked to) or timed out. A wake
+   *  that never went out takes the card down; the page's toast says why. */
   private startWake(req: ConsoleReq, key: string, origin: string, then: boolean): void {
     this.endWake(false);
     const name = this.hosts.find((h) => h.origin === origin)?.name ?? key;
@@ -1063,8 +1061,11 @@ export class ConsoleUi implements Ui {
         if (online && !then) window.setTimeout(() => this.endWake(true), 1500);
       }
     };
-    this.waking = { req, key, origin, name, then, since, timer: window.setInterval(tick, 1000) };
-    this.actions?.wake(origin);
+    const waking = { req, key, origin, name, then, since, timer: window.setInterval(tick, 1000) };
+    this.waking = waking;
+    void this.actions?.wake(origin).then((sent) => {
+      if (!sent && this.waking === waking) this.endWake(true);
+    });
     tick();
   }
 
@@ -1076,10 +1077,7 @@ export class ConsoleUi implements Ui {
 
   /** The origin a console key or address stands for. */
   private originOf(key: string, addr: string): string | undefined {
-    const byKey = this.origins.get(key);
-    if (byKey) return byKey;
-    for (const [k, o] of this.origins) if (k.startsWith(`${addr}:`)) return o;
-    return this.hosts.find((h) => (h.plane ?? new URL(h.origin).hostname) === addr)?.origin;
+    return originFor(this.origins, this.hosts, key, addr);
   }
 }
 
@@ -1088,7 +1086,6 @@ export class ConsoleUi implements Ui {
 function imeField(): HTMLInputElement {
   const input = document.createElement("input");
   input.type = "text";
-  input.inputMode = "decimal";
   input.autocomplete = "off";
   input.tabIndex = -1;
   input.setAttribute("aria-hidden", "true");

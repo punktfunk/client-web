@@ -45,6 +45,7 @@ import {
   wakeFailed,
   wakingLine,
 } from "@punktfunk/stream";
+import { type Configured, readConfig, type ServerConfig } from "./config.ts";
 import { ConsoleUi } from "./ui/console.ts";
 import { noop, WebShell } from "./ui/shell.tsx";
 import type { HostCard, HostTools, ProfileCard, Screen, Tab, Ui } from "./ui/types.ts";
@@ -113,7 +114,7 @@ class App {
   private runningId: string | undefined;
   /** The running title is this device's launch, which End game may end. */
   private runningEndable = false;
-  /** What the host said when End game last ran from the library. */
+  /** What the host said when End game last ran from the library, until the next stream. */
   private endNotice: string | undefined;
   /** The title this device launched that the live stream plays, asked for when the menu opens. */
   private streamGame: { appId: string; title: string } | null = null;
@@ -122,7 +123,8 @@ class App {
   /** When the live stream began, while its exit hint is up; `0` once the hint is gone. */
   private hintSince = 0;
   private hintTimer = 0;
-  private wasStreaming = false;
+  /** The engine state the last render drew: each edge below is against it. */
+  private lastKind: EngineState["kind"] = "idle";
   private streamNoticeTimer = 0;
   /** The origin whose running title is being polled. */
   private pollingFor: string | null = null;
@@ -143,6 +145,9 @@ class App {
   /** A connect link the page opened with, until it is answered, and the title it asked for. */
   private link: { target: string | HostTarget; fp?: string; launch?: string } | null = null;
   private launchOnReady: string | null = null;
+  /** The fingerprint a followed link pinned its host to. Every reconnect to that host carries it
+   *  until the page is idle again. */
+  private pin: { origin: string; fp: string } | null = null;
   /** The settings page, or its dialog over a live stream. */
   private settingsOpen = false;
   /** The quick menu over a live picture; closed whenever the stream is not. */
@@ -156,6 +161,12 @@ class App {
   private gate: Gate | null = null;
   /** A Switch profile asked for a host that was not connected: it opens once the host is ready. */
   private switchOnReady: string | null = null;
+  /** The hosts the page's own server proxies, by the API origin the engine keys them under. */
+  private readonly configured: Map<string, Configured>;
+  /** Whether that server also proxies a host typed here by its IP address. */
+  private viaServer: boolean;
+  /** When the server's list may be asked for again after it turned the read away; `0`: not owed. */
+  private configAgainAt = 0;
 
   constructor(
     private readonly engine: Engine,
@@ -163,11 +174,10 @@ class App {
     /** The web shell, rather than the gamepad console: only it has tabs to keep. */
     private readonly web: boolean,
     private readonly uiCanvas: HTMLCanvasElement,
-    /** The hosts the page's own server proxies, by the API origin the engine keys them under. */
-    private readonly configured: Map<string, Configured>,
-    /** Whether that server also proxies a host typed here by its IP address. */
-    private readonly viaServer: boolean,
+    server: ServerConfig,
   ) {
+    this.configured = server.listed;
+    this.viaServer = server.viaServer;
     // A login's pass covers another host: the server now tells this browser its address and wake.
     onPass(() => void this.refreshConfigured());
     ui.mount({
@@ -190,7 +200,7 @@ class App {
         // Otherwise a stream a card asked for is still what the retry is for.
         if (this.dropped) this.resumeOnReady = this.dropped;
         this.dropped = null;
-        if ("origin" in s && s.origin) void engine.connect(this.targetOf(s.origin));
+        if ("origin" in s && s.origin) this.reconnect(s.origin);
       },
       // Leaving the profile gate goes back to the host, not away from it.
       back: () => (this.gate ? this.cancelGate() : engine.disconnect()),
@@ -204,7 +214,7 @@ class App {
       hostAction: (id) => void this.hostAction(id),
       endGame: () => void this.endGame(),
       sendLog: () => void this.sendLog(),
-      wake: (origin) => void this.wake(origin),
+      wake: (origin) => this.wake(origin),
       disconnect: (quit) => {
         this.menuOpen = false;
         engine.leave(quit);
@@ -250,6 +260,11 @@ class App {
         engine.setStatsTier(on ? (start === "off" ? "normal" : start) : "off");
       },
     });
+    // The server turned its list away: say so, and ask again on a later redraw of the hosts.
+    if (server.wait) {
+      this.configAgainAt = Date.now() + server.wait * 1000;
+      ui.notify(sentence(TOO_MANY), "error");
+    }
     this.applyPrefs();
     this.watchSize();
     if (packaged()) this.watchSleep();
@@ -269,6 +284,8 @@ class App {
 
   /** Facts in, words out. */
   private render(s: EngineState): void {
+    const was = this.lastKind;
+    this.lastKind = s.kind;
     // The gate waits on its host's `ready`; anything else ends the wait, and a connect that
     // ended short of it drops the Switch profile it was for.
     if (this.gate && (s.kind !== "ready" || s.origin !== this.gate.origin)) this.gate = null;
@@ -279,7 +296,7 @@ class App {
     }
     // The exit hint: armed on the edge into a stream, dropped by its timer or the stream's end.
     const streaming = s.kind === "streaming";
-    if (streaming && !this.wasStreaming && this.prefs.exitHint) {
+    if (streaming && was !== "streaming" && this.prefs.exitHint) {
       this.hintSince = Date.now();
       clearTimeout(this.hintTimer);
       this.hintTimer = window.setTimeout(() => {
@@ -288,8 +305,14 @@ class App {
       }, EXIT_HINT_MS);
     } else if (!streaming) {
       this.hintSince = 0;
+      clearTimeout(this.hintTimer);
     }
-    this.wasStreaming = streaming;
+    // A stream that ends takes the settings dialog over it along: how it ended is what to show.
+    // One that drops is what "Try again" brings back.
+    if (live(was) && !live(s.kind)) {
+      this.settingsOpen = false;
+      if (s.kind === "error") this.dropped = this.lastPlay;
+    }
     if (this.settingsOpen) {
       return this.show({ kind: "settings", values: this.prefs, streaming: s.kind === "streaming" });
     }
@@ -304,12 +327,13 @@ class App {
         this.launchOnReady = null;
         this.resumeOnReady = null;
         this.dropped = null;
+        this.pin = null;
         return this.web && this.tab === "library" ? this.showLibrary() : this.home();
       case "bad-address":
         // The field stays in front: what was typed is wrong and this is where it is fixed.
         this.adding = true;
         this.tab = "hosts";
-        return this.home(sentence(s.message));
+        return this.home();
       case "reaching":
         return this.show({ kind: "connecting", origin: s.origin, phase: "reaching" });
       case "blocked": {
@@ -342,7 +366,7 @@ class App {
         // The host closes after the ceremony, as it does for native clients; streaming is a
         // fresh connection.
         const origin = s.origin;
-        setTimeout(() => void this.engine.connect(this.targetOf(origin)), 300);
+        setTimeout(() => this.reconnect(origin), 300);
         return;
       }
       case "pair-refused":
@@ -407,15 +431,11 @@ class App {
         });
       case "error": {
         this.windowed();
-        // Was a stream live, or starting, when this happened? Then trying again resumes it.
-        const was = this.screen;
-        const streamed = was.kind === "streaming" || (was.kind === "connecting" && was.phase === "starting");
-        if (streamed) this.dropped = this.lastPlay;
         return this.show({
           kind: "error",
           head: s.skew
             ? "This host speaks a different version"
-            : streamed
+            : this.dropped
               ? "The stream stopped"
               : "Something went wrong",
           text: s.skew
@@ -428,8 +448,8 @@ class App {
   }
 
   // --- the tabs --------------------------------------------------------------------------
-  /** A sidebar entry. A flow left half-way — a PIN, a certificate, an error — is cancelled; the
-   *  library's own connection is kept, since it is what the Library tab shows. */
+  /** A sidebar entry. A flow left half-way — a PIN, a certificate, an error, the profile gate —
+   *  is cancelled; the library's own connection is kept, since it is what the Library tab shows. */
   private navigate(tab: Tab): void {
     const s = this.engine.current;
     if (tab === "settings") {
@@ -439,6 +459,7 @@ class App {
     this.settingsOpen = false;
     this.tab = tab;
     this.link = null;
+    this.gate = null;
     if (FLOWS.has(s.kind) && !(this.quiet && tab === "library")) {
       this.quiet = false;
       this.engine.disconnect();
@@ -478,10 +499,14 @@ class App {
   }
 
   // --- the host list ---------------------------------------------------------------------
-  private home(error?: string): void {
+  private home(): void {
     // A link waiting for its answer stays in front of the probes that redraw this list.
     if (this.link) return;
+    if (this.configAgainAt && Date.now() >= this.configAgainAt) void this.refreshConfigured();
     const cards = this.cards();
+    // A mistyped address stays said while the engine holds it, whatever redraws the list.
+    const s = this.engine.current;
+    const error = s.kind === "bad-address" ? sentence(s.message) : undefined;
     this.show({
       kind: "home",
       hosts: cards,
@@ -492,10 +517,17 @@ class App {
     void this.probe(cards.map((h) => h.origin));
   }
 
-  /** The server's list again, as a pass holder sees it. */
+  /** The server's list again: as a pass holder sees it, or once a turned-away read may retry. */
   private async refreshConfigured(): Promise<void> {
-    const again = await configuredHosts();
+    this.configAgainAt = 0;
+    const again = await readConfig(serverFetch(), location.href);
+    if (!again) return;
+    if (again.wait) {
+      this.configAgainAt = Date.now() + again.wait * 1000;
+      return;
+    }
     for (const [origin, c] of again.listed) this.configured.set(origin, c);
+    this.viaServer = again.viaServer;
     this.redrawLists();
   }
 
@@ -631,7 +663,19 @@ class App {
     this.link = null;
     if (!yes || !link) return this.home();
     this.launchOnReady = link.launch ?? null;
-    void this.engine.connect(link.target, link.fp ? { expectFingerprint: link.fp } : {});
+    const origin = typeof link.target === "string" ? originOf(link.target) : link.target.api.replace(/\/+$/, "");
+    this.pin = link.fp ? { origin, fp: link.fp } : null;
+    void this.engine.connect(link.target, this.pinned(origin));
+  }
+
+  /** Reach `origin` again: a retry, or the connection after a pairing. */
+  private reconnect(origin: string): void {
+    void this.engine.connect(this.targetOf(origin), this.pinned(origin));
+  }
+
+  /** What a connect to `origin` must check: the fingerprint a link pinned it to, if any. */
+  private pinned(origin: string): { expectFingerprint?: string } {
+    return this.pin?.origin === origin ? { expectFingerprint: this.pin.fp } : {};
   }
 
   /** A link to this host, pinned to its fingerprint when this browser has paired with it. The
@@ -650,18 +694,20 @@ class App {
   /**
    * Wake a host through the page's server, which sits on its network where a browser cannot send
    * a magic packet. Then ask after it every few seconds, as it boots, until it answers or a minute
-   * has gone.
+   * has gone. `false` when no packet went out: refused or failed, which the page has said.
    */
-  private async wake(origin: string): Promise<void> {
+  private async wake(origin: string): Promise<boolean> {
     const url = this.configured.get(origin)?.wake;
-    if (!url || this.waking.has(origin)) return;
+    if (!url) return false;
+    if (this.waking.has(origin)) return true;
     this.waking.add(origin);
     this.redrawLists();
     try {
       const r = await serverFetch()(url, { method: "POST" });
       if (r.status === 403 || r.status === 429) {
         const why = r.status === 429 ? sentence(TOO_MANY) : `Only a browser paired with ${this.nameOf(origin)} can wake it from this page.`;
-        return this.ui.notify(why, "error");
+        this.ui.notify(why, "error");
+        return false;
       }
       if (!r.ok) throw new Error(`wake refused (${r.status})`);
       let up = false;
@@ -672,9 +718,11 @@ class App {
         up = now === "ok";
       }
       if (!up) this.ui.notify(`${this.nameOf(origin)} didn't answer within a minute of waking. It may still be starting.`, "error");
+      return true;
     } catch (e) {
       console.warn("punktfunk: wake", e);
       this.ui.notify(`Couldn't wake ${this.nameOf(origin)} — this page's server didn't send the wake packet.`, "error");
+      return false;
     } finally {
       this.waking.delete(origin);
       this.redrawLists();
@@ -682,14 +730,18 @@ class App {
   }
 
   /** Forget a host. From the trust screen this is "forget and pair again", so the reconnect
-   *  follows — with the stored fingerprint gone, the next connection is a first one. */
+   *  follows — with the stored fingerprint gone, the next connection is a first one, held to
+   *  the fingerprint of a link that brought it here. */
   private forget(origin: string): void {
     const reconnect = this.screen.kind === "trust" && this.screen.origin === origin;
     this.reachCache.delete(origin);
     if (this.libraryFor === origin) this.clearLibrary();
+    const pin = this.pin;
     this.engine.forget(origin);
-    if (reconnect) void this.engine.connect(this.targetOf(origin));
-    else this.redrawLists();
+    if (!reconnect) return this.redrawLists();
+    // Forgetting disconnects, which drops a link's pin; pairing again is still held to it.
+    this.pin = pin;
+    this.reconnect(origin);
   }
 
   // --- the library ---------------------------------------------------------------------
@@ -703,10 +755,12 @@ class App {
       if (this.libraryFor !== s.origin) return;
       this.entries = entries;
       this.libraryError = undefined;
+      this.libraryAt = Date.now();
     } catch (e) {
       if (this.libraryFor !== s.origin) return;
+      // A failure keeps no clock: opening the host again asks again.
+      this.libraryAt = 0;
       if (e instanceof VersionSkew) {
-        this.libraryLoading = false;
         return this.show({
           kind: "error",
           head: "This host speaks a different version",
@@ -717,11 +771,7 @@ class App {
       // dead end.
       this.libraryError = e instanceof Error ? e.message : String(e);
     } finally {
-      if (this.libraryFor === s.origin) {
-        this.libraryLoading = false;
-        // A failure keeps no clock: opening the host again asks again.
-        if (!this.libraryError) this.libraryAt = Date.now();
-      }
+      if (this.libraryFor === s.origin) this.libraryLoading = false;
     }
     this.redrawLibrary();
     // Art after the grid, per entry: the grid should appear before its covers do.
@@ -888,9 +938,12 @@ class App {
       return this.render(this.engine.current);
     }
     const host = this.shelfHost();
+    const shelf = this.libraryFor;
     const [id, title] = [this.runningId, this.running];
     if (!host || !id || !title) return;
     const outcome = await host.endGame(id);
+    // Another shelf opened meanwhile: the answer is not about its titles.
+    if (this.libraryFor !== shelf) return;
     this.endNotice = gameEndNotice(outcome, title);
     if (gameGone(outcome)) {
       this.running = undefined;
@@ -1045,6 +1098,7 @@ class App {
 
   private dial(entry?: LibraryEntry, profile?: string): void {
     this.gate = null;
+    this.endNotice = undefined;
     this.lastPlay = { ...(entry ? { entry } : {}), ...(profile ? { profile } : {}) };
     this.engine.startStream({ ...this.streamOptions(), ...(entry ? { launch: entry } : {}), ...(profile ? { profile } : {}) });
   }
@@ -1187,6 +1241,9 @@ class App {
   }
 }
 
+/** A stream live or on its way: what a settings dialog sits over, and what a drop ends. */
+const live = (kind: EngineState["kind"]): boolean => kind === "streaming" || kind === "starting";
+
 /** A stream asked for: the title (unset: the desktop), and the profile the console picked. */
 interface Play {
   entry?: LibraryEntry;
@@ -1259,21 +1316,17 @@ function sentence(message: string): string {
  *  `https://` that `originOf` put there. */
 const bare = (origin: string): string => origin.replace(/^https:\/\//, "");
 
-/** The stream mode from the canvas: device pixels capped at 2×, and always even.
+/** The stream mode from the canvas's box: device pixels capped at 2×, and always even.
  *
  * H.264/HEVC are 4:2:0 — one chroma sample per 2×2 luma block — so a codec has no valid chroma
  * grid for an odd width or height, and the host refuses one. The window is whatever size it is,
- * so round each dimension down to even here rather than send the host something it must reject. */
+ * so round each dimension down to even here rather than send the host something it must reject.
+ * Measured only: the console sizes the canvas's buffer itself, and a write here would clear the
+ * frame it just drew. */
 function size(canvas: HTMLCanvasElement): [number, number] {
   const dpr = Math.min(window.devicePixelRatio || 1, 2);
   const even = (px: number) => Math.max(2, Math.floor(px) & ~1);
-  const w = even(canvas.clientWidth * dpr);
-  const h = even(canvas.clientHeight * dpr);
-  if (canvas.width !== w || canvas.height !== h) {
-    canvas.width = w;
-    canvas.height = h;
-  }
-  return [w, h];
+  return [even(canvas.clientWidth * dpr), even(canvas.clientHeight * dpr)];
 }
 
 /**
@@ -1326,39 +1379,6 @@ function routeOf(address: string): HostTarget | null {
   return plane ? { api: address.replace(/\/+$/, ""), plane, bridge: `wa/${ipPort}` } : null;
 }
 
-/** A host from the page server's `config.json`. `wake` is its wake URL when the server can. */
-interface Configured extends HostTarget {
-  name: string;
-  wake?: string;
-}
-
-/**
- * The hosts `punktfunk-client-web-server` proxies, from its `config.json`. Any other server has
- * none (a dev server answers `index.html`, which does not parse), and the page falls back to
- * addresses typed here.
- */
-async function configuredHosts(): Promise<{ listed: Map<string, Configured>; viaServer: boolean }> {
-  try {
-    const r = await serverFetch()("./config.json", { cache: "no-store" });
-    const c = (await r.json()) as {
-      hosts?: Array<{ name: string; api: string; plane?: string; wake?: string; bridge?: string }>;
-      add?: boolean;
-    };
-    const listed = new Map(
-      (c.hosts ?? []).map((h): [string, Configured] => {
-        const api = new URL(h.api, location.href).href.replace(/\/+$/, "");
-        const wake = h.wake ? new URL(h.wake, location.href).href : undefined;
-        const bridge = h.bridge ? { bridge: h.bridge } : {};
-        const plane = h.plane ? { plane: h.plane } : {};
-        return [api, { api, ...plane, name: h.name, ...(wake ? { wake } : {}), ...bridge }];
-      }),
-    );
-    return { listed, viaServer: c.add === true };
-  } catch {
-    return { listed: new Map(), viaServer: false };
-  }
-}
-
 /** Set by `vite.config.ts` when the dev server proxies a host; absent in a build. */
 declare const __PF_TRANSPORT_HOST__: string | undefined;
 
@@ -1374,9 +1394,9 @@ try {
     uiCanvas,
     ...(__PF_TRANSPORT_HOST__ ? { transportHost: __PF_TRANSPORT_HOST__ } : {}),
   });
-  const server = await configuredHosts();
+  const server = (await readConfig(serverFetch(), location.href)) ?? { listed: new Map(), viaServer: false };
   const ui = pickUi(engine, uiCanvas);
-  new App(engine, ui, ui instanceof WebShell, uiCanvas, server.listed, server.viaServer);
+  new App(engine, ui, ui instanceof WebShell, uiCanvas, server);
 } catch (e) {
   // Before there is an engine there is no interface to say this on; the one sheet the page
   // carries for exactly this case does.

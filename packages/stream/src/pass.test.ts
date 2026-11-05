@@ -68,3 +68,45 @@ test("a login renews the pass for that host, and only a route on this server ask
   await renewPass("https://desk.example:47990", "Bearer t", FP, fetch);
   assert.equal(seen.length, 1, "a host reached directly has no pass to ask for");
 });
+
+test("a renewal says whether this page holds a pass for the host afterwards", async () => {
+  store.clear();
+  const refused = recording(() => new Response("Too many requests", { status: 429 }));
+  assert.equal(await renewPass("https://page.example/app/h/desk", "Bearer t", FP, refused.fetch), false);
+  const given = recording(() => Response.json({ pass: PASS }));
+  assert.equal(await renewPass("https://page.example/app/h/desk", "Bearer t", FP, given.fetch), true);
+  assert.equal(await renewPass("https://desk.example:47990", "Bearer t", FP, given.fetch), true, "nothing to ask for");
+});
+
+test("a pass the server refused is asked for again with the next call", async () => {
+  store.clear();
+  const { Host } = await import("./host.ts");
+  const passes: number[] = [];
+  const answers = [429, 200];
+  const real = globalThis.fetch;
+  globalThis.fetch = (async (input: RequestInfo | URL) => {
+    const url = String(input);
+    if (url.endsWith("/auth/device/challenge")) return Response.json({ nonce: "ef".repeat(32) });
+    if (url.endsWith("/auth/device/token")) return Response.json({ token: "t", expires_at: Date.now() / 1000 + 3600 });
+    if (url.includes("/pass/")) {
+      const status = answers.shift() ?? 200;
+      passes.push(status);
+      return status === 200 ? Response.json({ pass: PASS }) : new Response("no", { status });
+    }
+    return new Response(null, { status: 404 });
+  }) as typeof fetch;
+  try {
+    const signer = { spki: async () => "", sign: async () => new Uint8Array(64).fill(1) };
+    const host = new Host("https://page.example/app/h/desk", FP, signer);
+    await host.art("/api/v1/library/art/a");
+    assert.deepEqual(passes, [429]);
+    assert.equal(passFor(FP), null);
+    await host.art("/api/v1/library/art/b");
+    assert.deepEqual(passes, [429, 200], "asked again");
+    assert.deepEqual([...passFor(FP)!], Array(32).fill(0xab));
+    await host.art("/api/v1/library/art/c");
+    assert.equal(passes.length, 2, "held: not asked a third time");
+  } finally {
+    globalThis.fetch = real;
+  }
+});

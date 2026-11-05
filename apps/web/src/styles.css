@@ -81,6 +81,10 @@
   /* `EDGE_INSET` from pf-console-ui's theme.rs: the distance anything keeps from the screen
      edge. The one metric the console shell and this one share. */
   --pf-inset: 24px;
+  /* The same inset from a side edge, clear of a phone's notch in landscape: the page is
+     `viewport-fit=cover`, so it draws under it. */
+  --pf-inset-left: max(var(--pf-inset), env(safe-area-inset-left));
+  --pf-inset-right: max(var(--pf-inset), env(safe-area-inset-right));
 }
 
 /* Map the palette to Tailwind colour/util tokens — both the shadcn vocabulary and @unom/ui's,

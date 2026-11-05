@@ -142,6 +142,8 @@ export interface PunktfunkModule {
   _pf_rx_stride(): number;
   _pf_rx_claim(): number;
   _pf_rx_commit(slot: number, len: number): void;
+  /** A datagram the feed gave up: the ring stayed full after a drain, or it outgrew a slot. */
+  _pf_rx_lost(): void;
   _pf_rx_dropped(): number;
 
   _malloc(bytes: number): number;

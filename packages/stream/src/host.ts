@@ -43,6 +43,8 @@ export class VersionSkew extends Error {
 export class Host {
   private readonly conn: Connection;
   private readonly client: Promise<ReturnType<typeof api.make>>;
+  /** Ask this page's server for the pass again, which a bridge dial shows. Never rejects. */
+  readonly renewPass: () => Promise<void>;
 
   constructor(
     readonly origin: string,
@@ -58,15 +60,20 @@ export class Host {
     // a token is for, and shown the pass a login renews.
     const via = fetch ?? serverFetch(hostFingerprint);
     const key = deviceKey({ url: origin, hostFingerprint, signer, fetch: via });
+    // The token the pass was last renewed with. A renewal the server refused leaves it, so the
+    // next call asks again; one in flight is shared.
     let earned = "";
+    let renewing: Promise<void> | null = null;
+    const renew = (header: string): Promise<void> =>
+      (renewing ??= renewPass(origin, header, hostFingerprint)
+        .then((held) => void (held && (earned = header)), () => undefined)
+        .finally(() => (renewing = null)));
+    this.renewPass = () => (fetch ? Promise.resolve() : key.header().then(renew, () => undefined));
     const credential = {
       kind: key.kind,
       header: async () => {
         const header = await key.header();
-        if (!fetch && header && header !== earned) {
-          earned = header;
-          await renewPass(origin, header, hostFingerprint).catch(() => undefined);
-        }
+        if (!fetch && header && header !== earned) await renew(header);
         return header;
       },
       invalidate: () => key.invalidate(),
@@ -224,6 +231,14 @@ async function refusal(res: Response, fallback: string): Promise<string> {
 function translate(operation: string, e: unknown): Error {
   const cause = unwrap(e);
   if (statusOf(cause) === 429) return new Error(TOO_MANY);
+  // The sign-in: only a 401 says the host no longer knows this device.
+  if (cause instanceof DeviceRefused && cause.status !== 401) {
+    return new Error(
+      cause.status === 429
+        ? TOO_MANY
+        : "this browser couldn't sign in to the host. Try again in a moment",
+    );
+  }
   if (cause instanceof DeviceRefused) return cause;
   if (cause instanceof SchemaError) return new VersionSkew(operation, String(cause));
   if (cause instanceof Error) return cause;

@@ -19,7 +19,8 @@ const { wasmFeed } = await import("./feed.ts");
 const BASE = 64;
 const STRIDE = 8;
 
-function fakeModule(slots = 4) {
+/** `drains`: whether the pump empties the ring, as a live session's does. */
+function fakeModule(slots = 4, drains = true) {
   const heap = new Uint8Array(256);
   const log: string[] = [];
   let free = slots;
@@ -30,6 +31,7 @@ function fakeModule(slots = 4) {
     _pf_rx_stride: () => STRIDE,
     _pf_rx_claim: () => (free > 0 ? slots - free-- : -1),
     _pf_rx_commit: (slot: number, len: number) => log.push(`commit ${slot} ${len}`),
+    _pf_rx_lost: () => log.push("lost"),
     _malloc: (n: number) => {
       log.push(`malloc ${n}`);
       return (next += 16) - 16;
@@ -39,7 +41,7 @@ function fakeModule(slots = 4) {
     _pf_uni_recv: (p: number, n: number) => log.push(`uni ${[...heap.subarray(p, p + n)]}`),
     __pfOnData: () => {
       log.push("pump");
-      free = slots;
+      if (drains) free = slots;
     },
   };
   return { mod, heap, log };
@@ -66,14 +68,22 @@ test("a full ring is drained before the datagram, not dropped", () => {
   const feed = feedOf(mod);
   feed.datagram(new Uint8Array([7]));
   feed.datagram(new Uint8Array([8, 9]));
-  assert.deepEqual(log, ["commit 0 1", "pump", "commit 0 2"]);
+  assert.deepEqual(log, ["commit 0 1", "pump", "commit 0 2"], "no drop is reported");
   assert.deepEqual([...heap.subarray(BASE, BASE + 2)], [8, 9]);
 });
 
-test("a datagram longer than a slot is not written", () => {
+test("a ring still full after the drain drops the datagram and says so once", () => {
+  const { mod, log } = fakeModule(1, false);
+  const feed = feedOf(mod);
+  feed.datagram(new Uint8Array([7]));
+  feed.datagram(new Uint8Array([8, 9]));
+  assert.deepEqual(log, ["commit 0 1", "pump", "lost"]);
+});
+
+test("a datagram longer than a slot is not written, and is a drop", () => {
   const { mod, log } = fakeModule();
   feedOf(mod).datagram(new Uint8Array(STRIDE + 1));
-  assert.deepEqual(log, []);
+  assert.deepEqual(log, ["lost"]);
 });
 
 test("control and stream bytes cross through a buffer freed after the call", () => {

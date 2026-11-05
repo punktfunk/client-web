@@ -89,6 +89,9 @@ const BUTTON_BITS: ReadonlyArray<readonly [bit: number, button: number]> = [
   [16, 4],
 ];
 
+/** Both Meta keys' virtual-key codes. */
+const META: ReadonlySet<number> = new Set([0x5b, 0x5c]);
+
 /** One wheel notch on the wire. */
 const WHEEL_NOTCH = 120;
 
@@ -163,6 +166,9 @@ export class InputPipe {
   private touches = new Map<number, number>();
   /** Keys and mouse buttons (`MouseEvent.buttons`) the host holds down, for a lost focus to let go of. */
   private keys = new Set<number>();
+  /** Keys that went down while Meta was held. macOS sends no keyup for those, so Meta's own
+   *  release lets go of them. */
+  private underMeta = new Set<number>();
   private held = 0;
   /** Per pad: when the escape chord went down (`0` up), whether its hold fired, and whether
    *  the menu chord is down — each chord fires on its edge, not every frame it is held. */
@@ -248,6 +254,9 @@ export class InputPipe {
     this.on(c, "contextmenu", (e: Event) => e.preventDefault());
     // A release that lands in another window or tab never comes back here.
     this.on(window, "blur", () => this.release());
+    this.on(document, "visibilitychange", () => {
+      if (document.visibilityState === "hidden") this.release();
+    });
     // The pad set is polled; these only keep the arrival and removal events honest.
     this.on(window, "gamepadconnected", (e: GamepadEvent) => this.arrive(e.gamepad));
     this.on(window, "gamepaddisconnected", (e: GamepadEvent) => this.leave(e.gamepad.index));
@@ -288,11 +297,18 @@ export class InputPipe {
 
   // --- keyboard --------------------------------------------------------------------------
   private key(e: KeyboardEvent, down: boolean): void {
-    // A field elsewhere on the page keeps its keys: the HUD has none, but a consumer's might.
+    // A field elsewhere on the page keeps its keys (the HUD has none, but a consumer's might), and
+    // so does the page's own menu while it has focus.
     const t = e.target as HTMLElement | null;
-    if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable)) return;
-    // The page's own menu, while it has focus, keeps its keys too.
-    if (t?.closest?.("[data-pf-keys=local]")) return;
+    const local =
+      !!t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable || !!t.closest?.("[data-pf-keys=local]"));
+    const vk = VK[e.code];
+    // A key the host holds is let go wherever its release lands: in the menu, a field, or as a chord.
+    if (!down && vk !== undefined && this.keys.has(vk)) {
+      if (!local) e.preventDefault();
+      return this.up(vk);
+    }
+    if (local) return;
     const chord =
       e.ctrlKey && e.altKey && e.shiftKey
         ? KEY_CHORDS[e.code]
@@ -306,22 +322,37 @@ export class InputPipe {
       if (down && !e.repeat) this.opts.onChord?.(chord);
       return;
     }
-    const vk = VK[e.code];
     if (vk === undefined) return;
     // Before the repeat check: a held Tab's own repeat would walk focus off the canvas.
     e.preventDefault();
+    if (!down) return this.up(vk);
     // Held keys repeat on the host; the browser's own repeat would double them.
-    if (down && e.repeat) return;
-    if (down) this.keys.add(vk);
-    else this.keys.delete(vk);
-    this.mod._pf_input(down ? KIND.KEY_DOWN : KIND.KEY_UP, vk, 0, 0, 0);
+    if (e.repeat) return;
+    this.keys.add(vk);
+    if (e.metaKey && !META.has(vk)) this.underMeta.add(vk);
+    this.mod._pf_input(KIND.KEY_DOWN, vk, 0, 0, 0);
   }
 
-  /** Let go of every key and button the host holds. */
+  /** The host lets go of `vk`. A Meta release also lets go of the keys pressed under it that
+   *  are still down: their own keyups never come on macOS. */
+  private up(vk: number): void {
+    this.keys.delete(vk);
+    this.underMeta.delete(vk);
+    this.mod._pf_input(KIND.KEY_UP, vk, 0, 0, 0);
+    if (!META.has(vk)) return;
+    const under = [...this.underMeta];
+    this.underMeta.clear();
+    for (const k of under) if (this.keys.has(k)) this.up(k);
+  }
+
+  /** Let go of every key, button and pad the host holds. The next poll sends a pad that is still
+   *  in use again. */
   private release(): void {
     for (const vk of this.keys) this.mod._pf_input(KIND.KEY_UP, vk, 0, 0, 0);
     this.keys.clear();
+    this.underMeta.clear();
     this.press(0);
+    for (const pad of this.pads) this.mod._pf_gamepad(pad, 0, 0, 0, 0, 0, 0, 0);
   }
 
   /** Send what changed in `MouseEvent.buttons`. A second button pressed or released while one is
@@ -342,6 +373,14 @@ export class InputPipe {
     e.preventDefault();
     if (phase === "down") {
       this.canvas.focus();
+      // Unlocked, a release over the HUD or another overlay still comes here.
+      if (!this.captured) {
+        try {
+          this.canvas.setPointerCapture(e.pointerId);
+        } catch {
+          // A pointer the browser no longer tracks: nothing to capture.
+        }
+      }
       // Pointer lock can only be taken from a gesture, so the first click in capture mode is
       // what arms it.
       if (this.opts.pointer === "capture" && !this.captured) this.lock();
@@ -466,6 +505,12 @@ export class InputPipe {
     target: Window,
     type: K,
     fn: (e: WindowEventMap[K]) => void,
+    opts?: AddEventListenerOptions,
+  ): void;
+  private on<K extends keyof DocumentEventMap>(
+    target: Document,
+    type: K,
+    fn: (e: DocumentEventMap[K]) => void,
     opts?: AddEventListenerOptions,
   ): void;
   private on<K extends keyof HTMLElementEventMap>(

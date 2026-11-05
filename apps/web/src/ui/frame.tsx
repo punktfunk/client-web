@@ -55,8 +55,9 @@ export function Frame({
   return (
     <div className="flex h-dvh">
       {/* Pinned at viewport height; the page beside it scrolls. `overflow-y-auto` lets the nav
-          itself scroll on a very short viewport rather than push Console mode off the bottom. */}
-      <aside className="hidden h-dvh w-16 shrink-0 flex-col overflow-y-auto border-r bg-card/40 p-2 sm:flex lg:w-60 lg:p-4">
+          itself scroll on a very short viewport rather than push Console mode off the bottom.
+          The margin keeps it clear of a phone's notch in landscape. */}
+      <aside className="ml-[env(safe-area-inset-left)] hidden h-dvh w-16 shrink-0 flex-col overflow-y-auto border-r bg-card/40 p-2 sm:flex lg:w-60 lg:p-4">
         <div className="mb-7 flex items-center justify-center gap-2 px-2 pt-1 lg:justify-start" aria-label="punktfunk" role="img">
           <BrandMark className="size-7 shrink-0 drop-shadow-[0_2px_12px_rgba(108,91,243,0.45)]" animate={false} />
           <Wordmark className="hidden h-4 w-auto lg:block" animate={false} />
@@ -82,7 +83,7 @@ export function Frame({
         </motion.nav>
       </aside>
 
-      <div className="flex min-w-0 flex-1 flex-col">
+      <div className="flex min-w-0 flex-1 flex-col pr-[env(safe-area-inset-right)] max-sm:pl-[env(safe-area-inset-left)]">
         {/* A phone has no sidebar to carry the brand, so the console's top bar does. */}
         <header className="flex items-center gap-2 border-b bg-card/40 px-4 py-3 sm:hidden">
           <span className="flex items-center gap-2" role="img" aria-label="punktfunk">

@@ -6,6 +6,7 @@ use axum_server::accept::Accept;
 use axum_server::tls_rustls::{RustlsAcceptor, RustlsConfig};
 use axum_server::Handle;
 use std::collections::HashMap;
+use std::future::Future as _;
 use std::io;
 use std::net::{IpAddr, SocketAddr};
 use std::pin::Pin;
@@ -15,9 +16,14 @@ use std::time::Duration;
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 use tokio::net::TcpStream;
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
+use tokio::time::{Instant, Sleep};
 
 pub const CONNS: usize = 256;
 pub const PER_PEER: usize = 32;
+/// A connection that moves no byte either way for this long is closed. A live bridge never
+/// gets near it: the page pings every second, the server every ten. 60 s is nginx's own read
+/// timeout, so a slow host reply on an HTTP/2 connection is not cut sooner than a proxy would.
+pub const IDLE: Duration = Duration::from_secs(60);
 const HANDSHAKE: Duration = Duration::from_secs(10);
 /// Per request on a kept-alive connection: a peer that never finishes its headers holds nothing.
 const HEADERS: Duration = Duration::from_secs(30);
@@ -25,19 +31,22 @@ const HEADERS: Duration = Duration::from_secs(30);
 type Open = Arc<Mutex<HashMap<IpAddr, usize>>>;
 
 /// Admits a connection while there is room: `total` at once, `per_peer` from one TCP peer (an
-/// IPv6 peer by its /64). One past either is dropped at accept, before TLS.
+/// IPv6 peer by its /64). One past either is dropped at accept, before TLS. One admitted is
+/// closed once it has moved no byte for `idle`.
 #[derive(Clone)]
 pub struct Capped {
     total: Arc<Semaphore>,
     per_peer: usize,
+    idle: Duration,
     open: Open,
 }
 
 impl Capped {
-    pub fn new(total: usize, per_peer: usize) -> Capped {
+    pub fn new(total: usize, per_peer: usize, idle: Duration) -> Capped {
         Capped {
             total: Arc::new(Semaphore::new(total)),
             per_peer,
+            idle,
             open: Open::default(),
         }
     }
@@ -53,8 +62,12 @@ impl Capped {
         }
         *n += 1;
         let peer = Peer(self.open.clone(), peer);
+        let now = Instant::now();
         Ok(Guarded {
             inner: stream,
+            idle: self.idle,
+            moved: now,
+            deadline: Box::pin(tokio::time::sleep_until(now + self.idle)),
             _held: (permit, peer),
         })
     }
@@ -85,10 +98,32 @@ impl Drop for Peer {
     }
 }
 
-/// A connection holding its place until it closes.
+/// A connection holding its place until it closes, or until it has been silent for `idle`.
+/// The silence ceiling covers what the header timeout cannot: a peer that sends nothing after
+/// TLS, an HTTP/2 connection left open, a body that stops arriving.
 pub struct Guarded {
     inner: TcpStream,
+    idle: Duration,
+    /// When a byte last moved either way.
+    moved: Instant,
+    /// Fires at or before `moved + idle`, and is moved on only when it fires.
+    deadline: Pin<Box<Sleep>>,
     _held: (OwnedSemaphorePermit, Peer),
+}
+
+impl Guarded {
+    /// What a read or write that would wait says: wait, or the connection has been silent too
+    /// long. The deadline is moved lazily, so a busy stream does not touch the timer per packet.
+    fn silent<T>(&mut self, cx: &mut Context<'_>) -> Poll<io::Result<T>> {
+        while self.deadline.as_mut().poll(cx).is_ready() {
+            let due = self.moved + self.idle;
+            if due <= Instant::now() {
+                return Poll::Ready(Err(io::ErrorKind::TimedOut.into()));
+            }
+            self.deadline.as_mut().reset(due);
+        }
+        Poll::Pending
+    }
 }
 
 impl AsyncRead for Guarded {
@@ -97,7 +132,15 @@ impl AsyncRead for Guarded {
         cx: &mut Context<'_>,
         buf: &mut ReadBuf<'_>,
     ) -> Poll<io::Result<()>> {
-        Pin::new(&mut self.inner).poll_read(cx, buf)
+        let before = buf.filled().len();
+        match Pin::new(&mut self.inner).poll_read(cx, buf) {
+            Poll::Pending => self.silent(cx),
+            Poll::Ready(Ok(())) if buf.filled().len() > before => {
+                self.moved = Instant::now();
+                Poll::Ready(Ok(()))
+            }
+            done => done,
+        }
     }
 }
 
@@ -107,7 +150,14 @@ impl AsyncWrite for Guarded {
         cx: &mut Context<'_>,
         buf: &[u8],
     ) -> Poll<io::Result<usize>> {
-        Pin::new(&mut self.inner).poll_write(cx, buf)
+        match Pin::new(&mut self.inner).poll_write(cx, buf) {
+            Poll::Pending => self.silent(cx),
+            Poll::Ready(Ok(n)) if n > 0 => {
+                self.moved = Instant::now();
+                Poll::Ready(Ok(n))
+            }
+            done => done,
+        }
     }
 
     fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
@@ -155,7 +205,7 @@ fn timeouts(b: &mut hyper_util::server::conn::auto::Builder<hyper_util::rt::Toki
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tokio::io::AsyncReadExt;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
     async fn listening(caps: Capped) -> SocketAddr {
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
@@ -174,7 +224,7 @@ mod tests {
 
     #[tokio::test]
     async fn one_peer_holds_thirty_two_and_all_hold_the_ceiling() {
-        let at = listening(Capped::new(CONNS, PER_PEER)).await;
+        let at = listening(Capped::new(CONNS, PER_PEER, IDLE)).await;
         let mut held = Vec::new();
         for _ in 0..PER_PEER {
             held.push(TcpStream::connect(at).await.unwrap());
@@ -189,7 +239,7 @@ mod tests {
         let mut again = TcpStream::connect(at).await.unwrap();
         assert!(admitted(&mut again).await, "room once one closed");
 
-        let at = listening(Capped::new(3, PER_PEER)).await;
+        let at = listening(Capped::new(3, PER_PEER, IDLE)).await;
         let mut three = Vec::new();
         for _ in 0..3 {
             three.push(TcpStream::connect(at).await.unwrap());
@@ -197,5 +247,25 @@ mod tests {
         tokio::time::sleep(Duration::from_millis(100)).await;
         let mut fourth = TcpStream::connect(at).await.unwrap();
         assert!(!admitted(&mut fourth).await, "past the ceiling");
+    }
+
+    #[tokio::test]
+    async fn a_silent_connection_closes_and_a_busy_one_stays() {
+        let idle = Duration::from_millis(200);
+        let at = listening(Capped::new(CONNS, PER_PEER, idle)).await;
+        let mut silent = TcpStream::connect(at).await.unwrap();
+        let mut b = [0u8; 1];
+        let read = tokio::time::timeout(Duration::from_secs(2), silent.read(&mut b)).await;
+        assert!(matches!(read, Ok(Ok(0) | Err(_))), "closed for its silence");
+
+        // A few bytes every 100 ms keep it open well past `idle`, and the request is answered.
+        let mut busy = TcpStream::connect(at).await.unwrap();
+        for part in b"GET / HTTP/1.1\r\nhost: x\r\n\r\n".chunks(5) {
+            busy.write_all(part).await.unwrap();
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+        let mut answer = [0u8; 12];
+        busy.read_exact(&mut answer).await.unwrap();
+        assert_eq!(&answer, b"HTTP/1.1 200");
     }
 }

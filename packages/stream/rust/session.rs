@@ -15,7 +15,7 @@
 
 use crate::abr::Abr;
 use crate::credential;
-use crate::recovery::{self, Ask, Asks, Step};
+use crate::recovery::{self, Ask, Asks, Freeze, Step};
 use crate::transport::{send_feedback, WebTransportDatagrams};
 use punktfunk_core::config::{CompositorPref, GamepadPref, Mode, Role};
 use punktfunk_core::error::PunktfunkError;
@@ -28,10 +28,10 @@ use punktfunk_core::quic::v2::msg::{Redirect, V2Message};
 use punktfunk_core::quic::v2::registry as reg;
 use punktfunk_core::quic::{
     AccessUpdate, AuthChallenge, BitrateChanged, CursorRenderMode, CursorShape, Hello,
-    LaunchOutcome, LinkFacts, PairChallenge, PairResult, Reconfigure, Reconfigured, Refused,
-    SetBitrate,
+    LaunchOutcome, LinkFacts, PairChallenge, PairResult, PipelineGap, Reconfigure, Reconfigured,
+    Refused, SetBitrate,
 };
-use punktfunk_core::reanchor::{GateVerdict, ReanchorGate};
+use punktfunk_core::reanchor::GateVerdict;
 use punktfunk_core::session::{MediaV2, Session};
 use std::cell::RefCell;
 use std::collections::VecDeque;
@@ -109,8 +109,8 @@ struct Client {
     /// The connection dot's last three windows.
     quality: hud::QualityState,
     /// The shared post-loss freeze: the page withholds decoded frames until the stream
-    /// re-anchors, as every native client does.
-    gate: ReanchorGate,
+    /// re-anchors, as every native client does. It knows whether the page raised it.
+    freeze: Freeze,
     /// The frame index the next access unit should carry; a jump is a loss.
     next_index: Option<u32>,
     /// A lost range not yet asked for (the throttle held it), widened by later gaps.
@@ -158,7 +158,7 @@ impl Client {
             snap: None,
             text: String::new(),
             quality: hud::QualityState::default(),
-            gate: ReanchorGate::new(0),
+            freeze: Freeze::default(),
             next_index: None,
             pending_rfi: None,
             asks: Asks::default(),
@@ -678,6 +678,12 @@ fn on_frame(c: &mut Client, ty: u64, body: &[u8]) {
                 abr.on_ack(body);
             }
         }
+        // The host rebuilt capture and encoder: the bitrate window in flight is not the link's.
+        PipelineGap::TYPE => {
+            if let (Ok(gap), Some(abr)) = (PipelineGap::from_body(body), c.abr.as_mut()) {
+                abr.on_pipeline_gap(gap.gap_ms);
+            }
+        }
         AccessUpdate::TYPE => {
             if let Ok(u) = AccessUpdate::from_body(body) {
                 c.grants = u.grants;
@@ -740,7 +746,7 @@ fn on_server_hello(c: &mut Client, server: ServerHello) {
     c.grants = welcome.grants;
     c.access_secs = welcome.expires_in_secs;
     c.access_seq = c.access_seq.wrapping_add(1);
-    c.gate = ReanchorGate::new(0);
+    c.freeze = Freeze::default();
     c.next_index = None;
     c.pending_rfi = None;
     c.asks = Asks::default();
@@ -789,7 +795,7 @@ pub extern "C" fn pf_session_pump() -> u32 {
             receipts,
             codec,
             frames,
-            gate,
+            freeze,
             next_index,
             pending_rfi,
             last_ask,
@@ -817,7 +823,11 @@ pub extern "C" fn pf_session_pump() -> u32 {
             // every frame, so a wave can heal it) and ask for the range.
             match recovery::on_index(next_index, pending_rfi, frame.frame_index) {
                 Step::Deliver => {}
-                Step::Gap(gap) => gate.arm_expecting_drops(Instant::now(), u64::from(gap)),
+                Step::Gap(gap) => {
+                    freeze.step(false, |g| {
+                        g.arm_expecting_drops(Instant::now(), u64::from(gap))
+                    });
+                }
                 Step::Straggler => continue,
             }
             asks.on_frame(frame.frame_index, frame.flags);
@@ -853,14 +863,16 @@ pub extern "C" fn pf_session_pump() -> u32 {
         // no re-anchor for 500 ms re-asks: both want an IDR. Otherwise the lost range goes out
         // as RFI, which a capable host answers with a clean P or a wave instead of an IDR.
         let now = Instant::now();
-        let want_keyframe = gate.poll(session.stats().frames_dropped, now);
+        let dropped = session.stats().frames_dropped;
+        let want_keyframe = freeze.step(false, |g| g.poll(dropped, now));
         let throttled = last_ask.is_some_and(|t| now.duration_since(t) < ASK_THROTTLE);
         if !throttled {
             if let Some(ask) = recovery::take_ask(want_keyframe, pending_rfi) {
                 *last_ask = Some(now);
                 send_feedback(&asks.ask(ask, now));
+                // A range too wide for RFI asks for a keyframe too, and that one is a loss's.
                 if let (Ask::Keyframe, Some(abr)) = (ask, abr.as_mut()) {
-                    abr.on_keyframe_ask();
+                    abr.on_keyframe_ask(want_keyframe && freeze.starved());
                 }
             }
         }
@@ -887,40 +899,46 @@ pub extern "C" fn pf_gate_decoded(flags: u32, key: i32) -> i32 {
     CLIENT.with(|c| {
         let verdict = c
             .borrow_mut()
-            .gate
-            .on_decoded(flags, key != 0, Instant::now());
+            .freeze
+            .step(false, |g| g.on_decoded(flags, key != 0, Instant::now()));
         i32::from(verdict == GateVerdict::Present)
     })
 }
 
 /// The decoder refused an access unit or failed. Three in a row hold the picture and ask for an
-/// IDR, the same streak the native clients count.
+/// IDR, the same streak the native clients count. The bitrate driver hears the ask as a starved
+/// decoder's unless a loss already holds the picture.
 #[unsafe(no_mangle)]
 pub extern "C" fn pf_gate_no_output() {
     CLIENT.with(|c| {
-        let mut c = c.borrow_mut();
+        let c = &mut *c.borrow_mut();
         let now = Instant::now();
-        if c.gate.on_no_output(now) && c.phase == Phase::Live {
+        if c.freeze.step(true, |g| g.on_no_output(now)) && c.phase == Phase::Live {
             c.last_ask = Some(now);
             send_feedback(&c.asks.ask(Ask::Keyframe, now));
             if let Some(abr) = c.abr.as_mut() {
-                abr.on_keyframe_ask();
+                abr.on_keyframe_ask(c.freeze.starved());
             }
         }
     });
 }
 
 /// The page rebuilt its decoder, which can resume only on an IDR: hold, and ask for one now.
+/// The bitrate driver hears the ask as a starved decoder's unless a loss already holds the
+/// picture.
 #[unsafe(no_mangle)]
 pub extern "C" fn pf_request_keyframe() {
     CLIENT.with(|c| {
-        let mut c = c.borrow_mut();
+        let c = &mut *c.borrow_mut();
         let now = Instant::now();
-        c.gate.arm(now);
+        c.freeze.step(true, |g| g.arm(now));
         c.pending_rfi = None;
         if c.phase == Phase::Live {
             c.last_ask = Some(now);
             send_feedback(&c.asks.ask(Ask::Keyframe, now));
+            if let Some(abr) = c.abr.as_mut() {
+                abr.on_keyframe_ask(c.freeze.starved());
+            }
         }
     });
 }

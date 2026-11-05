@@ -5,8 +5,9 @@
 // cancellation keeps the host's audio, playing from the speakers, out of what goes back.
 //
 // Capture is an `AudioWorklet` rather than `MediaStreamTrackProcessor`, which only Chromium has;
-// the worklet cuts 20 ms frames at 48 kHz, WebCodecs' `AudioEncoder` makes them Opus, and Rust
-// wraps each as the uplink datagram. The host decodes into its virtual microphone.
+// the worklet brings the device's rate to 48 kHz and cuts 20 ms frames, WebCodecs'
+// `AudioEncoder` makes them Opus, and Rust wraps each as the uplink datagram. The host decodes
+// into its virtual microphone.
 
 import type { PunktfunkModule } from "./emscripten.ts";
 
@@ -16,29 +17,63 @@ const FRAME = 960;
 
 export type MicState = "off" | "starting" | "on" | "denied" | "unsupported";
 
-const WORKLET = `
+/**
+ * Linear resampling to 48 kHz, as source the worklet runs and a test can. `push` takes one block
+ * at the context's rate and hands each 48 kHz sample to `emit`; the last sample and the
+ * fractional position carry into the next block.
+ */
+// ponytail: linear interpolation with no low-pass, fine for voice. A windowed-sinc filter if
+// music, or rates far above 48 kHz, ever go up this path.
+export const RESAMPLER = `
+class Resampler {
+  constructor(from) {
+    this.step = from / ${SAMPLE_RATE};
+    this.pos = 0;
+    this.prev = 0;
+  }
+  push(x, emit) {
+    const n = x.length;
+    if (!n) return;
+    let p = this.pos;
+    for (; p < n - 1; p += this.step) {
+      const i = Math.floor(p);
+      const a = i < 0 ? this.prev : x[i];
+      emit(a + (x[i + 1] - a) * (p - i));
+    }
+    this.pos = p - n;
+    this.prev = x[n - 1];
+  }
+}`;
+
+const WORKLET = `${RESAMPLER}
 class PunktfunkMic extends AudioWorkletProcessor {
   constructor() {
     super();
     this.buf = new Float32Array(${FRAME});
     this.at = 0;
-  }
-  process(inputs) {
-    const ch = inputs[0] && inputs[0][0];
-    if (!ch) return true;
-    for (let i = 0; i < ch.length; i++) {
-      this.buf[this.at++] = ch[i];
+    this.resampler = sampleRate === ${SAMPLE_RATE} ? null : new Resampler(sampleRate);
+    this.add = (v) => {
+      this.buf[this.at++] = v;
       if (this.at === this.buf.length) {
         this.port.postMessage(this.buf, [this.buf.buffer]);
         this.buf = new Float32Array(${FRAME});
         this.at = 0;
       }
-    }
+    };
+  }
+  process(inputs) {
+    const ch = inputs[0] && inputs[0][0];
+    if (!ch) return true;
+    if (this.resampler) this.resampler.push(ch, this.add);
+    else for (let i = 0; i < ch.length; i++) this.add(ch[i]);
     return true;
   }
 }
 registerProcessor("punktfunk-mic", PunktfunkMic);
 `;
+
+/** Safari's audio session, where the browser has one. */
+const audioSession = (): { type: string } | undefined => (navigator as { audioSession?: { type: string } }).audioSession;
 
 export class MicPipe {
   private _state: MicState = MicPipe.supported() ? "off" : "unsupported";
@@ -47,6 +82,9 @@ export class MicPipe {
   private encoder: AudioEncoder | null = null;
   private seq = 0;
   private ts = 0;
+  /** Moved by every `start` and `stop`: a `start` that finds it moved after an await was
+   *  overtaken, and drops what it opened. */
+  private gen = 0;
 
   constructor(private readonly mod: PunktfunkModule) {}
 
@@ -66,24 +104,35 @@ export class MicPipe {
   /** Start capturing. Must follow a gesture: the permission prompt is the browser's. */
   async start(): Promise<void> {
     if (this._state === "on" || this._state === "starting" || this._state === "unsupported") return;
+    const gen = ++this.gen;
     this._state = "starting";
+    // Safari captures only in a session that records; `stop` gives playback back.
+    const session = audioSession();
+    if (session) session.type = "play-and-record";
     let stream: MediaStream;
     try {
       stream = await navigator.mediaDevices.getUserMedia({
         audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true },
       });
     } catch {
+      if (gen !== this.gen) return;
       this._state = "denied";
+      if (session?.type === "play-and-record") session.type = "playback";
       return;
     }
-    if (this._state !== "starting") {
-      // Turned off while the prompt was up.
+    if (gen !== this.gen) {
+      // Turned off, or off and on again, while the prompt was up.
       for (const t of stream.getTracks()) t.stop();
       return;
     }
     this.stream = stream;
-    const ctx = new AudioContext({ sampleRate: SAMPLE_RATE });
+    // The device's own rate: Firefox refuses a source whose rate differs from its context's.
+    const ctx = new AudioContext();
     this.ctx = ctx;
+    const drop = () => {
+      for (const t of stream.getTracks()) t.stop();
+      void ctx.close().catch(() => {});
+    };
     // Any step below can fail on a browser short of one piece; the microphone must not stay open.
     try {
       const url = URL.createObjectURL(new Blob([WORKLET], { type: "application/javascript" }));
@@ -92,7 +141,7 @@ export class MicPipe {
       } finally {
         URL.revokeObjectURL(url);
       }
-      if (this.ctx !== ctx) return;
+      if (gen !== this.gen) return drop();
       const encoder = new AudioEncoder({
         output: (chunk) => this.send(chunk),
         error: () => this.stop(),
@@ -107,15 +156,20 @@ export class MicPipe {
       mute.gain.value = 0;
       node.connect(mute).connect(ctx.destination);
       await ctx.resume();
+      if (gen !== this.gen) return drop();
     } catch (e) {
       console.error("punktfunk: microphone", e);
-      if (this.ctx === ctx) this.stop();
+      if (gen === this.gen) this.stop();
+      else drop();
       return;
     }
-    if (this.ctx === ctx) this._state = "on";
+    this._state = "on";
   }
 
   stop(): void {
+    this.gen++;
+    const session = audioSession();
+    if (session?.type === "play-and-record") session.type = "playback";
     this._state = MicPipe.supported() ? "off" : "unsupported";
     try {
       this.encoder?.close();

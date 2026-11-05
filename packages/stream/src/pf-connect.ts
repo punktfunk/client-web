@@ -18,7 +18,7 @@
 // over the short-lived WebTransport hash, and `verify` refuses to dial a host that cannot produce
 // it.
 
-import { serverFetch, TOO_MANY } from "./pass.ts";
+import { ours, serverFetch, TOO_MANY } from "./pass.ts";
 import type { ProfilePick } from "./profiles.ts";
 import { derToRaw, fromBase64, hexToBytes } from "@punktfunk/host/core";
 
@@ -80,8 +80,11 @@ export async function reach(origin: string, timeoutMs = 4000): Promise<Reach> {
 }
 
 /** `reach`, plus the page's own server's sentence when it refused a host (a 502), such as a
- *  certificate that no longer matches its pin. A 503/504 from it is nothing answering. */
+ *  certificate that no longer matches its pin. A 503/504 from it is nothing answering. A host on
+ *  the page's own server is never `blocked`: the page loaded from there, so its certificate is
+ *  accepted, and any other refusal is that server's sentence. */
 export async function reachWhy(origin: string, timeoutMs = 4000): Promise<{ reach: Reach; said?: string }> {
+  const own = ours(origin);
   const started = performance.now();
   const abort = new AbortController();
   const timer = setTimeout(() => abort.abort(), timeoutMs);
@@ -91,15 +94,16 @@ export async function reachWhy(origin: string, timeoutMs = 4000): Promise<{ reac
       signal: abort.signal,
     });
     if (r.status === 429) return { reach: "unreachable", said: TOO_MANY };
-    if (r.status === 502) {
+    if (r.status === 503 || r.status === 504) return { reach: "unreachable" };
+    if (r.status === 502 || (own && !r.ok)) {
       // Plain text is the page's server speaking; anything else (a proxy's HTML page) says nothing.
       const plain = r.headers.get("content-type")?.startsWith("text/plain") ?? false;
       const said = plain ? (await r.text().catch(() => "")).trim() : "";
       return said ? { reach: "unreachable", said } : { reach: "unreachable" };
     }
-    if (r.status === 503 || r.status === 504) return { reach: "unreachable" };
     return { reach: r.ok ? "ok" : "blocked" };
   } catch {
+    if (own) return { reach: "unreachable" };
     return { reach: performance.now() - started < timeoutMs * 0.75 ? "blocked" : "unreachable" };
   } finally {
     clearTimeout(timer);

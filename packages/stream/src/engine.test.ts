@@ -285,3 +285,86 @@ test("a codec this browser can't decode gives way to another on offer, once each
   engine.startStream({ width: 1280, height: 720 });
   assert.equal(offers.at(-1), 0x03);
 });
+
+test("only a 401 at sign-in reads as a forgotten pairing", async () => {
+  const fetched = globalThis.fetch;
+  const device = { spki: async () => "", sign: async () => new Uint8Array(64) };
+  try {
+    for (const [status, kind] of [[401, "forgotten"], [429, "error"], [502, "ready"]] as const) {
+      globalThis.fetch = (async () => new Response("no", { status })) as typeof fetch;
+      const { engine } = engineIn("needs-pairing");
+      (engine as unknown as { checkHost(o: string, fp: string, d: unknown): void }).checkHost(ORIGIN, "cd".repeat(32), device);
+      await new Promise((r) => setTimeout(r, 20));
+      assert.equal(engine.current.kind, kind, `status ${status}`);
+      if (status === 429) assert.match((engine.current as { message: string }).message, /too many requests/);
+      if (status === 502) {
+        const host = (engine.current as { host: { info(): Promise<unknown> } }).host;
+        await assert.rejects(host.info(), (e: Error) => /couldn't sign in/.test(e.message) && !/pair/.test(e.message));
+      }
+    }
+  } finally {
+    globalThis.fetch = fetched;
+  }
+});
+
+test("a bridge that never opens names the page's server, not UDP", async (t: TestContext) => {
+  const message = () => (engine.current as { message: string }).message;
+  // No plane address: the bridge is the only carrier.
+  let { engine } = engineIn("ready", "w/abc", "https://page.example/h/unopened");
+  Object.assign(engine, { planeHost: "" });
+  engine.startStream({ width: 1280, height: 720 });
+  sockets.at(-1)!.onclose!({ code: 1006, reason: "" });
+  await flush();
+  assert.equal(engine.current.kind, "error");
+  assert.match(message(), /page's server couldn't open a connection/);
+
+  t.after(() => Object.assign(globalThis, { WebSocket: FakeSocket }));
+  Object.assign(globalThis, {
+    WebSocket: class {
+      constructor() {
+        throw new SyntaxError("blocked");
+      }
+    },
+  });
+  ({ engine } = engineIn("ready", "w/abc", "https://page.example/h/unbuilt"));
+  Object.assign(engine, { planeHost: "" });
+  engine.startStream({ width: 1280, height: 720 });
+  assert.match(message(), /page's server couldn't open a connection/, "not the WebTransport sentence");
+});
+
+test("a device key an earlier connect asked for says nothing to a newer one", async () => {
+  const { engine, mod } = engineIn("ready");
+  const fetched = globalThis.fetch;
+  const asked: string[] = [];
+  globalThis.fetch = ((u: string) => {
+    asked.push(String(u));
+    return new Promise<Response>(() => {});
+  }) as typeof fetch;
+  try {
+    void engine.connect("https://192.168.1.31:47990");
+    (mod.__pfOnDeviceReady as () => void)();
+    (mod.__pfOnDeviceFailed as () => void)();
+    await flush();
+    assert.equal(engine.current.kind, "reaching", "the newer connect's checks come first");
+    assert.deepEqual(asked, ["https://192.168.1.31:47990/api/v1/health"]);
+  } finally {
+    engine.disconnect();
+    globalThis.fetch = fetched;
+  }
+});
+
+test("a paired host without a pass is renewed once before the dial", async (t: TestContext) => {
+  const origin = "https://page.example/h/renew";
+  const store = new Map([["pf.hosts", JSON.stringify({ [origin]: { fingerprint: "cd".repeat(32) } })]]);
+  Object.assign(globalThis, { localStorage: { getItem: (k: string) => store.get(k) ?? null, setItem() {} } });
+  t.after(() => Reflect.deleteProperty(globalThis, "localStorage"));
+  const { engine } = engineIn("ready", "w/abc", origin);
+  let renewals = 0;
+  Object.assign(engine, { host: { renewPass: async () => void renewals++ } });
+  const before = dialled.length;
+  engine.startStream({ width: 1280, height: 720 });
+  assert.equal(dialled.length, before, "nothing dialled while the pass is asked for");
+  await flush();
+  assert.equal(renewals, 1);
+  assert.equal(dialled.at(-1), "https://192.168.1.21:9778/pf2", "then the dial, with or without a pass");
+});

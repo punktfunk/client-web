@@ -18,7 +18,7 @@ import { chipText, updateNotice } from "./access.ts";
 import type { PunktfunkModule } from "./emscripten.ts";
 import { DeviceRefused, Host, type LibraryEntry, VersionSkew } from "./host.ts";
 import * as pf from "./pf-connect.ts";
-import { type Decodable, decodableCodecs, decodeSupported, hdrDisplay, VideoPipe, webgpuUsable } from "./video.ts";
+import { type Decodable, decodableCodecs, decodeSupported, hdrDisplay, planeBackend, VideoPipe, webgpuUsable } from "./video.ts";
 import { type Chord, InputPipe, playRumble } from "./input.ts";
 import { AudioPipe, type AudioSnapshot, opusHead, playableChannels } from "./audio.ts";
 import { MicPipe, type MicState } from "./mic.ts";
@@ -31,7 +31,7 @@ import { type TunnelFetch, tunnelFetch } from "./tunnel.ts";
 import { type Feed, wasmFeed } from "./carrier/feed.ts";
 import { WtCarrier } from "./carrier/wt.ts";
 import { bridgeUrl, WsCarrier } from "./carrier/ws.ts";
-import { passFor } from "./pass.ts";
+import { passFor, TOO_MANY } from "./pass.ts";
 
 export type { AudioSnapshot, AudioState } from "./audio.ts";
 export type { MicState } from "./mic.ts";
@@ -49,6 +49,10 @@ const CLOSE = { QUIT: 0x51, PAIR_DENIED: 0x64, ACCESS_EXPIRED: 0x69, HOST_POWER:
 const PLACEMENT_REFUSED = new Set([0x6c, 0x6d, 0x6e, 0x6f]);
 /** A carrier that never opened: no host was heard at all. */
 const NEVER_OPENED = -2;
+/** Why a dial through the page server's bridge never opened. The browser hides the server's
+ *  answer to a refused upgrade, so this names only where it failed. */
+const BRIDGE_UNOPENED =
+  "this page's server couldn't open a connection to the host. Try again in a minute, and if it keeps happening, check that WebSocket connections reach the server";
 
 /** WebTransport, or a WebSocket through the page server's bridge. */
 type CarrierKind = "wt" | "ws";
@@ -314,6 +318,9 @@ export class Engine {
   /** Moved by every `reset`: a `connect` that comes back from an await to a newer one was
    *  cancelled or replaced, and says nothing. */
   private epoch = 0;
+  /** The `epoch` the device key was last asked for in. A key that comes out of IndexedDB after a
+   *  newer connect began belongs to the older one, and says nothing. */
+  private keyEpoch = 0;
   /** The fingerprint the last `connect` was told to expect, for the reconnects this engine makes. */
   private expect: string | undefined;
   /** Where every carrier puts what it receives. */
@@ -508,8 +515,7 @@ export class Engine {
     this.set({ kind: "connecting", origin });
     // The key BEFORE the connection: the host may ask for a signature the moment the control
     // stream opens, and a key still coming out of IndexedDB would miss it.
-    this.boundHash = this.plane.cert_hash_sha256;
-    withStr(this.mod, [this.plane.cert_hash_sha256], (p) => this.mod._pf_device_init(p));
+    this.bindKey(this.plane.cert_hash_sha256);
   }
 
   /**
@@ -619,10 +625,12 @@ export class Engine {
   /**
    * What the next `Hello` offers: this browser's codecs less those it refused, the player's pick
    * first, and HDR unless `sdr`. HDR is asked per stream: the window may have moved to another
-   * display, and the plane may have been switched to WebGL2, since the last one.
+   * display, and the plane may have been switched to WebGL2, since the last one. A canvas that
+   * already holds WebGL2 keeps it, whatever the setting now says.
    */
   private offer(sdr: boolean): void {
-    const hdr = !sdr && this.tunable.hdr && this.codecs.tenBit && hdrDisplay(this.tunable.videoBackend, this.gpu);
+    const backend = planeBackend(this.opts.videoCanvas, this.tunable.videoBackend);
+    const hdr = !sdr && this.tunable.hdr && this.codecs.tenBit && hdrDisplay(backend, this.gpu);
     this.mod._pf_session_codecs?.(this.codecs.mask & ~this.refused, hdr ? 1 : 0, CODEC_BIT[this.tunable.codec]);
   }
 
@@ -677,7 +685,13 @@ export class Engine {
   /** Dial now when the credential is bound to `hash`; else bind it, and `onDeviceReady` dials. */
   private bindAndDial(hash: string): void {
     if (!hash || hash === this.boundHash) return this.dial();
+    this.bindKey(hash);
+  }
+
+  /** Load the device key bound to `hash`; `onDeviceReady` or `onDeviceFailed` answers. */
+  private bindKey(hash: string): void {
     this.boundHash = hash;
+    this.keyEpoch = this.epoch;
     withStr(this.mod, [hash], (p) => this.mod._pf_device_init(p));
   }
 
@@ -714,6 +728,8 @@ export class Engine {
       (codec) => this.undecodable(codec),
     );
     this.video.attach();
+    // A page already fullscreen locks the keyboard again for this stream, as `fullscreen` does.
+    if (globalThis.document?.fullscreenElement) void keyboardLock()?.lock?.()?.catch(() => {});
     this.tier = this.tunable.statsTier;
     this.hud = [];
     this.lastDropped = 0;
@@ -1015,11 +1031,12 @@ export class Engine {
   /**
    * The device key is loaded. The plane is dialled only to pair or to stream: the host gives a
    * session ten seconds to speak, so a browser looking at the library holds none, and `ready`
-   * comes from pairing records here plus the management API.
+   * comes from pairing records here plus the management API. A key an older connect asked for
+   * says nothing.
    */
   private onDeviceReady(): void {
     const origin = this.origin;
-    if (!origin) return;
+    if (!origin || this.keyEpoch !== this.epoch) return;
     if (this.pendingPin || this.pendingStream || this.pendingKnock) return this.dial();
     const fingerprint = pf.hosts.fingerprint(origin);
     const device = this.mod.__pfDevice;
@@ -1035,10 +1052,11 @@ export class Engine {
     if (fp) pf.hosts.remember(origin, { fingerprint: fp });
   }
 
-  /** The device key could not be loaded or made, so nothing can sign for this browser. */
+  /** The device key could not be loaded or made, so nothing can sign for this browser. An older
+   *  connect's failure says nothing. */
   private onDeviceFailed(): void {
     const origin = this.origin;
-    if (!origin) return;
+    if (!origin || this.keyEpoch !== this.epoch) return;
     this.set({
       kind: "error",
       origin,
@@ -1046,9 +1064,23 @@ export class Engine {
     });
   }
 
-  /** Open the plane. Only after `onDeviceReady`: the wasm side must already hold the key's SPKI. */
-  private dial(): void {
-    if (!this.origin || !this.plane) return;
+  /** Open the plane. Only after `onDeviceReady`: the wasm side must already hold the key's SPKI.
+   *  A paired host whose pass this page lacks gets one renewal first, which the bridge shows. */
+  private dial(renewed = false): void {
+    const origin = this.origin;
+    if (!origin || !this.plane) return;
+    const fp = pf.hosts.fingerprint(origin);
+    const bridge = typeof this.target === "object" ? this.target?.bridge : undefined;
+    const host = this.host;
+    if (!renewed && host && fp && bridge && !passFor(fp)) {
+      // Without a pass the bridge carries a paired device in the pairing pool, closed at 3 min.
+      // Any dial (stream, PIN, knock) resumes, unless the connect moved on meanwhile.
+      const [epoch, kind] = [this.epoch, this.state.kind];
+      void host.renewPass().then(() => {
+        if (this.epoch === epoch && this.host === host && this.state.kind === kind) this.dial(true);
+      });
+      return;
+    }
     // `/pf2` is the host's `punktfunk/2` session; a host older than 0.43 has no such path. A
     // door's seat answers on its own port of the same address.
     const port = this.seatPlane?.port ?? this.plane.port;
@@ -1057,7 +1089,7 @@ export class Engine {
     // No plane address: a stranger outside the server's network, whom only the bridge carries.
     const wt =
       this.planeHost !== "" &&
-      (pin === "wt" || (!pin && "WebTransport" in globalThis && carrierHint.get(this.origin) !== "ws"));
+      (pin === "wt" || (!pin && "WebTransport" in globalThis && carrierHint.get(origin) !== "ws"));
     this.openCarrier(wt ? "wt" : "ws", port, hash);
   }
 
@@ -1095,7 +1127,8 @@ export class Engine {
     if (!carrier || !opening) {
       if (fallback) return fallback();
       carrierHint.delete(origin);
-      return this.set({ kind: "error", origin, message: "the browser refused the WebTransport session" });
+      const said = kind === "ws" ? BRIDGE_UNOPENED : "the browser refused the WebTransport session";
+      return this.set({ kind: "error", origin, message: said });
     }
     if (fallback) this.silence = setTimeout(() => this.mod.__pfCarrier === carrier && fallback(), WT_SILENCE_MS);
     opening.then(
@@ -1132,7 +1165,8 @@ export class Engine {
 
   /**
    * The management API is what knows whether the host still accepts this device, so `ready`
-   * waits for it. Refused: unpaired there. Any other failure leaves streaming possible.
+   * waits for it. A 401: unpaired there. Too many requests: an error. Any other failure leaves
+   * streaming possible.
    */
   private checkHost(origin: string, fingerprint: string, device: NonNullable<PunktfunkModule["__pfDevice"]>): void {
     const host = new Host(origin, fingerprint, device, this.tunnel ?? undefined);
@@ -1149,8 +1183,9 @@ export class Engine {
   /** `ready` once the management API has answered for this connection, or what it refused. */
   private settle(host: Host, origin: string, e?: unknown): void {
     if (this.host !== host || this.origin !== origin) return;
-    if (e instanceof DeviceRefused) return this.set({ kind: "forgotten", origin });
+    if (e instanceof DeviceRefused && e.status === 401) return this.set({ kind: "forgotten", origin });
     if (e instanceof VersionSkew) return this.set({ kind: "error", origin, message: e.message, skew: true });
+    if (e instanceof Error && e.message === TOO_MANY) return this.set({ kind: "error", origin, message: TOO_MANY });
     this.set({ kind: "ready", origin, host });
   }
 
@@ -1159,8 +1194,8 @@ export class Engine {
    * plane first, then the transport's own close — and the first one settles the state: the
    * second finds it already in a terminal kind and leaves it. The host closes after every pairing
    * ceremony (nothing to say), refuses with a reason (say it), or drops a live session (say
-   * that). A dial that never opened names the port to check. A close in `idle` is this engine's
-   * own `disconnect`.
+   * that). A dial that never opened names the port to check, or the page's server for the
+   * bridge. A close in `idle` is this engine's own `disconnect`.
    */
   private onClosed(code: number, reason: string): void {
     const origin = this.origin;
@@ -1174,7 +1209,10 @@ export class Engine {
       return this.set({
         kind: "error",
         origin,
-        message: `couldn't reach the host on UDP ${this.seatPlane?.port ?? this.plane?.port}, its browser streaming port. Check that nothing between this device and the host blocks it`,
+        message:
+          this.carrierKind === "ws"
+            ? BRIDGE_UNOPENED
+            : `couldn't reach the host on UDP ${this.seatPlane?.port ?? this.plane?.port}, its browser streaming port. Check that nothing between this device and the host blocks it`,
       });
     }
     switch (this.state.kind) {
@@ -1225,9 +1263,11 @@ export class Engine {
   }
 
   /** The session's pipes and its wasm state, torn down together. Idempotent. The wasm session
-   *  goes too: a refusal leaves it `Offered`, which would read as a forgotten pairing later. */
+   *  goes too: a refusal leaves it `Offered`, which would read as a forgotten pairing later. The
+   *  keyboard lock goes as well, so a page left fullscreen gives system keys back. */
   private stopSession(): void {
     this.mod._pf_session_reset?.();
+    keyboardLock()?.unlock?.();
     this.mic?.stop();
     this.mic = null;
     this.input?.detach();
@@ -1465,4 +1505,8 @@ function withStr<T>(mod: PunktfunkModule, strings: string[], f: (...args: number
 }
 
 const message = (e: unknown): string => (e instanceof Error ? e.message : String(e));
+
+/** The Keyboard Lock API, where the browser has it (Chromium). */
+const keyboardLock = (): { lock?: () => Promise<void>; unlock?: () => void } | undefined =>
+  (navigator as { keyboard?: { lock?: () => Promise<void>; unlock?: () => void } }).keyboard;
 

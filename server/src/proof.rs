@@ -23,6 +23,9 @@ pub const KEPT: usize = 64;
 /// The answer is under a kilobyte. A server that sends more is not a host.
 const MAX_BODY: usize = 64 << 10;
 const TIMEOUT: Duration = Duration::from_secs(5);
+/// The longest a browser pins a plane certificate by hash. The attestation does not sign
+/// `expires_at`, so a later one is not believed.
+const PLANE_LIFE: Duration = Duration::from_secs(14 * 24 * 60 * 60);
 
 const NOT_A_HOST: &str =
     "Nothing at this address answered as a Punktfunk host. Check the address and that the host is \
@@ -104,7 +107,7 @@ impl Proofs {
     fn remember(&self, key: &str, outcome: &Outcome) {
         let now = Instant::now();
         let until = match outcome {
-            Outcome::Host { expires, .. } => now + secs_until(*expires),
+            Outcome::Host { expires, .. } => now + secs_until(*expires).min(PLANE_LIFE),
             Outcome::NoPlane(_) | Outcome::Refused(_) => now + REFUSED_FOR,
             Outcome::PinChanged | Outcome::Unreachable => return,
         };
@@ -318,4 +321,25 @@ fn secs_until(unix: u64) -> Duration {
         .duration_since(SystemTime::UNIX_EPOCH)
         .unwrap_or_default();
     Duration::from_secs(unix).saturating_sub(now)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn an_attested_expiry_is_believed_for_fourteen_days_at_most() {
+        let proofs = Proofs::default();
+        let host = Outcome::Host {
+            fp: [1; 32],
+            plane_port: 9778,
+            plane_hash: [2; 32],
+            expires: u64::MAX,
+            body: Bytes::new(),
+        };
+        proofs.remember("10.0.0.2:47990", &host);
+        let until = proofs.0.lock().unwrap()["10.0.0.2:47990"].until;
+        assert!(until <= Instant::now() + PLANE_LIFE);
+        assert!(proofs.recall("10.0.0.2:47990", false).is_some());
+    }
 }

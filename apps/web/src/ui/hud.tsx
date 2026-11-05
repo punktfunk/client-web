@@ -151,6 +151,13 @@ export function Hud({ screen, actions }: { screen: Extract<Screen, { kind: "stre
             </span>
           </motion.div>
         )}
+        {/* A browser plays sound only after a click or a key, and a controller is neither: until
+            one, the stream is silent, and this says so. */}
+        {stats.audio.state === "suspended" && !stats.pointerCaptured && (
+          <motion.div key="sound" {...RISE} role="status" className="pointer-events-none fixed inset-x-0 bottom-[12%] flex justify-center px-inset">
+            <span className="rounded-full bg-card/95 px-4 py-2 text-sm">Sound is off until you click or press a key.</span>
+          </motion.div>
+        )}
       </AnimatePresence>
     </>
   );
@@ -263,12 +270,12 @@ const ROLE_CLASS: Record<HudLine["role"], string> = {
   warn: "text-amber-500",
 };
 
-/** Where each corner puts the statistics. The top ones clear the toolbar. */
+/** Where each corner puts the statistics. The top ones clear the toolbar; the sides, a notch. */
 const CORNER_CLASS: Record<HudCorner, string> = {
-  topLeading: "top-[calc(3.5rem+var(--pf-inset))] left-inset",
-  topTrailing: "top-[calc(3.5rem+var(--pf-inset))] right-inset",
-  bottomLeading: "bottom-inset left-inset",
-  bottomTrailing: "bottom-inset right-inset",
+  topLeading: "top-[calc(3.5rem+var(--pf-inset))] left-[var(--pf-inset-left)]",
+  topTrailing: "top-[calc(3.5rem+var(--pf-inset))] right-[var(--pf-inset-right)]",
+  bottomLeading: "bottom-inset left-[var(--pf-inset-left)]",
+  bottomTrailing: "bottom-inset right-[var(--pf-inset-right)]",
 };
 
 /** The stats overlay every client draws, in this session's tier and vocabulary, then what only a
