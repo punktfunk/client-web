@@ -169,6 +169,14 @@ const ACCELERATIONS: HardwareAcceleration[] = ["prefer-hardware", "no-preference
  *  browser's own pick, which it does not reveal. */
 const DECODER_KIND: Record<HardwareAcceleration, number> = { "prefer-hardware": 1, "no-preference": 0, "prefer-software": 2 };
 
+/** The backend each canvas was given a plane on. A canvas keeps that kind of context for life. */
+const held = new WeakMap<HTMLCanvasElement, "webgpu" | "webgl2">();
+
+/** The backend a plane on `canvas` will have: the one it already holds, else the preference. */
+export function planeBackend(canvas: HTMLCanvasElement, prefer: "auto" | "webgl2" | "webgpu"): "auto" | "webgl2" | "webgpu" {
+  return held.get(canvas) ?? prefer;
+}
+
 /**
  * Which plane to draw on.
  *
@@ -183,8 +191,16 @@ export async function createPlane(
   /** The plane's GPU state is gone and a new plane can be made in its place. */
   onLost?: () => void,
 ): Promise<{ plane: VideoPlane; backend: "webgpu" | "webgl2" }> {
-  const webgpu = async () => ({ plane: await VideoSurfaceWebGPU.create(canvas, onLost), backend: "webgpu" as const });
-  const webgl2 = () => ({ plane: new VideoSurface(canvas, onLost), backend: "webgl2" as const });
+  const webgpu = async () => {
+    const plane = await VideoSurfaceWebGPU.create(canvas, onLost);
+    held.set(canvas, "webgpu");
+    return { plane, backend: "webgpu" as const };
+  };
+  const webgl2 = () => {
+    const plane = new VideoSurface(canvas, onLost);
+    held.set(canvas, "webgl2");
+    return { plane, backend: "webgl2" as const };
+  };
   if (prefer === "webgl2") {
     try {
       return webgl2();

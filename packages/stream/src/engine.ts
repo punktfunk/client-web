@@ -18,7 +18,7 @@ import { chipText, updateNotice } from "./access.ts";
 import type { PunktfunkModule } from "./emscripten.ts";
 import { DeviceRefused, Host, type LibraryEntry, VersionSkew } from "./host.ts";
 import * as pf from "./pf-connect.ts";
-import { type Decodable, decodableCodecs, decodeSupported, hdrDisplay, VideoPipe, webgpuUsable } from "./video.ts";
+import { type Decodable, decodableCodecs, decodeSupported, hdrDisplay, planeBackend, VideoPipe, webgpuUsable } from "./video.ts";
 import { type Chord, InputPipe, playRumble } from "./input.ts";
 import { AudioPipe, type AudioSnapshot, opusHead, playableChannels } from "./audio.ts";
 import { MicPipe, type MicState } from "./mic.ts";
@@ -619,10 +619,12 @@ export class Engine {
   /**
    * What the next `Hello` offers: this browser's codecs less those it refused, the player's pick
    * first, and HDR unless `sdr`. HDR is asked per stream: the window may have moved to another
-   * display, and the plane may have been switched to WebGL2, since the last one.
+   * display, and the plane may have been switched to WebGL2, since the last one. A canvas that
+   * already holds WebGL2 keeps it, whatever the setting now says.
    */
   private offer(sdr: boolean): void {
-    const hdr = !sdr && this.tunable.hdr && this.codecs.tenBit && hdrDisplay(this.tunable.videoBackend, this.gpu);
+    const backend = planeBackend(this.opts.videoCanvas, this.tunable.videoBackend);
+    const hdr = !sdr && this.tunable.hdr && this.codecs.tenBit && hdrDisplay(backend, this.gpu);
     this.mod._pf_session_codecs?.(this.codecs.mask & ~this.refused, hdr ? 1 : 0, CODEC_BIT[this.tunable.codec]);
   }
 
