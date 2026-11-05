@@ -92,12 +92,16 @@ export class VideoSurfaceWebGPU implements VideoPlane {
   private toneMappingUnavailable = false;
 
   /** Adapter, device and canvas context. Rejects when the engine has no WebGPU, so a caller can
-   *  fall back to the WebGL2 surface rather than showing nothing. */
-  static async create(canvas: HTMLCanvasElement): Promise<VideoSurfaceWebGPU> {
+   *  fall back to the WebGL2 surface rather than showing nothing. `onLost` runs when the device
+   *  is lost other than by `destroy`: the caller builds a new plane. */
+  static async create(canvas: HTMLCanvasElement, onLost?: () => void): Promise<VideoSurfaceWebGPU> {
     if (!navigator.gpu) throw new Error("no WebGPU in this engine");
     const adapter = await navigator.gpu.requestAdapter({ powerPreference: "high-performance" });
     if (!adapter) throw new Error("no WebGPU adapter");
     const device = await adapter.requestDevice();
+    void device.lost.then((info) => {
+      if (info.reason !== "destroyed") onLost?.();
+    });
     try {
       return new VideoSurfaceWebGPU(canvas, device);
     } catch (e) {

@@ -180,9 +180,11 @@ const DECODER_KIND: Record<HardwareAcceleration, number> = { "prefer-hardware": 
 export async function createPlane(
   canvas: HTMLCanvasElement,
   prefer: "auto" | "webgl2" | "webgpu" = "auto",
+  /** The plane's GPU state is gone and a new plane can be made in its place. */
+  onLost?: () => void,
 ): Promise<{ plane: VideoPlane; backend: "webgpu" | "webgl2" }> {
-  const webgpu = async () => ({ plane: await VideoSurfaceWebGPU.create(canvas), backend: "webgpu" as const });
-  const webgl2 = () => ({ plane: new VideoSurface(canvas), backend: "webgl2" as const });
+  const webgpu = async () => ({ plane: await VideoSurfaceWebGPU.create(canvas, onLost), backend: "webgpu" as const });
+  const webgl2 = () => ({ plane: new VideoSurface(canvas, onLost), backend: "webgl2" as const });
   if (prefer === "webgl2") {
     try {
       return webgl2();
@@ -271,7 +273,15 @@ export class VideoPipe {
     this.stats.width = width;
     this.stats.height = height;
     if (!this.plane) {
-      const made = await createPlane(this.canvas, this.prefer);
+      let made: Awaited<ReturnType<typeof createPlane>>;
+      try {
+        made = await createPlane(this.canvas, this.prefer, () => this.replane());
+      } catch (e) {
+        // No plane this canvas can hold: the picture stays black, and the overlay counts it.
+        this.stats.errors++;
+        console.error("punktfunk: video plane", e);
+        return;
+      }
       // Closed while the plane was made: it would outlive the pipe.
       if (this.closed) return made.plane.destroy();
       this.plane = made.plane;
@@ -300,6 +310,15 @@ export class VideoPipe {
     }
     this.hdrChecked = false;
     this.decoder = decoder;
+  }
+
+  /** The plane's GPU state is gone: a new plane for the last `Welcome`, and a new decoder, which
+   *  waits for a key frame. */
+  private replane(): void {
+    if (this.closed || !this.plane) return;
+    this.plane.destroy();
+    this.plane = null;
+    void this.configure(this.stats.codec, this.stats.width, this.stats.height);
   }
 
   /** The decoder's configuration for the stream `Welcome` last described. No `description`: the

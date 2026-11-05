@@ -73,8 +73,13 @@ export class VideoSurface implements VideoPlane {
   /** Total milliseconds spent in `present`, so a caller can report the per-frame upload cost
    *  without timing every call itself. */
   private uploadMs = 0;
+  private readonly unwatch: () => void;
 
-  constructor(private readonly canvas: HTMLCanvasElement) {
+  /** `onLost` runs once a lost context is back, blank: the caller builds a new plane on it. */
+  constructor(
+    private readonly canvas: HTMLCanvasElement,
+    onLost?: () => void,
+  ) {
     // `alpha: false` — this is the bottom layer and nothing shows through it; opaque lets the
     // compositor skip a blend. `preserveDrawingBuffer: false` because every frame is a full
     // overwrite. `desynchronized` cuts a compositor hop on the plane where latency is the point.
@@ -88,6 +93,7 @@ export class VideoSurface implements VideoPlane {
       powerPreference: "high-performance",
     });
     if (!gl) throw new Error("no WebGL2 context for the video plane");
+    if (gl.isContextLost()) throw new Error("the video plane's WebGL2 context is lost");
     this.gl = gl;
 
     const prog = gl.createProgram();
@@ -118,6 +124,16 @@ export class VideoSurface implements VideoPlane {
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
     gl.uniform1i(gl.getUniformLocation(prog, "tex"), 0);
+
+    // A context comes back only if its loss is claimed.
+    const lost = (e: Event) => e.preventDefault();
+    const restored = () => onLost?.();
+    canvas.addEventListener("webglcontextlost", lost);
+    canvas.addEventListener("webglcontextrestored", restored);
+    this.unwatch = () => {
+      canvas.removeEventListener("webglcontextlost", lost);
+      canvas.removeEventListener("webglcontextrestored", restored);
+    };
   }
 
   /** Source dimensions and colour. `colorSpace` comes from the frame's own `VideoColorSpace`;
@@ -178,8 +194,9 @@ export class VideoSurface implements VideoPlane {
   }
 
   /** Frees the plane's own objects and keeps the context: the canvas outlives this plane, and
-   *  hands the next one this same context, lost or not. */
+   *  hands the next one this same context. A loss after this is no longer claimed. */
   destroy(): void {
+    this.unwatch();
     const gl = this.gl;
     gl.deleteTexture(this.tex);
     gl.deleteProgram(this.program);
