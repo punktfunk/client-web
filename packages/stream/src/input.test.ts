@@ -162,3 +162,66 @@ test("a wheel turned down scrolls down: the wire is up-positive, the browser dow
     [6, 1, 120],
   ]);
 });
+
+/** A pipe whose sends are recorded as `kind:code`, and a key event aimed at `target`. */
+const keyPipe = () => {
+  const sent: string[] = [];
+  const mod = {
+    _pf_input: (kind: number, code: number) => sent.push(`${kind}:${code}`),
+    _pf_gamepad: (pad: number, ...rest: number[]) => sent.push(`pad${pad}:${rest.join(",")}`),
+    _pf_gamepad_arrival: () => {},
+  };
+  const pipe = new InputPipe(mod as never, {} as HTMLCanvasElement, { streamWidth: 1920, streamHeight: 1080, pointer: "absolute", deadzone: 0.05 });
+  const key = (code: string, down: boolean, target: unknown, mods: Partial<KeyboardEvent> = {}) => {
+    let prevented = false;
+    (pipe as unknown as { key(e: unknown, down: boolean): void }).key(
+      { code, target, repeat: false, ctrlKey: false, altKey: false, shiftKey: false, metaKey: false, ...mods, preventDefault: () => (prevented = true) },
+      down,
+    );
+    return prevented;
+  };
+  return { sent, pipe, key };
+};
+
+const PICTURE = { tagName: "CANVAS", closest: () => null };
+const IN_MENU = { tagName: "BUTTON", closest: () => ({}) };
+const CHORD = { ctrlKey: true, altKey: true, shiftKey: true };
+
+test("a key the host holds is let go wherever its release lands", () => {
+  const { sent, key } = keyPipe();
+  // Ctrl+Alt+Shift+O opens the menu, which takes focus before the modifiers come up.
+  key("ControlLeft", true, PICTURE, { ctrlKey: true });
+  key("AltLeft", true, PICTURE, { ctrlKey: true, altKey: true });
+  key("ShiftLeft", true, PICTURE, CHORD);
+  key("KeyO", true, PICTURE, CHORD);
+  assert.equal(key("KeyO", false, IN_MENU, CHORD), false, "never sent, so the menu keeps it");
+  assert.equal(key("ShiftLeft", false, IN_MENU, { ctrlKey: true, altKey: true }), false, "the menu's event keeps its default");
+  key("AltLeft", false, IN_MENU, { ctrlKey: true });
+  key("ControlLeft", false, IN_MENU);
+  assert.deepEqual(sent, ["0:162", "0:164", "0:160", "1:160", "1:164", "1:162"]);
+
+  sent.length = 0;
+  key("KeyW", true, IN_MENU);
+  key("KeyW", false, IN_MENU);
+  assert.deepEqual(sent, [], "a key that went down in the menu stays there");
+
+  // S held, then released with the chord's modifiers down: the release is not the stats chord.
+  key("KeyS", true, PICTURE);
+  assert.equal(key("KeyS", false, PICTURE, CHORD), true);
+  assert.deepEqual(sent, ["0:83", "1:83"]);
+});
+
+test("Meta's release lets go of the keys pressed under it, not those held before it", () => {
+  const { sent, key } = keyPipe();
+  key("KeyW", true, PICTURE);
+  key("MetaLeft", true, PICTURE, { metaKey: true });
+  key("KeyV", true, PICTURE, { metaKey: true });
+  key("KeyV", false, PICTURE, { metaKey: true });
+  // macOS sends no keyup for C while Cmd is down.
+  key("KeyC", true, PICTURE, { metaKey: true });
+  key("MetaLeft", false, PICTURE);
+  assert.deepEqual(sent, ["0:87", "0:91", "0:86", "1:86", "0:67", "1:91", "1:67"]);
+  sent.length = 0;
+  key("KeyW", false, PICTURE);
+  assert.deepEqual(sent, ["1:87"]);
+});
