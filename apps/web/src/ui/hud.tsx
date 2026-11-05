@@ -151,6 +151,13 @@ export function Hud({ screen, actions }: { screen: Extract<Screen, { kind: "stre
             </span>
           </motion.div>
         )}
+        {/* A browser plays sound only after a click or a key, and a controller is neither: until
+            one, the stream is silent, and this says so. */}
+        {stats.audio.state === "suspended" && !stats.pointerCaptured && (
+          <motion.div key="sound" {...RISE} role="status" className="pointer-events-none fixed inset-x-0 bottom-[12%] flex justify-center px-inset">
+            <span className="rounded-full bg-card/95 px-4 py-2 text-sm">Sound is off until you click or press a key.</span>
+          </motion.div>
+        )}
       </AnimatePresence>
     </>
   );
