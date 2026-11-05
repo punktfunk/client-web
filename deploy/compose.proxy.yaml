@@ -16,8 +16,9 @@ services:
       TLS: "off"
       LISTEN: 0.0.0.0:8080
       # Your proxy's domain. The page answers only to addresses, local names and the names here.
-      # The proxy must pass the browser's Host header through unchanged (nginx:
-      # `proxy_set_header Host $host;`), or the page's own requests are refused.
+      # The proxy must pass the browser's Host header through unchanged, port included (nginx:
+      # `proxy_set_header Host $http_host;`, since `$host` drops the port), or the page's own
+      # requests are refused.
       TLS_NAMES: play.example.com
       # PUNKTFUNK_HOSTS: desk=192.168.1.21
     volumes:
