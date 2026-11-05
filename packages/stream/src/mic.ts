@@ -47,6 +47,9 @@ export class MicPipe {
   private encoder: AudioEncoder | null = null;
   private seq = 0;
   private ts = 0;
+  /** Moved by every `start` and `stop`: a `start` that finds it moved after an await was
+   *  overtaken, and drops what it opened. */
+  private gen = 0;
 
   constructor(private readonly mod: PunktfunkModule) {}
 
@@ -66,6 +69,7 @@ export class MicPipe {
   /** Start capturing. Must follow a gesture: the permission prompt is the browser's. */
   async start(): Promise<void> {
     if (this._state === "on" || this._state === "starting" || this._state === "unsupported") return;
+    const gen = ++this.gen;
     this._state = "starting";
     let stream: MediaStream;
     try {
@@ -73,17 +77,21 @@ export class MicPipe {
         audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true },
       });
     } catch {
-      this._state = "denied";
+      if (gen === this.gen) this._state = "denied";
       return;
     }
-    if (this._state !== "starting") {
-      // Turned off while the prompt was up.
+    if (gen !== this.gen) {
+      // Turned off, or off and on again, while the prompt was up.
       for (const t of stream.getTracks()) t.stop();
       return;
     }
     this.stream = stream;
     const ctx = new AudioContext({ sampleRate: SAMPLE_RATE });
     this.ctx = ctx;
+    const drop = () => {
+      for (const t of stream.getTracks()) t.stop();
+      void ctx.close().catch(() => {});
+    };
     // Any step below can fail on a browser short of one piece; the microphone must not stay open.
     try {
       const url = URL.createObjectURL(new Blob([WORKLET], { type: "application/javascript" }));
@@ -92,7 +100,7 @@ export class MicPipe {
       } finally {
         URL.revokeObjectURL(url);
       }
-      if (this.ctx !== ctx) return;
+      if (gen !== this.gen) return drop();
       const encoder = new AudioEncoder({
         output: (chunk) => this.send(chunk),
         error: () => this.stop(),
@@ -107,15 +115,18 @@ export class MicPipe {
       mute.gain.value = 0;
       node.connect(mute).connect(ctx.destination);
       await ctx.resume();
+      if (gen !== this.gen) return drop();
     } catch (e) {
       console.error("punktfunk: microphone", e);
-      if (this.ctx === ctx) this.stop();
+      if (gen === this.gen) this.stop();
+      else drop();
       return;
     }
-    if (this.ctx === ctx) this._state = "on";
+    this._state = "on";
   }
 
   stop(): void {
+    this.gen++;
     this._state = MicPipe.supported() ? "off" : "unsupported";
     try {
       this.encoder?.close();
