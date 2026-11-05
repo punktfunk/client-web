@@ -28,8 +28,8 @@ use punktfunk_core::quic::v2::msg::{Redirect, V2Message};
 use punktfunk_core::quic::v2::registry as reg;
 use punktfunk_core::quic::{
     AccessUpdate, AuthChallenge, BitrateChanged, CursorRenderMode, CursorShape, Hello,
-    LaunchOutcome, LinkFacts, PairChallenge, PairResult, Reconfigure, Reconfigured, Refused,
-    SetBitrate,
+    LaunchOutcome, LinkFacts, PairChallenge, PairResult, PipelineGap, Reconfigure, Reconfigured,
+    Refused, SetBitrate,
 };
 use punktfunk_core::reanchor::{GateVerdict, ReanchorGate};
 use punktfunk_core::session::{MediaV2, Session};
@@ -676,6 +676,12 @@ fn on_frame(c: &mut Client, ty: u64, body: &[u8]) {
         BitrateChanged::TYPE => {
             if let Some(abr) = c.abr.as_mut() {
                 abr.on_ack(body);
+            }
+        }
+        // The host rebuilt capture and encoder: the bitrate window in flight is not the link's.
+        PipelineGap::TYPE => {
+            if let (Ok(gap), Some(abr)) = (PipelineGap::from_body(body), c.abr.as_mut()) {
+                abr.on_pipeline_gap(gap.gap_ms);
             }
         }
         AccessUpdate::TYPE => {

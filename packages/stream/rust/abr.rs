@@ -32,6 +32,8 @@ struct Since {
     encode_lat: (u64, u32),
     host_timings: Vec<HostTiming>,
     keyframe_asks: u32,
+    /// The newest host pipeline gap, ms: one discard per window.
+    gap_ms: Option<u32>,
 }
 
 impl Since {
@@ -39,6 +41,25 @@ impl Since {
     fn on_ack(&mut self, body: &[u8]) {
         if let Ok(ack) = BitrateChanged::from_body(body) {
             self.acks.push((ack.bitrate_kbps, ack.reason));
+        }
+    }
+
+    /// One `PipelineGap`. The newest wins: a tick discards one window however many landed.
+    fn on_pipeline_gap(&mut self, gap_ms: u32) {
+        self.gap_ms = Some(gap_ms);
+    }
+
+    /// What was read, as the driver's inputs. The session's own counters go in at the tick.
+    fn into_inputs(self) -> Inputs {
+        Inputs {
+            gap_ms: self.gap_ms,
+            mode: self.mode,
+            acks: self.acks,
+            decode_lat: self.decode_lat,
+            encode_lat: self.encode_lat,
+            host_timings: self.host_timings,
+            keyframe_asks: self.keyframe_asks,
+            ..Inputs::default()
         }
     }
 }
@@ -113,6 +134,12 @@ impl Abr {
         self.since.mode = Some(mode);
     }
 
+    /// The host rebuilt its pipeline and nothing flowed for `gap_ms`: the window in flight
+    /// describes the rebuild, not the link, and the next tick discards it.
+    pub fn on_pipeline_gap(&mut self, gap_ms: u32) {
+        self.since.on_pipeline_gap(gap_ms);
+    }
+
     /// One access unit for the decoder. A repeat is the host's idle keepalive, not content.
     pub fn on_au(&mut self, flags: u32) {
         self.feed.driver.on_au(flags & USER_FLAG_REPEAT != 0);
@@ -152,13 +179,7 @@ impl Abr {
             sock_drops: Some(ring_drops.saturating_sub(self.drops_at_start)),
             shard_delays: session.take_shard_delays().collect(),
             probe_active: false,
-            mode: s.mode,
-            acks: s.acks,
-            decode_lat: s.decode_lat,
-            encode_lat: s.encode_lat,
-            host_timings: s.host_timings,
-            keyframe_asks: s.keyframe_asks,
-            ..Inputs::default()
+            ..s.into_inputs()
         });
         let unsent = apply(tick.actions, send);
         let d = &mut self.feed.driver;
@@ -240,6 +261,17 @@ mod tests {
         }
         since.on_ack(&[0xff]);
         assert_eq!(since.acks, vec![(8_000, short), (20_000, None)]);
+    }
+
+    /// The newest host pipeline gap reaches one tick, which discards its window; the next
+    /// tick has none.
+    #[test]
+    fn the_newest_pipeline_gap_reaches_one_tick() {
+        let mut since = Since::default();
+        since.on_pipeline_gap(401);
+        since.on_pipeline_gap(120);
+        assert_eq!(std::mem::take(&mut since).into_inputs().gap_ms, Some(120));
+        assert_eq!(since.into_inputs().gap_ms, None);
     }
 
     /// A rate the control stream took is sent; one it did not goes back, as every probe does.
