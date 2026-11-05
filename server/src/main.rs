@@ -9,10 +9,17 @@
 mod bridge;
 mod config;
 mod hosts;
+mod lanes;
+mod listen;
 mod origin;
+mod proof;
 mod proxy;
+#[cfg(test)]
+mod testing;
 mod tls;
+mod visitor;
 
+use anyhow::Context as _;
 use axum::extract::{Path, Request, State};
 use axum::http::{header, HeaderValue, StatusCode};
 use axum::middleware::Next;
@@ -20,10 +27,12 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{any, get, post};
 use axum::{Extension, Json, Router};
 use hosts::Hosts;
+use lanes::Pass;
+use punktfunk_core::provenance::KnockSource;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::sync::Semaphore;
+use visitor::Visitor;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -34,44 +43,49 @@ async fn main() -> anyhow::Result<()> {
         .init();
     punktfunk_core::tls::install_default_provider();
     let cfg = config::Config::from_env()?;
-    let hosts = Hosts::new(cfg.hosts.clone(), &cfg.data, cfg.add_hosts)?;
+    let machine = visitor::Machine::REAL;
+    let hosts = Hosts::new(cfg.hosts.clone(), &cfg.data, cfg.add_hosts, machine)?;
     for h in hosts.all() {
         tracing::info!(host = %h.id, addr = %h.addr, port = h.port, pinned = h.pin.is_some(), "listed");
+        // Through loopback every visitor reaches the host as one on its own machine.
+        let ip = h.addr.trim_matches(['[', ']']).parse::<std::net::IpAddr>();
+        if ip.is_ok_and(|ip| ip.is_loopback()) {
+            tracing::warn!(host = %h.id, "listed at loopback; list it at its LAN address instead");
+        }
     }
     if cfg.discover {
         hosts::discover(hosts.clone());
     }
-    let app = router(hosts, cfg.dist.clone(), cfg.names());
+    let front = origin::Front {
+        names: cfg.names(),
+        proxied: matches!(cfg.tls, config::Tls::Off),
+        self_signed: matches!(cfg.tls, config::Tls::SelfSigned),
+    };
+    let app = router(hosts, cfg.dist.clone(), front);
 
     let handle = axum_server::Handle::new();
     tokio::spawn(shutdown(handle.clone()));
-    // The bridge tells the host who the real client is.
-    let service = app.into_make_service_with_connect_info::<std::net::SocketAddr>();
-    match tls::config(&cfg).await? {
-        Some(tls) => {
-            tracing::info!("serving the browser client at https://{}", cfg.listen);
-            axum_server::bind_rustls(cfg.listen, tls)
-                .handle(handle)
-                .serve(service)
-                .await?;
-        }
-        None => {
-            tracing::info!(
-                "serving the browser client at http://{} (TLS is off)",
-                cfg.listen
-            );
-            axum_server::bind(cfg.listen)
-                .handle(handle)
-                .serve(service)
-                .await?;
-        }
-    }
+    let tls = tls::config(&cfg).await?;
+    let scheme = if tls.is_some() { "https" } else { "http" };
+    tracing::info!("serving the browser client at {scheme}://{}", cfg.listen);
+    let listener =
+        std::net::TcpListener::bind(cfg.listen).with_context(|| format!("bind {}", cfg.listen))?;
+    // Behind a proxy (`TLS=off`) every connection is the proxy's: only the total holds.
+    let per_peer = if tls.is_some() {
+        listen::PER_PEER
+    } else {
+        listen::CONNS
+    };
+    let caps = listen::Capped::new(listen::CONNS, per_peer);
+    listen::serve(listener, app, tls, handle, caps).await?;
     Ok(())
 }
 
 /// Every route but the static files answers only this server's own page; every response, the
-/// files included, answers only the names in `names`.
-pub(crate) fn router(hosts: Arc<Hosts>, dist: PathBuf, names: origin::Names) -> Router {
+/// files included, answers only the names `front` allows, and knows its visitor.
+pub(crate) fn router(hosts: Arc<Hosts>, dist: PathBuf, front: origin::Front) -> Router {
+    let visitor = (hosts.clone(), front.proxied);
+    let gate = (front, hosts.clone());
     Router::new()
         .route("/config.json", get(config_json))
         .route("/h/{id}/{*rest}", any(proxy::listed))
@@ -79,24 +93,39 @@ pub(crate) fn router(hosts: Arc<Hosts>, dist: PathBuf, names: origin::Names) -> 
         .route("/wake/{id}", post(wake))
         .route("/w/{id}", get(bridge::listed))
         .route("/wa/{target}", get(bridge::typed))
+        .route("/pass/h/{id}", post(proxy::pass_listed))
+        .route("/pass/a/{target}", post(proxy::pass_typed))
         .route_layer(axum::middleware::from_fn(origin::own_page))
         .with_state(hosts)
-        .layer(Extension(Arc::new(Semaphore::new(bridge::SESSIONS))))
         .fallback_service(tower_http::services::ServeDir::new(dist))
         .layer(axum::middleware::from_fn(cache))
-        .layer(axum::middleware::from_fn_with_state(names, origin::guard))
+        .layer(axum::middleware::from_fn_with_state(gate, origin::gate))
+        .layer(axum::middleware::from_fn_with_state(visitor, visitor::find))
+        .layer(axum::middleware::from_fn(origin::headers))
 }
 
 /// The hosts the page lists, and whether it may reach others by address through `/a/`. `api` and
 /// `bridge` are relative, so a page served under a path still resolves them. A typed host's bridge
 /// is `wa/<ip:port>`, which the page composes itself, as it does `a/<ip:port>`.
-async fn config_json(State(state): State<Arc<Hosts>>) -> impl IntoResponse {
+///
+/// A host's LAN address (`plane`) goes to a browser with a pass for it, or one at home; `wake`
+/// only to the first.
+async fn config_json(
+    State(state): State<Arc<Hosts>>,
+    Extension(pass): Extension<Pass>,
+    Extension(visitor): Extension<Visitor>,
+) -> impl IntoResponse {
+    let home = visitor.class == KnockSource::Lan;
     let hosts: Vec<_> = state
         .all()
         .into_iter()
         .map(|h| {
-            let mut j = serde_json::json!({ "id": h.id, "name": h.name, "api": format!("h/{}", h.id), "bridge": format!("w/{}", h.id), "plane": h.addr });
-            if !state.macs(&h.id).is_empty() {
+            let mut j = serde_json::json!({ "id": h.id, "name": h.name, "api": format!("h/{}", h.id), "bridge": format!("w/{}", h.id) });
+            let ours = pass.covers(h.pin);
+            if ours || home {
+                j["plane"] = h.addr.clone().into();
+            }
+            if ours && !state.macs(&h.id).is_empty() {
                 j["wake"] = format!("wake/{}", h.id).into();
             }
             j
@@ -107,11 +136,18 @@ async fn config_json(State(state): State<Arc<Hosts>>) -> impl IntoResponse {
 }
 
 /// Wake a listed host: a magic packet to every MAC it announced while awake, from this machine,
-/// which is on the host's network where a browser cannot send one.
-async fn wake(State(state): State<Arc<Hosts>>, Path(id): Path<String>) -> StatusCode {
+/// which is on the host's network where a browser cannot send one. Only for a pass for that host.
+async fn wake(
+    State(state): State<Arc<Hosts>>,
+    Path(id): Path<String>,
+    Extension(pass): Extension<Pass>,
+) -> StatusCode {
     let Some(host) = state.get(&id) else {
         return StatusCode::NOT_FOUND;
     };
+    if !pass.covers(host.pin) {
+        return StatusCode::FORBIDDEN;
+    }
     let macs: Vec<_> = state
         .macs(&id)
         .iter()
@@ -179,60 +215,91 @@ mod tests {
     use axum::http::Request;
     use tower::ServiceExt;
 
-    #[tokio::test]
-    async fn config_lists_hosts_and_whether_typed_ones_are_proxied() {
-        let dir = std::env::temp_dir().join(format!("pf-config-{}", std::process::id()));
-        let desk = Listed {
+    fn desk() -> Listed {
+        Listed {
             name: "Desk".into(),
             addr: "10.0.0.2".into(),
             port: 47990,
-            pin: None,
-        };
+            pin: Some([7; 32]),
+        }
+    }
+
+    /// From `peer`, with `pass` when there is one.
+    fn from(path: &str, peer: &str, pass: Option<&str>) -> Request<Body> {
+        let mut req = Request::get(path);
+        if let Some(pass) = pass {
+            req = req.header("pf-pass", pass);
+        }
+        let mut req = req.body(Body::empty()).unwrap();
+        let peer: std::net::SocketAddr = format!("{peer}:50000").parse().unwrap();
+        req.extensions_mut()
+            .insert(axum::extract::ConnectInfo(peer));
+        req
+    }
+
+    #[tokio::test]
+    async fn config_tells_a_stranger_names_and_a_pass_holder_everything() {
+        let dir = std::env::temp_dir().join(format!("pf-config-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
         for add in [true, false] {
-            let hosts = crate::Hosts::new(vec![desk.clone()], &dir, add).unwrap();
-            let res = crate::router(hosts, dir.clone(), None)
-                .oneshot(Request::get("/config.json").body(Body::empty()).unwrap())
-                .await
-                .unwrap();
-            let body = axum::body::to_bytes(res.into_body(), 1 << 16)
-                .await
-                .unwrap();
-            let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
-            assert_eq!(json["add"], add);
-            assert_eq!(json["hosts"][0]["api"], "h/desk");
-            assert_eq!(json["hosts"][0]["bridge"], "w/desk");
-            assert_eq!(json["hosts"][0]["plane"], "10.0.0.2");
+            let hosts = crate::Hosts::new(vec![desk()], &dir, add, crate::visitor::TEST).unwrap();
+            let pass = hosts.lanes.passes.prove(None, [7; 32]);
+            let elsewhere = hosts.lanes.passes.prove(None, [8; 32]);
+            let config = |req: Request<Body>| {
+                let app = crate::router(hosts.clone(), dir.clone(), Default::default());
+                async move {
+                    let res = app.oneshot(req).await.unwrap();
+                    let body = axum::body::to_bytes(res.into_body(), 1 << 16).await;
+                    let json: serde_json::Value = serde_json::from_slice(&body.unwrap()).unwrap();
+                    assert_eq!(json["add"], add);
+                    assert_eq!(json["hosts"][0]["api"], "h/desk");
+                    assert_eq!(json["hosts"][0]["bridge"], "w/desk");
+                    json["hosts"][0]["plane"].as_str().map(str::to_owned)
+                }
+            };
+            let plane = Some("10.0.0.2".to_string());
+            assert_eq!(
+                config(from("/config.json", "203.0.113.9", None)).await,
+                None
+            );
+            let at_home = from("/config.json", "192.168.1.20", None);
+            assert_eq!(config(at_home).await, plane);
+            let theirs = from("/config.json", "203.0.113.9", Some(&elsewhere));
+            assert_eq!(config(theirs).await, None);
+            let ours = from("/config.json", "203.0.113.9", Some(&pass));
+            assert_eq!(config(ours).await, plane);
+            let forged = from("/config.json", "203.0.113.9", Some(&"ab".repeat(32)));
+            assert_eq!(config(forged).await, None);
         }
         let _ = std::fs::remove_dir_all(dir);
     }
 
     #[tokio::test]
-    async fn wake_goes_only_to_a_known_host_from_this_page() {
+    async fn wake_goes_only_to_a_known_host_for_a_pass_holder() {
         let dir = std::env::temp_dir().join(format!("pf-wake-route-{}", std::process::id()));
-        let desk = Listed {
-            name: "Desk".into(),
-            addr: "10.0.0.2".into(),
-            port: 47990,
-            pin: None,
-        };
-        let hosts = crate::Hosts::new(vec![desk], &dir, true).unwrap();
-        let wake = |path: &str, site: &str| {
-            Request::post(path)
-                .header("sec-fetch-site", site)
-                .body(Body::empty())
-                .unwrap()
+        let _ = std::fs::remove_dir_all(&dir);
+        let hosts = crate::Hosts::new(vec![desk()], &dir, true, crate::visitor::TEST).unwrap();
+        let pass = hosts.lanes.passes.prove(None, [7; 32]);
+        let wake = |path: &str, site: &str, pass: Option<&str>| {
+            let mut req = Request::post(path).header("sec-fetch-site", site);
+            if let Some(pass) = pass {
+                req = req.header("pf-pass", pass);
+            }
+            req.body(Body::empty()).unwrap()
         };
         let status = |req: Request<Body>| {
-            let app = crate::router(hosts.clone(), dir.clone(), None);
+            let app = crate::router(hosts.clone(), dir.clone(), Default::default());
             async move { app.oneshot(req).await.unwrap().status() }
         };
-        assert_eq!(status(wake("/wake/desk", "cross-site")).await, 403);
-        assert_eq!(status(wake("/wake/nowhere", "same-origin")).await, 404);
+        let ours = Some(pass.as_str());
+        assert_eq!(status(wake("/wake/desk", "cross-site", ours)).await, 403);
+        assert_eq!(status(wake("/wake/desk", "same-origin", None)).await, 403);
         assert_eq!(
-            status(wake("/wake/desk", "same-origin")).await,
-            409,
-            "no MAC known yet"
+            status(wake("/wake/nowhere", "same-origin", ours)).await,
+            404
         );
+        let known = status(wake("/wake/desk", "same-origin", ours)).await;
+        assert_eq!(known, 409, "no MAC known yet");
         let _ = std::fs::remove_dir_all(dir);
     }
 }

@@ -544,7 +544,7 @@ checksum = "da7c62ceae207dd37ea5b845da6a0696c799f85e97da1ab5b7910be3c1c80223"
 [[package]]
 name = "fec-rs"
 version = "0.1.0"
-source = "git+https://git.unom.io/unom/punktfunk?rev=12e4dfd1ba7855d0043a15c2939fc923a85771ef#12e4dfd1ba7855d0043a15c2939fc923a85771ef"
+source = "git+https://git.unom.io/unom/punktfunk?rev=f29f933fa365cb737bd57ae9079adf2c96d8fda8#f29f933fa365cb737bd57ae9079adf2c96d8fda8"
 
 [[package]]
 name = "find-msvc-tools"
@@ -1382,7 +1382,11 @@ dependencies = [
  "anyhow",
  "axum",
  "axum-server",
+ "base64 0.22.1",
  "futures-util",
+ "getrandom 0.3.4",
+ "hyper-util",
+ "if-addrs",
  "mdns-sd",
  "punktfunk-core",
  "rcgen",
@@ -1390,6 +1394,7 @@ dependencies = [
  "rustls",
  "serde",
  "serde_json",
+ "sha2",
  "time",
  "tokio",
  "tokio-tungstenite",
@@ -1402,8 +1407,8 @@ dependencies = [
 
 [[package]]
 name = "punktfunk-core"
-version = "0.45.0"
-source = "git+https://git.unom.io/unom/punktfunk?rev=12e4dfd1ba7855d0043a15c2939fc923a85771ef#12e4dfd1ba7855d0043a15c2939fc923a85771ef"
+version = "0.46.0"
+source = "git+https://git.unom.io/unom/punktfunk?rev=f29f933fa365cb737bd57ae9079adf2c96d8fda8#f29f933fa365cb737bd57ae9079adf2c96d8fda8"
 dependencies = [
  "aes-gcm",
  "chacha20poly1305",
@@ -1414,6 +1419,7 @@ dependencies = [
  "libc",
  "reed-solomon-simd",
  "rustls",
+ "rustls-webpki",
  "sha2",
  "socket2",
  "thiserror",

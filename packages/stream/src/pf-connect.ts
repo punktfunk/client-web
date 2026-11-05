@@ -18,6 +18,7 @@
 // over the short-lived WebTransport hash, and `verify` refuses to dial a host that cannot produce
 // it.
 
+import { serverFetch, TOO_MANY } from "./pass.ts";
 import type { ProfilePick } from "./profiles.ts";
 import { derToRaw, fromBase64, hexToBytes } from "@punktfunk/host/core";
 
@@ -85,10 +86,11 @@ export async function reachWhy(origin: string, timeoutMs = 4000): Promise<{ reac
   const abort = new AbortController();
   const timer = setTimeout(() => abort.abort(), timeoutMs);
   try {
-    const r = await fetch(`${origin}/api/v1/health`, {
+    const r = await serverFetch()(`${origin}/api/v1/health`, {
       cache: "no-store",
       signal: abort.signal,
     });
+    if (r.status === 429) return { reach: "unreachable", said: TOO_MANY };
     if (r.status === 502) {
       // Plain text is the page's server speaking; anything else (a proxy's HTML page) says nothing.
       const plain = r.headers.get("content-type")?.startsWith("text/plain") ?? false;
@@ -122,7 +124,9 @@ export const acceptUrl = (origin: string): string => `${origin}/api/v1/health`;
  */
 export interface HostTarget {
   readonly api: string;
-  readonly plane: string;
+  /** Absent for a stranger outside the server's network, who is not told it: then only the
+   *  bridge reaches the host. */
+  readonly plane?: string;
   readonly tunnel?: boolean;
   readonly bridge?: string;
 }
@@ -163,14 +167,15 @@ export async function bootstrap(url: string, timeoutMs = 4000): Promise<Bootstra
  *  the plane being off reads as `blocked` — there, and not serving pages. */
 export async function reachTarget(target: string | HostTarget): Promise<Reach> {
   if (typeof target === "string" || !target.tunnel) return reach(typeof target === "string" ? target : target.api);
-  const b = await bootstrap(bootstrapUrl(target.api, target.plane));
+  const b = await bootstrap(bootstrapUrl(target.api, target.plane ?? new URL(target.api).hostname));
   return b.reach === "ok" ? "ok" : b.reach === "no-plane" ? "blocked" : "unreachable";
 }
 
 /** What the host says about its browser plane. Everything here is public. */
 export async function fetchPlane(origin: string): Promise<Plane> {
-  const r = await fetch(`${origin}/api/v1/webtransport`, { cache: "no-store" });
+  const r = await serverFetch()(`${origin}/api/v1/webtransport`, { cache: "no-store" });
   if (r.status === 404) throw new Error("this host does not offer the browser plane");
+  if (r.status === 429) throw new Error(TOO_MANY);
   if (!r.ok) throw new Error(`the host answered ${r.status}`);
   return (await r.json()) as Plane;
 }

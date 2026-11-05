@@ -55,10 +55,10 @@ function fakeFeed() {
 }
 
 /** A carrier whose socket has opened, the socket, and what reached the feed. */
-async function opened(t: TestContext) {
+async function opened(t: TestContext, pass: Uint8Array | null = null) {
   t.mock.timers.enable({ apis: ["setInterval"] });
   const { feed, got } = fakeFeed();
-  const carrier = new WsCarrier(feed, "wss://page.example/w/abc?port=9778&hash=00");
+  const carrier = new WsCarrier(feed, "wss://page.example/w/abc?port=9778&hash=00", pass);
   const opening = carrier.open();
   const ws = FakeSocket.last;
   ws.open();
@@ -72,14 +72,26 @@ test("the bridge URL is the page server's own, with the plane's port and hash", 
   assert.equal(bridgeUrl("wa/192.168.1.21:47990", 9784, hash, "http://localhost:5173/"), `ws://localhost:5173/wa/192.168.1.21:47990?port=9784&hash=${hash}`);
 });
 
+test("a browser without a pass asks to pair before anything else", async (t) => {
+  const { ws } = await opened(t);
+  assert.deepEqual(ws.sent[0], { tag: TAG.PAIR });
+});
+
+test("a browser with a pass for the host shows it before anything else", async (t) => {
+  const pass = new Uint8Array(32).fill(7);
+  const { ws } = await opened(t, pass);
+  assert.deepEqual(ws.sent[0], { tag: TAG.PASS, pass });
+  assert.equal(ws.sent.filter((f) => f.tag === TAG.PASS || f.tag === TAG.PAIR).length, 1);
+});
+
 test("an open bridge opens the control stream with its type byte first", async (t) => {
   const { carrier, ws, got } = await opened(t);
   assert.equal(ws.binaryType, "arraybuffer");
   assert.deepEqual(got, ["ready"]);
-  assert.deepEqual(ws.sent[0], { tag: TAG.CONTROL, bytes: new Uint8Array([0]) });
+  assert.deepEqual(ws.sent[1], { tag: TAG.CONTROL, bytes: new Uint8Array([0]) });
   carrier.sendControl(new Uint8Array([7, 8]));
   assert.equal(carrier.sendDatagram(new Uint8Array([1])), true);
-  assert.deepEqual(ws.sent.slice(1), [
+  assert.deepEqual(ws.sent.slice(2), [
     { tag: TAG.CONTROL, bytes: new Uint8Array([7, 8]) },
     { tag: TAG.DATAGRAM, bytes: new Uint8Array([1]) },
   ]);

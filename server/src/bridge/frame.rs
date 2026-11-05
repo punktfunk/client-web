@@ -1,12 +1,15 @@
 //! One WebSocket message: a tag byte, then its payload (`web-client-tcp-bridge.md` §3.3).
 //!
-//! Integers are big-endian. A ping's `f64` is echoed byte for byte, never read.
+//! Integers are big-endian. A ping's `f64` is echoed byte for byte, never read. Tags 5 and 6 go
+//! once, first, from the page: which of the two pools the session joins.
 
 const DATAGRAM: u8 = 0;
 const CONTROL: u8 = 1;
 const UNI: u8 = 2;
 const CLOSE: u8 = 3;
 const PING: u8 = 4;
+const PASS: u8 = 5;
+const PAIR: u8 = 6;
 
 #[derive(Debug, PartialEq)]
 pub enum Frame<'a> {
@@ -22,6 +25,10 @@ pub enum Frame<'a> {
     Ping([u8; 8]),
     /// The ping's clock, then the bridge's smoothed WebTransport RTT.
     Pong { sent: [u8; 8], rtt_us: u32 },
+    /// Page to bridge, first: a pass, for the paired pool.
+    Pass(&'a [u8; 32]),
+    /// Page to bridge, first: a stranger asking to pair.
+    Pair,
 }
 
 /// `None` for an unknown tag or a truncated close or ping.
@@ -49,6 +56,8 @@ pub fn decode(msg: &[u8]) -> Option<Frame<'_>> {
             }
             _ => return None,
         },
+        PASS => Frame::Pass(body.try_into().ok()?),
+        PAIR if body.is_empty() => Frame::Pair,
         _ => return None,
     })
 }
@@ -61,6 +70,8 @@ pub fn encode(frame: &Frame) -> Vec<u8> {
         Frame::Close { code, reason } => (CLOSE, [&code.to_be_bytes(), reason]),
         Frame::Ping(sent) => (PING, [sent, &[]]),
         Frame::Pong { sent, rtt_us } => (PING, [sent, &rtt_us.to_be_bytes()]),
+        Frame::Pass(pass) => (PASS, [*pass, &[]]),
+        Frame::Pair => (PAIR, [&[], &[]]),
     };
     [&[tag][..], parts[0], parts[1]].concat()
 }
@@ -85,6 +96,8 @@ mod tests {
                 sent: t,
                 rtt_us: 900,
             },
+            Frame::Pass(&[7; 32]),
+            Frame::Pair,
         ] {
             assert_eq!(decode(&encode(&f)), Some(f));
         }
@@ -112,6 +125,8 @@ mod tests {
     fn unknown_and_truncated_are_refused() {
         assert_eq!(decode(b""), None);
         assert_eq!(decode(b"\x05abc"), None);
+        assert_eq!(decode(b"\x06x"), None);
+        assert_eq!(decode(b"\x07"), None);
         assert_eq!(decode(b"\x03\x00\x00\x51"), None);
         assert_eq!(decode(b"\x04\x00\x00\x00"), None);
         assert_eq!(decode(b"\x04123456789"), None);

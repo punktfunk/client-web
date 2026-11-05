@@ -10,28 +10,31 @@ mod frame;
 mod plane;
 
 use crate::hosts::Hosts;
+use crate::lanes::{Slot, PAIRING_LIFE};
+#[cfg(test)]
+use crate::lanes::{PAIRING_FULL, PAIRING_HOURLY};
+use crate::proof::Outcome;
 use crate::proxy;
+use crate::visitor::Visitor;
 use axum::body::Bytes;
 use axum::extract::ws::{close_code, CloseFrame, Message, WebSocket, WebSocketUpgrade};
-use axum::extract::{ConnectInfo, FromRequestParts, Path, Query, Request, State};
+use axum::extract::{FromRequestParts, Path, Query, Request, State};
 use axum::http::{header, request::Parts, StatusCode};
 use axum::response::{IntoResponse, Response};
 use frame::Frame;
 use futures_util::stream::{SplitSink, SplitStream};
 use futures_util::{FutureExt, SinkExt, StreamExt};
-use std::net::{IpAddr, SocketAddr};
+use punktfunk_core::provenance::CLIENT_ADDR_UNKNOWN;
+use std::net::IpAddr;
 use std::sync::atomic::{AtomicU64, Ordering::Relaxed};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::mpsc::{self, Receiver, Sender};
-use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use tokio::task::JoinSet;
 use tokio::time::timeout;
 use wtransport::error::ConnectionError;
 use wtransport::{Connection, RecvStream, SendStream, VarInt};
 
-/// Bridged sessions at once: each is a QUIC connection and a relay.
-pub const SESSIONS: usize = 16;
 const MAX_MESSAGE: usize = 1 << 20;
 const DIAL_TIMEOUT: Duration = Duration::from_secs(5);
 /// A WebSocket ping this often; three unanswered and the TCP leg is dead.
@@ -48,45 +51,78 @@ struct Dial {
     hash: String,
 }
 
-/// A host this server lists.
+/// The first message's deadline. Before it the plane is not dialled.
+const FIRST: Duration = Duration::from_secs(5);
+
+/// Where the bridge dials: a host at its management port and pin. One the operator did not
+/// list must be proven first; `typed` is one the page named, whose proof a stranger pays for.
+struct To {
+    addr: String,
+    mgmt: u16,
+    pin: Option<[u8; 32]>,
+    listed: bool,
+    typed: bool,
+}
+
+/// A host this server lists; one mDNS found, once proven.
 pub async fn listed(
     State(hosts): State<Arc<Hosts>>,
     Path(id): Path<String>,
-    ConnectInfo(peer): ConnectInfo<SocketAddr>,
     req: Request,
 ) -> Response {
-    let addr = hosts.get(&id).map(|h| h.addr).ok_or(StatusCode::NOT_FOUND);
-    open(addr, id, peer, req).await
+    let to = hosts.get(&id).ok_or(StatusCode::NOT_FOUND).map(|h| To {
+        listed: h.fullname.is_none(),
+        typed: false,
+        addr: h.addr,
+        mgmt: h.port,
+        pin: h.pin,
+    });
+    open(hosts, to, id, req).await
 }
 
-/// A host the page names by its private address, as `/a/` reaches one.
+/// A host the page names by its address, as `/a/` reaches one.
 pub async fn typed(
     State(hosts): State<Arc<Hosts>>,
     Path(target): Path<String>,
-    ConnectInfo(peer): ConnectInfo<SocketAddr>,
     req: Request,
 ) -> Response {
-    let addr = if !hosts.add_hosts {
-        Err(StatusCode::NOT_FOUND)
-    } else {
-        match proxy::private_target(&target) {
-            Some((IpAddr::V4(v4), _)) => Ok(v4.to_string()),
-            Some((IpAddr::V6(v6), _)) => Ok(format!("[{v6}]")),
-            None => Err(StatusCode::BAD_REQUEST),
+    let to = match proxy::typed_target(&hosts, &target) {
+        _ if !hosts.add_hosts => Err(StatusCode::NOT_FOUND),
+        Ok((ip, mgmt)) => {
+            let addr = proxy::url_host(ip);
+            let pin = hosts.pin_at(&format!("{addr}:{mgmt}"));
+            Ok(To {
+                addr,
+                mgmt,
+                pin,
+                listed: false,
+                typed: true,
+            })
         }
+        Err(_) => Err(StatusCode::BAD_REQUEST),
     };
-    open(addr, target, peer, req).await
+    open(hosts, to, target, req).await
+}
+
+/// What admission needs once the socket is open: the host's identity, the plane it published
+/// when that is known, and who is asking.
+struct Admit {
+    hosts: Arc<Hosts>,
+    to: To,
+    identity: Option<[u8; 32]>,
+    published: Option<(u16, [u8; 32])>,
+    who: Option<IpAddr>,
 }
 
 async fn open(
-    addr: Result<String, StatusCode>,
+    hosts: Arc<Hosts>,
+    to: Result<To, StatusCode>,
     host: String,
-    peer: SocketAddr,
     req: Request,
 ) -> Response {
     let (mut parts, _) = req.into_parts();
-    let addr = match addr {
-        Ok(a) => a,
+    let to = match to {
+        Ok(to) => to,
         Err(status) => return status.into_response(),
     };
     let Some((port, hash)) = Query::<Dial>::try_from_uri(&parts.uri)
@@ -95,26 +131,97 @@ async fn open(
     else {
         return StatusCode::BAD_REQUEST.into_response();
     };
-    let Some(slots) = parts.extensions.get::<Arc<Semaphore>>().cloned() else {
-        return StatusCode::INTERNAL_SERVER_ERROR.into_response();
-    };
-    let Ok(slot) = slots.try_acquire_owned() else {
-        return StatusCode::SERVICE_UNAVAILABLE.into_response();
-    };
+    let (mut identity, mut published) = (to.pin, None);
+    if !to.listed {
+        let key = format!("{}:{}", to.addr, to.mgmt);
+        if to.typed {
+            if let Some(refused) = crate::proof::over_meter(&hosts, &parts.extensions, &key, false)
+            {
+                return refused;
+            }
+        }
+        match crate::proof::prove(&hosts, &to.addr, to.mgmt, to.pin, false).await {
+            Outcome::Host {
+                fp,
+                plane_port,
+                plane_hash,
+                ..
+            } => (identity, published) = (Some(fp), Some((plane_port, plane_hash))),
+            refused => {
+                return refused
+                    .refusal()
+                    .unwrap_or_else(|| StatusCode::BAD_GATEWAY.into_response())
+            }
+        }
+    }
     let ws = match WebSocketUpgrade::from_request_parts(&mut parts, &()).await {
         Ok(ws) => ws,
         Err(refused) => return refused.into_response(),
     };
+    let visitor = parts.extensions.get::<Visitor>();
     let target = plane::Target {
-        addr,
+        addr: to.addr.clone(),
         port,
         hash,
         origin: header_str(&parts, header::ORIGIN.as_str()).map(str::to_owned),
-        client: peer.ip().to_canonical(),
+        client: visitor.map_or_else(|| CLIENT_ADDR_UNKNOWN.into(), Visitor::header),
+    };
+    let admit = Admit {
+        who: visitor.and_then(|v| v.addr),
+        hosts,
+        to,
+        identity,
+        published,
     };
     ws.max_message_size(MAX_MESSAGE)
         .max_frame_size(MAX_MESSAGE)
-        .on_upgrade(move |socket| session(socket, target, host, slot))
+        .on_upgrade(move |socket| session(socket, target, host, admit))
+}
+
+const PASS_REFUSED: &str =
+    "this page doesn't know this browser's pass for the host. Reload the page and connect again";
+const PAIRING_OVER: &str =
+    "this page gives a browser three minutes to pair with a host. Connect again to try once more";
+const NOT_PUBLISHED: &str =
+    "this page reaches only the host's own streaming port for a browser that isn't paired with it";
+
+/// The first message picks the pool: tag 5 with a pass for this host, any port on it; or tag 6
+/// to pair, only to the plane the host published. The refusal is a close code and the page's
+/// sentence.
+async fn admission(
+    socket: &mut WebSocket,
+    target: &plane::Target,
+    a: &Admit,
+) -> Result<(Slot, bool), (u16, &'static str)> {
+    let first = match timeout(FIRST, socket.recv()).await {
+        Ok(Some(Ok(Message::Binary(m)))) => m,
+        _ => return Err((close_code::POLICY, "no pool asked for")),
+    };
+    let pools = &a.hosts.lanes.pools;
+    match frame::decode(&first) {
+        Some(Frame::Pass(pass)) => {
+            let pass = crate::hosts::hex(pass);
+            if !a.hosts.lanes.passes.hosts(&pass).covers(a.identity) {
+                return Err((close_code::POLICY, PASS_REFUSED));
+            }
+            let slot = pools.paired().map_err(|say| (close_code::AGAIN, say))?;
+            Ok((slot, false))
+        }
+        Some(Frame::Pair) => {
+            let published = match a.published {
+                Some(p) => Some(p),
+                None => crate::proof::published(&a.to.addr, a.to.mgmt, a.to.pin).await,
+            };
+            if published != Some((target.port, target.hash)) {
+                return Err((close_code::POLICY, NOT_PUBLISHED));
+            }
+            let slot = pools
+                .pairing(a.who)
+                .map_err(|say| (close_code::AGAIN, say))?;
+            Ok((slot, true))
+        }
+        _ => Err((close_code::PROTOCOL, "unknown message")),
+    }
 }
 
 fn header_str<'a>(parts: &'a Parts, name: &str) -> Option<&'a str> {
@@ -129,12 +236,15 @@ struct Counts {
     to_page_dropped: AtomicU64,
 }
 
-async fn session(
-    mut socket: WebSocket,
-    target: plane::Target,
-    host: String,
-    _slot: OwnedSemaphorePermit,
-) {
+async fn session(mut socket: WebSocket, target: plane::Target, host: String, admit: Admit) {
+    let (_slot, pairing) = match admission(&mut socket, &target, &admit).await {
+        Ok(admitted) => admitted,
+        Err((code, reason)) => {
+            tracing::info!(host = %host, reason, "bridge session refused");
+            let _ = socket.send(close(code, reason)).await;
+            return;
+        }
+    };
     let started = Instant::now();
     let conn = match timeout(DIAL_TIMEOUT, plane::dial(&target)).await {
         Ok(Ok(conn)) => conn,
@@ -149,7 +259,16 @@ async fn session(
         }
     };
     let counts = Arc::new(Counts::default());
-    let code = relay(socket, &conn, &counts).await;
+    // A stranger's session lasts as long as the host parks a knock, and no longer.
+    let relay = relay(socket, &conn, &counts);
+    tokio::pin!(relay);
+    let code = tokio::select! {
+        code = &mut relay => code,
+        _ = tokio::time::sleep(PAIRING_LIFE), if pairing => {
+            conn.close(VarInt::from_u32(0), b"");
+            relay.await
+        }
+    };
     tracing::info!(
         host = %host,
         secs = started.elapsed().as_secs(),
@@ -205,6 +324,8 @@ async fn relay(socket: WebSocket, conn: &Connection, counts: &Arc<Counts>) -> u3
                 vec![Message::Binary(tag3.into()), close(close_code::NORMAL, "")],
             )
         }
+        // Only the pairing session's deadline closes the connection from outside `relay`.
+        Err(ConnectionError::LocallyClosed) => (0, vec![close(close_code::AGAIN, PAIRING_OVER)]),
         Err(_) => (0, vec![close(close_code::ERROR, "host connection lost")]),
         Ok(End::Left(code, reason)) => {
             conn.close(VarInt::from_u32(code), &reason);
@@ -281,7 +402,7 @@ async fn from_page(
                 }
             }
             Some(Frame::Pong { .. }) => {}
-            Some(Frame::Uni(_)) | None => return End::Protocol,
+            Some(Frame::Uni(_) | Frame::Pass(_) | Frame::Pair) | None => return End::Protocol,
         }
     }
 }
@@ -367,6 +488,7 @@ fn close(code: u16, reason: &'static str) -> Message {
 mod tests {
     use super::*;
     use crate::config::Listed;
+    use std::net::SocketAddr;
     use tokio_tungstenite::tungstenite::{self, client::IntoClientRequest, Message as Ws};
     use wtransport::endpoint::endpoint_side::Server;
     use wtransport::{Endpoint, Identity, ServerConfig};
@@ -390,17 +512,30 @@ mod tests {
         (server, port, hash)
     }
 
-    /// This server on loopback, listing `desk` at 127.0.0.1.
-    async fn page_server(name: &str) -> SocketAddr {
+    /// This server on loopback, and a pass for its one host.
+    struct Served {
+        at: SocketAddr,
+        pass: [u8; 32],
+    }
+
+    async fn page_server(name: &str) -> Served {
+        serve_desk(name, crate::config::MGMT_PORT, [7; 32]).await
+    }
+
+    /// This server on loopback, listing `desk` at 127.0.0.1:`mgmt` pinned to `fp`.
+    async fn serve_desk(name: &str, mgmt: u16, fp: [u8; 32]) -> Served {
         let dir = std::env::temp_dir().join(format!("pf-bridge-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
         let desk = Listed {
             name: "desk".into(),
             addr: "127.0.0.1".into(),
-            port: crate::config::MGMT_PORT,
-            pin: None,
+            port: mgmt,
+            pin: Some(fp),
         };
-        let hosts = Hosts::new(vec![desk], &dir, true).unwrap();
-        let app = crate::router(hosts, dir, None);
+        let hosts = Hosts::new(vec![desk], &dir, true, crate::visitor::TEST).unwrap();
+        let pass = hosts.lanes.passes.prove(None, fp);
+        let pass = crate::config::parse_fp(&pass).unwrap();
+        let app = crate::router(hosts, dir, Default::default());
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let at = listener.local_addr().unwrap();
         tokio::spawn(async move {
@@ -410,7 +545,44 @@ mod tests {
             )
             .await
         });
-        at
+        Served { at, pass }
+    }
+
+    /// The bridge opened in the paired pool.
+    async fn paired(s: &Served, path: &str, headers: &[(&'static str, &str)]) -> Page {
+        let mut ws = open(s.at, path, headers).await.unwrap();
+        send(&mut ws, Frame::Pass(&s.pass)).await;
+        ws
+    }
+
+    /// The bridge opened in the pairing pool, as a stranger at `from`.
+    async fn pairing(s: &Served, path: &str, from: &str) -> Page {
+        let mut ws = open(s.at, path, &[("x-forwarded-for", from)])
+            .await
+            .unwrap();
+        send(&mut ws, Frame::Pair).await;
+        ws
+    }
+
+    /// The session dialled the plane: a ping comes back as a pong.
+    async fn admitted(ws: &mut Page) -> bool {
+        send(ws, Frame::Ping(1f64.to_be_bytes())).await;
+        match next(ws).await {
+            Ws::Binary(b) => matches!(frame::decode(&b), Some(Frame::Pong { .. })),
+            _ => false,
+        }
+    }
+
+    /// A plane that takes every session and holds it until the other side goes.
+    fn plane_accepting() -> (u16, [u8; 32]) {
+        let (server, port, hash) = plane();
+        tokio::spawn(async move {
+            loop {
+                let conn = server.accept().await.await.unwrap().accept().await.unwrap();
+                tokio::spawn(async move { conn.closed().await });
+            }
+        });
+        (port, hash)
     }
 
     /// Open the bridge as a page would; the refusal's status when it is not upgraded.
@@ -495,10 +667,10 @@ mod tests {
             conn.close(VarInt::from_u32(0x51), b"bye");
             seen
         });
-        let at = page_server("whole").await;
+        let s = page_server("whole").await;
         let path = format!("/w/desk?port={port}&hash={}", crate::hosts::hex(&hash));
-        let origin = own(at);
-        let mut ws = open(at, &path, &[("origin", &origin)]).await.unwrap();
+        let origin = own(s.at);
+        let mut ws = paired(&s, &path, &[("origin", &origin)]).await;
 
         send(&mut ws, Frame::Control(b"hello")).await;
         let mut ctl = Vec::new();
@@ -554,10 +726,10 @@ mod tests {
             }
             codes
         });
-        let at = page_server("page-close").await;
+        let s = page_server("page-close").await;
         let path = format!("/w/desk?port={port}&hash={}", crate::hosts::hex(&hash));
 
-        let mut quit = open(at, &path, &[]).await.unwrap();
+        let mut quit = paired(&s, &path, &[]).await;
         send(
             &mut quit,
             Frame::Close {
@@ -568,7 +740,7 @@ mod tests {
         .await;
         assert_eq!(close_code(&mut quit).await.0, 1000);
 
-        let gone = open(at, &path, &[]).await.unwrap();
+        let gone = paired(&s, &path, &[]).await;
         drop(gone);
 
         let codes = host.await.unwrap();
@@ -591,7 +763,7 @@ mod tests {
             port,
             hash,
             origin: None,
-            client: [127, 0, 0, 1].into(),
+            client: "127.0.0.1".into(),
         })
         .await
         .unwrap();
@@ -614,7 +786,7 @@ mod tests {
     #[tokio::test]
     async fn only_this_page_with_a_good_hash_gets_in() {
         let (_server, port, hash) = plane();
-        let at = page_server("admission").await;
+        let at = page_server("admission").await.at;
         let good = format!("/w/desk?port={port}&hash={}", crate::hosts::hex(&hash));
         assert_eq!(
             open(at, &good, &[("sec-fetch-site", "cross-site")])
@@ -649,10 +821,10 @@ mod tests {
         let (server, port, _) = plane();
         tokio::spawn(async move { server.accept().await.await });
         let silent = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
-        let at = page_server("dial").await;
+        let s = page_server("dial").await;
 
-        let wrong = format!("/wa/127.0.0.1:47990?port={port}&hash={}", "00".repeat(32));
-        let mut ws = open(at, &wrong, &[]).await.unwrap();
+        let wrong = format!("/w/desk?port={port}&hash={}", "00".repeat(32));
+        let mut ws = paired(&s, &wrong, &[]).await;
         assert_eq!(
             close_code(&mut ws).await,
             (1011, "host refused the session".into())
@@ -663,7 +835,7 @@ mod tests {
             silent.local_addr().unwrap().port(),
             "00".repeat(32)
         );
-        let mut ws = open(at, &quiet, &[]).await.unwrap();
+        let mut ws = paired(&s, &quiet, &[]).await;
         assert_eq!(
             close_code(&mut ws).await,
             (1011, "host did not answer".into())
@@ -671,20 +843,87 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn the_seventeenth_session_is_refused() {
-        let (server, port, hash) = plane();
-        tokio::spawn(async move {
-            loop {
-                let conn = server.accept().await.await.unwrap().accept().await.unwrap();
-                tokio::spawn(async move { conn.closed().await });
-            }
-        });
-        let at = page_server("cap").await;
+    async fn strangers_holding_sockets_leave_a_paired_stream_running() {
+        let (port, hash) = plane_accepting();
+        let s = page_server("strangers").await;
         let path = format!("/w/desk?port={port}&hash={}", crate::hosts::hex(&hash));
         let mut held = Vec::new();
-        for _ in 0..SESSIONS {
-            held.push(open(at, &path, &[]).await.unwrap());
+        for i in 0..16 {
+            let from = format!("203.0.113.{i}");
+            held.push(
+                open(s.at, &path, &[("x-forwarded-for", &from)])
+                    .await
+                    .unwrap(),
+            );
         }
-        assert_eq!(open(at, &path, &[]).await.err(), Some(503));
+        let mut ws = paired(&s, &path, &[]).await;
+        assert!(admitted(&mut ws).await);
+        // A socket that never says which pool goes after five seconds, undialled.
+        assert_eq!(close_code(&mut held[0]).await.0, 1008);
+        // A pass for another host is a stranger's.
+        let mut other = open(s.at, &path, &[]).await.unwrap();
+        send(&mut other, Frame::Pass(&[9; 32])).await;
+        assert_eq!(close_code(&mut other).await, (1008, PASS_REFUSED.into()));
+    }
+
+    /// A fake host's management API publishing this plane, and this server listing it.
+    async fn published_desk(name: &str) -> (Served, String) {
+        let (port, hash) = plane_accepting();
+        let mgmt =
+            crate::testing::upstream_publishing(crate::testing::Plane::Attested, (port, hash))
+                .await;
+        let s = serve_desk(name, mgmt.port, mgmt.fp).await;
+        (
+            s,
+            format!("/w/desk?port={port}&hash={}", crate::hosts::hex(&hash)),
+        )
+    }
+
+    #[tokio::test]
+    async fn the_pairing_pool_holds_four_at_once_and_twenty_an_hour() {
+        punktfunk_core::tls::install_default_provider();
+        let (s, path) = published_desk("pairing").await;
+        let mut four = Vec::new();
+        for i in 1..=4 {
+            let mut ws = pairing(&s, &path, &format!("10.0.0.{i}")).await;
+            assert!(admitted(&mut ws).await, "{i}");
+            four.push(ws);
+        }
+        let mut fifth = pairing(&s, &path, "10.0.0.5").await;
+        assert_eq!(close_code(&mut fifth).await, (1013, PAIRING_FULL.into()));
+        // One at a time per address.
+        drop(four.pop());
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        let mut again = pairing(&s, &path, "10.0.0.1").await;
+        assert_eq!(close_code(&mut again).await.0, 1013);
+        for ws in &mut four {
+            let _ = ws.close(None).await;
+        }
+        drop(four);
+        // Four have started; sixteen more make the hour's twenty.
+        for i in 10..26 {
+            tokio::time::sleep(Duration::from_millis(200)).await;
+            let mut ws = pairing(&s, &path, &format!("10.0.1.{i}")).await;
+            assert!(admitted(&mut ws).await, "{i}");
+            let _ = ws.close(None).await;
+        }
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        let mut late = pairing(&s, &path, "10.0.2.1").await;
+        assert_eq!(close_code(&mut late).await, (1013, PAIRING_HOURLY.into()));
+    }
+
+    #[tokio::test]
+    async fn a_stranger_reaches_only_the_published_plane() {
+        punktfunk_core::tls::install_default_provider();
+        let (s, path) = published_desk("published").await;
+        let hash = path.split("&hash=").nth(1).unwrap();
+        let elsewhere = format!("/w/desk?port=9&hash={hash}");
+        let mut ws = pairing(&s, &elsewhere, "10.0.0.1").await;
+        assert_eq!(close_code(&mut ws).await, (1008, NOT_PUBLISHED.into()));
+        let mut ws = pairing(&s, &path, "10.0.0.2").await;
+        assert!(admitted(&mut ws).await);
+        // A pass holder may name any port on the host: this one is dialled, and nothing answers.
+        let mut ws = paired(&s, &elsewhere, &[]).await;
+        assert_eq!(close_code(&mut ws).await.0, 1011);
     }
 }
