@@ -352,3 +352,19 @@ test("a device key an earlier connect asked for says nothing to a newer one", as
     globalThis.fetch = fetched;
   }
 });
+
+test("a paired host without a pass is renewed once before the dial", async (t: TestContext) => {
+  const origin = "https://page.example/h/renew";
+  const store = new Map([["pf.hosts", JSON.stringify({ [origin]: { fingerprint: "cd".repeat(32) } })]]);
+  Object.assign(globalThis, { localStorage: { getItem: (k: string) => store.get(k) ?? null, setItem() {} } });
+  t.after(() => Reflect.deleteProperty(globalThis, "localStorage"));
+  const { engine } = engineIn("ready", "w/abc", origin);
+  let renewals = 0;
+  Object.assign(engine, { host: { renewPass: async () => void renewals++ } });
+  const before = dialled.length;
+  engine.startStream({ width: 1280, height: 720 });
+  assert.equal(dialled.length, before, "nothing dialled while the pass is asked for");
+  await flush();
+  assert.equal(renewals, 1);
+  assert.equal(dialled.at(-1), "https://192.168.1.21:9778/pf2", "then the dial, with or without a pass");
+});

@@ -80,29 +80,31 @@ export function serverFetch(
 /**
  * After a device login: ask this page's server for a pass for the host at `origin`, or to extend
  * the one held to it. `origin` is the host's route on the server (`…/h/<id>`, `…/a/<ip:port>`);
- * a host the page reaches any other way has nothing to ask for.
+ * a host the page reaches any other way has nothing to ask for. `false` when the server gave no
+ * pass, so the caller asks again.
  */
 export async function renewPass(
   origin: string,
   token: string,
   fingerprint: string,
   base?: typeof fetch,
-): Promise<void> {
+): Promise<boolean> {
   const page = new URL(".", location.href).href;
   const route = origin.startsWith(page) ? origin.slice(page.length).replace(/\/+$/, "") : "";
-  if (!/^[ha]\/[^/]+$/.test(route)) return;
+  if (!/^[ha]\/[^/]+$/.test(route)) return true;
   const r = await serverFetch(fingerprint, base)(new URL(`pass/${route}`, page).href, {
     method: "POST",
     cache: "no-store",
     headers: { authorization: token },
   });
-  if (!r.ok) return;
+  if (!r.ok) return false;
   const { pass } = (await r.json()) as { pass?: string };
-  if (!pass || !/^[0-9a-f]{64}$/.test(pass)) return;
+  if (!pass || !/^[0-9a-f]{64}$/.test(pass)) return false;
   const held = read();
   const fp = fingerprint.toLowerCase();
   const hosts = held?.pass === pass ? held.hosts : [];
-  if (hosts.includes(fp)) return;
+  if (hosts.includes(fp)) return true;
   write({ pass, hosts: [...hosts, fp] });
   for (const f of listeners) f();
+  return true;
 }

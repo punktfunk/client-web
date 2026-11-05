@@ -1064,9 +1064,22 @@ export class Engine {
     });
   }
 
-  /** Open the plane. Only after `onDeviceReady`: the wasm side must already hold the key's SPKI. */
-  private dial(): void {
-    if (!this.origin || !this.plane) return;
+  /** Open the plane. Only after `onDeviceReady`: the wasm side must already hold the key's SPKI.
+   *  A paired host whose pass this page lacks gets one renewal first, which the bridge shows. */
+  private dial(renewed = false): void {
+    const origin = this.origin;
+    if (!origin || !this.plane) return;
+    const fp = pf.hosts.fingerprint(origin);
+    const bridge = typeof this.target === "object" ? this.target?.bridge : undefined;
+    const host = this.host;
+    if (!renewed && host && fp && bridge && !passFor(fp)) {
+      // Without a pass the bridge carries a paired device in the pairing pool, closed at 3 min.
+      const epoch = this.epoch;
+      void host.renewPass().then(() => {
+        if (this.epoch === epoch && this.host === host && this.state.kind === "starting") this.dial(true);
+      });
+      return;
+    }
     // `/pf2` is the host's `punktfunk/2` session; a host older than 0.43 has no such path. A
     // door's seat answers on its own port of the same address.
     const port = this.seatPlane?.port ?? this.plane.port;
@@ -1075,7 +1088,7 @@ export class Engine {
     // No plane address: a stranger outside the server's network, whom only the bridge carries.
     const wt =
       this.planeHost !== "" &&
-      (pin === "wt" || (!pin && "WebTransport" in globalThis && carrierHint.get(this.origin) !== "ws"));
+      (pin === "wt" || (!pin && "WebTransport" in globalThis && carrierHint.get(origin) !== "ws"));
     this.openCarrier(wt ? "wt" : "ws", port, hash);
   }
 
