@@ -254,6 +254,9 @@ export class InputPipe {
     this.on(c, "contextmenu", (e: Event) => e.preventDefault());
     // A release that lands in another window or tab never comes back here.
     this.on(window, "blur", () => this.release());
+    this.on(document, "visibilitychange", () => {
+      if (document.visibilityState === "hidden") this.release();
+    });
     // The pad set is polled; these only keep the arrival and removal events honest.
     this.on(window, "gamepadconnected", (e: GamepadEvent) => this.arrive(e.gamepad));
     this.on(window, "gamepaddisconnected", (e: GamepadEvent) => this.leave(e.gamepad.index));
@@ -342,12 +345,14 @@ export class InputPipe {
     for (const k of under) if (this.keys.has(k)) this.up(k);
   }
 
-  /** Let go of every key and button the host holds. */
+  /** Let go of every key, button and pad the host holds. The next poll sends a pad that is still
+   *  in use again. */
   private release(): void {
     for (const vk of this.keys) this.mod._pf_input(KIND.KEY_UP, vk, 0, 0, 0);
     this.keys.clear();
     this.underMeta.clear();
     this.press(0);
+    for (const pad of this.pads) this.mod._pf_gamepad(pad, 0, 0, 0, 0, 0, 0, 0);
   }
 
   /** Send what changed in `MouseEvent.buttons`. A second button pressed or released while one is
@@ -500,6 +505,12 @@ export class InputPipe {
     target: Window,
     type: K,
     fn: (e: WindowEventMap[K]) => void,
+    opts?: AddEventListenerOptions,
+  ): void;
+  private on<K extends keyof DocumentEventMap>(
+    target: Document,
+    type: K,
+    fn: (e: DocumentEventMap[K]) => void,
     opts?: AddEventListenerOptions,
   ): void;
   private on<K extends keyof HTMLElementEventMap>(

@@ -225,3 +225,12 @@ test("Meta's release lets go of the keys pressed under it, not those held before
   key("KeyW", false, PICTURE);
   assert.deepEqual(sent, ["1:87"]);
 });
+
+test("a lost focus lets go of keys and pads", () => {
+  const { sent, pipe, key } = keyPipe();
+  const internals = pipe as unknown as { arrive(g: unknown): void; release(): void };
+  internals.arrive({ index: 2, mapping: "standard", id: "" });
+  key("KeyA", true, PICTURE);
+  internals.release();
+  assert.deepEqual(sent, ["0:65", "1:65", "pad2:0,0,0,0,0,0,0"]);
+});
