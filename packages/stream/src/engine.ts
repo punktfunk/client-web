@@ -318,6 +318,9 @@ export class Engine {
   /** Moved by every `reset`: a `connect` that comes back from an await to a newer one was
    *  cancelled or replaced, and says nothing. */
   private epoch = 0;
+  /** The `epoch` the device key was last asked for in. A key that comes out of IndexedDB after a
+   *  newer connect began belongs to the older one, and says nothing. */
+  private keyEpoch = 0;
   /** The fingerprint the last `connect` was told to expect, for the reconnects this engine makes. */
   private expect: string | undefined;
   /** Where every carrier puts what it receives. */
@@ -512,8 +515,7 @@ export class Engine {
     this.set({ kind: "connecting", origin });
     // The key BEFORE the connection: the host may ask for a signature the moment the control
     // stream opens, and a key still coming out of IndexedDB would miss it.
-    this.boundHash = this.plane.cert_hash_sha256;
-    withStr(this.mod, [this.plane.cert_hash_sha256], (p) => this.mod._pf_device_init(p));
+    this.bindKey(this.plane.cert_hash_sha256);
   }
 
   /**
@@ -683,7 +685,13 @@ export class Engine {
   /** Dial now when the credential is bound to `hash`; else bind it, and `onDeviceReady` dials. */
   private bindAndDial(hash: string): void {
     if (!hash || hash === this.boundHash) return this.dial();
+    this.bindKey(hash);
+  }
+
+  /** Load the device key bound to `hash`; `onDeviceReady` or `onDeviceFailed` answers. */
+  private bindKey(hash: string): void {
     this.boundHash = hash;
+    this.keyEpoch = this.epoch;
     withStr(this.mod, [hash], (p) => this.mod._pf_device_init(p));
   }
 
@@ -1023,11 +1031,12 @@ export class Engine {
   /**
    * The device key is loaded. The plane is dialled only to pair or to stream: the host gives a
    * session ten seconds to speak, so a browser looking at the library holds none, and `ready`
-   * comes from pairing records here plus the management API.
+   * comes from pairing records here plus the management API. A key an older connect asked for
+   * says nothing.
    */
   private onDeviceReady(): void {
     const origin = this.origin;
-    if (!origin) return;
+    if (!origin || this.keyEpoch !== this.epoch) return;
     if (this.pendingPin || this.pendingStream || this.pendingKnock) return this.dial();
     const fingerprint = pf.hosts.fingerprint(origin);
     const device = this.mod.__pfDevice;
@@ -1043,10 +1052,11 @@ export class Engine {
     if (fp) pf.hosts.remember(origin, { fingerprint: fp });
   }
 
-  /** The device key could not be loaded or made, so nothing can sign for this browser. */
+  /** The device key could not be loaded or made, so nothing can sign for this browser. An older
+   *  connect's failure says nothing. */
   private onDeviceFailed(): void {
     const origin = this.origin;
-    if (!origin) return;
+    if (!origin || this.keyEpoch !== this.epoch) return;
     this.set({
       kind: "error",
       origin,

@@ -331,3 +331,24 @@ test("a bridge that never opens names the page's server, not UDP", async (t: Tes
   engine.startStream({ width: 1280, height: 720 });
   assert.match(message(), /page's server couldn't open a connection/, "not the WebTransport sentence");
 });
+
+test("a device key an earlier connect asked for says nothing to a newer one", async () => {
+  const { engine, mod } = engineIn("ready");
+  const fetched = globalThis.fetch;
+  const asked: string[] = [];
+  globalThis.fetch = ((u: string) => {
+    asked.push(String(u));
+    return new Promise<Response>(() => {});
+  }) as typeof fetch;
+  try {
+    void engine.connect("https://192.168.1.31:47990");
+    (mod.__pfOnDeviceReady as () => void)();
+    (mod.__pfOnDeviceFailed as () => void)();
+    await flush();
+    assert.equal(engine.current.kind, "reaching", "the newer connect's checks come first");
+    assert.deepEqual(asked, ["https://192.168.1.31:47990/api/v1/health"]);
+  } finally {
+    engine.disconnect();
+    globalThis.fetch = fetched;
+  }
+});
