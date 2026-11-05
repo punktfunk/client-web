@@ -333,7 +333,7 @@ class App {
         // The field stays in front: what was typed is wrong and this is where it is fixed.
         this.adding = true;
         this.tab = "hosts";
-        return this.home(sentence(s.message));
+        return this.home();
       case "reaching":
         return this.show({ kind: "connecting", origin: s.origin, phase: "reaching" });
       case "blocked": {
@@ -498,11 +498,14 @@ class App {
   }
 
   // --- the host list ---------------------------------------------------------------------
-  private home(error?: string): void {
+  private home(): void {
     // A link waiting for its answer stays in front of the probes that redraw this list.
     if (this.link) return;
     if (this.configAgainAt && Date.now() >= this.configAgainAt) void this.refreshConfigured();
     const cards = this.cards();
+    // A mistyped address stays said while the engine holds it, whatever redraws the list.
+    const s = this.engine.current;
+    const error = s.kind === "bad-address" ? sentence(s.message) : undefined;
     this.show({
       kind: "home",
       hosts: cards,
