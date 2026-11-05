@@ -141,11 +141,12 @@ export function Hud({ screen, actions }: { screen: Extract<Screen, { kind: "stre
             <span className="max-w-[40rem] rounded-full bg-card/95 px-4 py-2 text-center text-sm">{notice}</span>
           </motion.div>
         )}
-        {/* A captured pointer has no cursor, so the way out has to be on screen. The browser
-            releases on Escape itself; this only says so. */}
+        {/* A captured pointer has no cursor, so the way out goes on screen each time capture
+            starts, for as long as the exit hint stays. The browser releases on Escape itself;
+            this only says so. */}
         {stats.pointerCaptured && (
           <motion.div key="captured" {...RISE} className="pointer-events-none fixed inset-x-0 bottom-[12%] flex justify-center">
-            <span className="rounded-full bg-card/95 px-4 py-2 text-sm">
+            <span className="animate-[pf-exit-hint_6s_forwards] rounded-full bg-card/95 px-4 py-2 text-sm">
               Mouse captured — press <kbd className="rounded bg-white/10 px-1.5 py-0.5 font-mono text-xs">Esc</kbd> to release
             </span>
           </motion.div>
