@@ -31,7 +31,9 @@ struct Since {
     decode_lat: (u64, u32),
     encode_lat: (u64, u32),
     host_timings: Vec<HostTiming>,
+    /// Keyframe asks a loss stood behind, and those the page's own hold made.
     keyframe_asks: u32,
+    starved_keyframe_asks: u32,
     /// The newest host pipeline gap, ms: one discard per window.
     gap_ms: Option<u32>,
 }
@@ -42,6 +44,15 @@ impl Since {
         if let Ok(ack) = BitrateChanged::from_body(body) {
             self.acks.push((ack.bitrate_kbps, ack.reason));
         }
+    }
+
+    fn on_keyframe_ask(&mut self, starved: bool) {
+        let n = if starved {
+            &mut self.starved_keyframe_asks
+        } else {
+            &mut self.keyframe_asks
+        };
+        *n += 1;
     }
 
     /// One `PipelineGap`. The newest wins: a tick discards one window however many landed.
@@ -59,6 +70,7 @@ impl Since {
             encode_lat: self.encode_lat,
             host_timings: self.host_timings,
             keyframe_asks: self.keyframe_asks,
+            starved_keyframe_asks: self.starved_keyframe_asks,
             ..Inputs::default()
         }
     }
@@ -161,9 +173,10 @@ impl Abr {
         }
     }
 
-    /// A recovery keyframe ask went out.
-    pub fn on_keyframe_ask(&mut self) {
-        self.since.keyframe_asks += 1;
+    /// A keyframe ask went out. `starved`: the page's own hold made it, with nothing lost
+    /// ([`crate::recovery::Freeze`]); the driver reads only the others as a reason to cut.
+    pub fn on_keyframe_ask(&mut self, starved: bool) {
+        self.since.on_keyframe_ask(starved);
     }
 
     /// Tick the driver with what was read since the last pump, and send what it asks for.
@@ -272,6 +285,17 @@ mod tests {
         since.on_pipeline_gap(120);
         assert_eq!(std::mem::take(&mut since).into_inputs().gap_ms, Some(120));
         assert_eq!(since.into_inputs().gap_ms, None);
+    }
+
+    /// A starved decoder's asks reach the driver apart from those a loss stood behind.
+    #[test]
+    fn starved_asks_are_counted_apart() {
+        let mut since = Since::default();
+        for starved in [true, false, true] {
+            since.on_keyframe_ask(starved);
+        }
+        let inputs = since.into_inputs();
+        assert_eq!((inputs.keyframe_asks, inputs.starved_keyframe_asks), (1, 2));
     }
 
     /// A rate the control stream took is sent; one it did not goes back, as every probe does.

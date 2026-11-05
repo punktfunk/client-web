@@ -1,11 +1,51 @@
 //! Which access units the page decodes after a loss, and what it asks the host for. The hold
-//! itself is `punktfunk_core::reanchor`; this is the frame-index bookkeeping around it.
+//! itself is `punktfunk_core::reanchor`; this is the frame-index bookkeeping around it, and who
+//! raised the hold.
 
 use punktfunk_core::packet::{
     FLAG_SOF, RFI_MAX_RANGE, USER_FLAG_RECOVERY_ANCHOR, USER_FLAG_RECOVERY_POINT,
 };
 use punktfunk_core::quic::v2::dgram::Feedback;
+use punktfunk_core::reanchor::ReanchorGate;
 use std::time::{Duration, Instant};
+
+/// The post-loss hold, and whether the page raised it on an unbroken stream rather than a loss.
+///
+/// The page's own holds come from its decoder: an error streak, or a rebuilt decoder's ask.
+/// Their keyframe asks, the hold's re-asks included, go to the bitrate driver as a starved
+/// decoder's, which a lower rate cannot feed. Core's `RecoveryDriver` keeps the same flag.
+pub struct Freeze {
+    gate: ReanchorGate,
+    own: bool,
+}
+
+impl Default for Freeze {
+    /// Open, for a session whose reassembler has dropped nothing yet.
+    fn default() -> Freeze {
+        Freeze {
+            gate: ReanchorGate::new(0),
+            own: false,
+        }
+    }
+}
+
+impl Freeze {
+    /// One gate event; `page` when the page's decoder raised it, not the wire. An event that
+    /// arms decides who holds: the page keeps a hold it raised on an open gate or already held.
+    pub fn step<T>(&mut self, page: bool, event: impl FnOnce(&mut ReanchorGate) -> T) -> T {
+        let (arms, held) = (self.gate.arms(), self.gate.is_holding());
+        let out = event(&mut self.gate);
+        if self.gate.arms() != arms {
+            self.own = page && (self.own || !held);
+        }
+        out
+    }
+
+    /// A keyframe ask this hold makes now is a starved decoder's, not a loss's.
+    pub fn starved(&self) -> bool {
+        self.own
+    }
+}
 
 /// An open ask repeats this often: a feedback datagram can be lost.
 const REPEAT: Duration = Duration::from_millis(16);
@@ -197,6 +237,43 @@ mod tests {
         let rfi = asks.ask(Ask::Rfi(3, 5), t0);
         assert_eq!((rfi.ask, rfi.invalidate), (2, Some((3, 5))));
         assert!(asks.resend(t0 + GIVE_UP).is_none(), "given up");
+    }
+
+    /// A hold the page raised on an open gate asks as starved, its backstop re-ask too, until a
+    /// loss re-arms it.
+    #[test]
+    fn a_page_hold_asks_starved_until_a_loss_re_arms_it() {
+        use punktfunk_core::reanchor::REANCHOR_FREEZE_MAX;
+        let t0 = Instant::now();
+        let mut f = Freeze::default();
+        f.step(true, |g| g.arm(t0));
+        assert!(f.starved(), "a rebuilt decoder's ask");
+        assert!(f.step(false, |g| g.poll(0, t0 + REANCHOR_FREEZE_MAX)));
+        assert!(f.starved(), "the backstop re-ask of the page's hold");
+        f.step(false, |g| g.arm_expecting_drops(t0, 2));
+        assert!(!f.starved(), "a gap makes the hold the loss's");
+        assert!(f.step(false, |g| g.poll(9, t0 + REANCHOR_FREEZE_MAX)));
+        assert!(!f.starved(), "a drop climb is a loss");
+    }
+
+    /// The page's streak inside a loss's hold leaves it the loss's; on an open gate it is the
+    /// page's.
+    #[test]
+    fn a_no_output_streak_is_the_page_s_only_on_an_open_gate() {
+        let t0 = Instant::now();
+        let mut f = Freeze::default();
+        f.step(false, |g| g.arm_expecting_drops(t0, 1));
+        let trips = (0..3)
+            .filter(|_| f.step(true, |g| g.on_no_output(t0)))
+            .count();
+        assert_eq!(trips, 1);
+        assert!(!f.starved(), "held by a loss");
+        f.step(false, |g| g.on_decoded(u32::from(FLAG_SOF), true, t0));
+        let trips = (0..3)
+            .filter(|_| f.step(true, |g| g.on_no_output(t0)))
+            .count();
+        assert_eq!(trips, 1);
+        assert!(f.starved(), "raised on an open gate");
     }
 
     #[test]
