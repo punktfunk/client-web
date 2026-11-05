@@ -543,8 +543,8 @@ export class ConsoleUi implements Ui {
     }
     this.imeText = field.text;
     this.ime.value = field.text;
-    // A PIN or a port wants the number pad; an address wants the dot beside the digits.
-    this.ime.inputMode = field.digits ? "numeric" : "decimal";
+    // A PIN or a port wants the number pad; a name, a title or an address the full keyboard.
+    this.ime.inputMode = field.digits ? "numeric" : "text";
     this.ime.focus();
     this.ime.setSelectionRange(field.text.length, field.text.length);
   }
@@ -1086,7 +1086,6 @@ export class ConsoleUi implements Ui {
 function imeField(): HTMLInputElement {
   const input = document.createElement("input");
   input.type = "text";
-  input.inputMode = "decimal";
   input.autocomplete = "off";
   input.tabIndex = -1;
   input.setAttribute("aria-hidden", "true");
