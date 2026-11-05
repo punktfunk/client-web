@@ -448,8 +448,8 @@ class App {
   }
 
   // --- the tabs --------------------------------------------------------------------------
-  /** A sidebar entry. A flow left half-way — a PIN, a certificate, an error — is cancelled; the
-   *  library's own connection is kept, since it is what the Library tab shows. */
+  /** A sidebar entry. A flow left half-way — a PIN, a certificate, an error, the profile gate —
+   *  is cancelled; the library's own connection is kept, since it is what the Library tab shows. */
   private navigate(tab: Tab): void {
     const s = this.engine.current;
     if (tab === "settings") {
@@ -459,6 +459,7 @@ class App {
     this.settingsOpen = false;
     this.tab = tab;
     this.link = null;
+    this.gate = null;
     if (FLOWS.has(s.kind) && !(this.quiet && tab === "library")) {
       this.quiet = false;
       this.engine.disconnect();
