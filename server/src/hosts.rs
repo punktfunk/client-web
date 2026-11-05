@@ -212,7 +212,9 @@ impl Hosts {
     }
 
     /// An mDNS advert. A host already listed, by fingerprint or address, stays as listed, but
-    /// what it wakes on is kept for it. Any other joins only at an address this server may dial.
+    /// what it wakes on is kept for it. Any other joins only at an address this server may dial,
+    /// and only while fewer than [`FOUND`] are held. Past that a new name is refused and keeps no
+    /// MACs. The hosts already held stay, and still move.
     fn found(&self, a: Advert) {
         let mut list = self.list.write().unwrap();
         if let Some(h) = list.iter().find(|h| {
@@ -226,11 +228,14 @@ impl Hosts {
         if !a.addr.parse().is_ok_and(|ip| self.may_dial(ip)) {
             return tracing::debug!(addr = %a.addr, "advert at an address this server does not dial");
         }
+        let held = list
+            .iter()
+            .position(|h| h.fullname.as_deref() == Some(&a.fullname));
+        if held.is_none() && list.iter().filter(|h| h.fullname.is_some()).count() >= FOUND {
+            return tracing::debug!(addr = %a.addr, "advert past the hosts kept from mDNS");
+        }
         self.remember_macs(&format!("{}:{}", a.addr, a.port), a.macs.clone());
-        if let Some(h) = list
-            .iter_mut()
-            .find(|h| h.fullname.as_deref() == Some(&a.fullname))
-        {
+        if let Some(h) = held.map(|i| &mut list[i]) {
             (h.addr, h.port, h.pin) = (a.addr, a.port, a.pin);
             return;
         }
@@ -256,6 +261,9 @@ impl Hosts {
             .retain(|h| h.fullname.as_deref() != Some(fullname) || macs.contains_key(&h.pin_key()));
     }
 }
+
+/// Hosts kept from mDNS adverts. A LAN device can announce any number of names.
+const FOUND: usize = 64;
 
 /// What a host announces, reduced to what the proxy needs.
 struct Advert {
@@ -431,6 +439,33 @@ mod tests {
         }
         let ids: Vec<_> = hosts.all().into_iter().map(|h| h.id).collect();
         assert_eq!(ids, ["couch"]);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn adverts_past_the_cap_are_refused_and_the_held_ones_stay() {
+        let dir = std::env::temp_dir().join(format!("pf-advert-cap-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let hosts = Hosts::new(Vec::new(), &dir, true, TEST).unwrap();
+        let advert = |i: usize, addr: String| Advert {
+            fullname: format!("h{i}._punktfunk._udp.local."),
+            name: format!("h{i}"),
+            addr,
+            port: crate::config::MGMT_PORT,
+            pin: None,
+            macs: vec![format!("aa:bb:cc:dd:ee:{:02x}", i % 256)],
+        };
+        for i in 0..=FOUND {
+            hosts.found(advert(i, format!("10.2.0.{i}")));
+        }
+        let all = hosts.all();
+        assert_eq!(all.len(), FOUND);
+        assert!(all.iter().all(|h| h.id != format!("h{FOUND}")));
+        let macs = hosts.macs.lock().unwrap().len();
+        assert_eq!(macs, FOUND, "a refused advert keeps no MACs");
+        // One already held still moves.
+        hosts.found(advert(0, "10.2.1.0".into()));
+        assert_eq!(hosts.get("h0").unwrap().addr, "10.2.1.0");
         let _ = std::fs::remove_dir_all(dir);
     }
 
