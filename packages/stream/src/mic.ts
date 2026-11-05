@@ -5,8 +5,9 @@
 // cancellation keeps the host's audio, playing from the speakers, out of what goes back.
 //
 // Capture is an `AudioWorklet` rather than `MediaStreamTrackProcessor`, which only Chromium has;
-// the worklet brings the device's rate to 48 kHz and cuts 20 ms frames, WebCodecs' `AudioEncoder` makes them Opus, and Rust
-// wraps each as the uplink datagram. The host decodes into its virtual microphone.
+// the worklet brings the device's rate to 48 kHz and cuts 20 ms frames, WebCodecs'
+// `AudioEncoder` makes them Opus, and Rust wraps each as the uplink datagram. The host decodes
+// into its virtual microphone.
 
 import type { PunktfunkModule } from "./emscripten.ts";
 
