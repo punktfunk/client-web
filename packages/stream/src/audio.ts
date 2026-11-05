@@ -197,6 +197,10 @@ export class AudioPipe {
   }
 
   private async open(): Promise<void> {
+    // Safari plays Web Audio as ambient sound, which an iPhone's silent switch mutes; a stream
+    // is media.
+    const session = (navigator as { audioSession?: { type: string } }).audioSession;
+    if (session) session.type = "playback";
     const ctx = new AudioContext({ sampleRate: SAMPLE_RATE, latencyHint: "interactive" });
     this.ctx = ctx;
     const url = URL.createObjectURL(new Blob([WORKLET], { type: "application/javascript" }));
