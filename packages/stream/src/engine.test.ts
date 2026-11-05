@@ -285,3 +285,24 @@ test("a codec this browser can't decode gives way to another on offer, once each
   engine.startStream({ width: 1280, height: 720 });
   assert.equal(offers.at(-1), 0x03);
 });
+
+test("only a 401 at sign-in reads as a forgotten pairing", async () => {
+  const fetched = globalThis.fetch;
+  const device = { spki: async () => "", sign: async () => new Uint8Array(64) };
+  try {
+    for (const [status, kind] of [[401, "forgotten"], [429, "error"], [502, "ready"]] as const) {
+      globalThis.fetch = (async () => new Response("no", { status })) as typeof fetch;
+      const { engine } = engineIn("needs-pairing");
+      (engine as unknown as { checkHost(o: string, fp: string, d: unknown): void }).checkHost(ORIGIN, "cd".repeat(32), device);
+      await new Promise((r) => setTimeout(r, 20));
+      assert.equal(engine.current.kind, kind, `status ${status}`);
+      if (status === 429) assert.match((engine.current as { message: string }).message, /too many requests/);
+      if (status === 502) {
+        const host = (engine.current as { host: { info(): Promise<unknown> } }).host;
+        await assert.rejects(host.info(), (e: Error) => /couldn't sign in/.test(e.message) && !/pair/.test(e.message));
+      }
+    }
+  } finally {
+    globalThis.fetch = fetched;
+  }
+});

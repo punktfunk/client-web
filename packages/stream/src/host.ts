@@ -224,6 +224,14 @@ async function refusal(res: Response, fallback: string): Promise<string> {
 function translate(operation: string, e: unknown): Error {
   const cause = unwrap(e);
   if (statusOf(cause) === 429) return new Error(TOO_MANY);
+  // The sign-in: only a 401 says the host no longer knows this device.
+  if (cause instanceof DeviceRefused && cause.status !== 401) {
+    return new Error(
+      cause.status === 429
+        ? TOO_MANY
+        : `this browser couldn't sign in to the host — it answered ${cause.status}. Try again in a moment`,
+    );
+  }
   if (cause instanceof DeviceRefused) return cause;
   if (cause instanceof SchemaError) return new VersionSkew(operation, String(cause));
   if (cause instanceof Error) return cause;

@@ -31,7 +31,7 @@ import { type TunnelFetch, tunnelFetch } from "./tunnel.ts";
 import { type Feed, wasmFeed } from "./carrier/feed.ts";
 import { WtCarrier } from "./carrier/wt.ts";
 import { bridgeUrl, WsCarrier } from "./carrier/ws.ts";
-import { passFor } from "./pass.ts";
+import { passFor, TOO_MANY } from "./pass.ts";
 
 export type { AudioSnapshot, AudioState } from "./audio.ts";
 export type { MicState } from "./mic.ts";
@@ -1136,7 +1136,8 @@ export class Engine {
 
   /**
    * The management API is what knows whether the host still accepts this device, so `ready`
-   * waits for it. Refused: unpaired there. Any other failure leaves streaming possible.
+   * waits for it. A 401: unpaired there. Too many requests: an error. Any other failure leaves
+   * streaming possible.
    */
   private checkHost(origin: string, fingerprint: string, device: NonNullable<PunktfunkModule["__pfDevice"]>): void {
     const host = new Host(origin, fingerprint, device, this.tunnel ?? undefined);
@@ -1153,8 +1154,9 @@ export class Engine {
   /** `ready` once the management API has answered for this connection, or what it refused. */
   private settle(host: Host, origin: string, e?: unknown): void {
     if (this.host !== host || this.origin !== origin) return;
-    if (e instanceof DeviceRefused) return this.set({ kind: "forgotten", origin });
+    if (e instanceof DeviceRefused && e.status === 401) return this.set({ kind: "forgotten", origin });
     if (e instanceof VersionSkew) return this.set({ kind: "error", origin, message: e.message, skew: true });
+    if (e instanceof Error && e.message === TOO_MANY) return this.set({ kind: "error", origin, message: TOO_MANY });
     this.set({ kind: "ready", origin, host });
   }
 
