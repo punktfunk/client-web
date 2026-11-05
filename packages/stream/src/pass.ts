@@ -47,7 +47,7 @@ export function passFor(fingerprint: string | null | undefined): Uint8Array | nu
 }
 
 /** Whether `url` is on this page's own server. */
-function ours(url: string): boolean {
+export function ours(url: string): boolean {
   try {
     return new URL(url, location.href).origin === new URL(location.href).origin;
   } catch {

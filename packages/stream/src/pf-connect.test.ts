@@ -12,7 +12,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { verify, hostFingerprint, reach, type Plane } from "./pf-connect.ts";
+import { verify, hostFingerprint, reach, reachWhy, type Plane } from "./pf-connect.ts";
 
 // A full `Plane`, as the route publishes one; the two attestation fields are the ones under
 // test. Narrowed to `Required` so the test can read them without a null check on every line.
@@ -81,5 +81,28 @@ test("a gateway that cannot reach the host reads as unreachable, not a certifica
     }
   } finally {
     globalThis.fetch = real;
+  }
+});
+
+test("the page's own server is never a certificate to accept", async () => {
+  const real = globalThis.fetch;
+  Object.assign(globalThis, { location: { href: "https://page.example/" } });
+  const own = "https://page.example/a/203.0.113.5:47990";
+  const plain = { "content-type": "text/plain; charset=utf-8" };
+  try {
+    const said = "Add a host by its IP address on this network, like 192.168.1.25.";
+    globalThis.fetch = async () => new Response(said, { status: 400, headers: plain });
+    assert.deepEqual(await reachWhy(own), { reach: "unreachable", said });
+    globalThis.fetch = async () => new Response(null, { status: 403 });
+    assert.deepEqual(await reachWhy(own), { reach: "unreachable" });
+    globalThis.fetch = async () => Promise.reject(new TypeError("Failed to fetch"));
+    assert.deepEqual(await reachWhy(own), { reach: "unreachable" }, "a server that is down");
+    // A host the page reaches directly is unchanged: a fast failure is its certificate.
+    assert.equal(await reach("https://192.168.1.25:47990"), "blocked");
+    globalThis.fetch = async () => new Response(said, { status: 400, headers: plain });
+    assert.equal(await reach("https://192.168.1.25:47990"), "blocked");
+  } finally {
+    globalThis.fetch = real;
+    Reflect.deleteProperty(globalThis, "location");
   }
 });
