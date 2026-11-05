@@ -754,10 +754,12 @@ class App {
       if (this.libraryFor !== s.origin) return;
       this.entries = entries;
       this.libraryError = undefined;
+      this.libraryAt = Date.now();
     } catch (e) {
       if (this.libraryFor !== s.origin) return;
+      // A failure keeps no clock: opening the host again asks again.
+      this.libraryAt = 0;
       if (e instanceof VersionSkew) {
-        this.libraryLoading = false;
         return this.show({
           kind: "error",
           head: "This host speaks a different version",
@@ -768,11 +770,7 @@ class App {
       // dead end.
       this.libraryError = e instanceof Error ? e.message : String(e);
     } finally {
-      if (this.libraryFor === s.origin) {
-        this.libraryLoading = false;
-        // A failure keeps no clock: opening the host again asks again.
-        if (!this.libraryError) this.libraryAt = Date.now();
-      }
+      if (this.libraryFor === s.origin) this.libraryLoading = false;
     }
     this.redrawLibrary();
     // Art after the grid, per entry: the grid should appear before its covers do.
