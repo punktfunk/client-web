@@ -624,6 +624,8 @@ export class ConsoleUi implements Ui {
         this.hosts = s.hosts;
         this.pushHosts();
         if (s.error) this.fetchFailed("The host did not answer", s.error);
+        // Home only with the engine on no host: what the console asked for will not follow.
+        this.dropPending();
         if (was?.kind === "streaming" || (this.dialled && was?.kind !== "home")) {
           this.dialled = false;
           c.phase(3);
@@ -662,6 +664,7 @@ export class ConsoleUi implements Ui {
         return;
       case "error":
         this.dialled = false;
+        this.dropPending();
         this.fetchFailed(s.head, s.text);
         c.phase(2, `${s.head}. ${s.text}`);
         this.pushPair("Idle");
@@ -669,6 +672,15 @@ export class ConsoleUi implements Ui {
       default:
         return;
     }
+  }
+
+  /** Forget the steps waiting on a connect that ended, so a later visit to that host does not
+   *  play, pair or knock unasked. */
+  private dropPending(): void {
+    this.pendingPlay = null;
+    this.profilesAsk = null;
+    this.pendingPin = null;
+    this.pendingKnock = null;
   }
 
   /** The shelf the console is waiting on could not be reached: say so on it, with a retry. */
@@ -851,10 +863,7 @@ export class ConsoleUi implements Ui {
       return;
     }
     if (a === "CancelConnect") {
-      this.pendingPlay = null;
-      this.profilesAsk = null;
-      this.pendingPin = null;
-      this.pendingKnock = null;
+      this.dropPending();
       this.dialled = false;
       // A request for access is withdrawn, so a late approval admits nothing.
       if (this.engine.current.kind === "awaiting-approval") this.actions?.cancelRequest();
