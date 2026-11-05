@@ -81,7 +81,7 @@ from home.
 |---|---|---|
 | `LISTEN` | `0.0.0.0:8443` | |
 | `TLS` | `self-signed` | `self-signed`, `off` behind a proxy, or `cert.pem,key.pem` |
-| `TLS_NAMES` | | Domains the page is opened at. It answers only to these, IP addresses and names no public DNS holds (`localhost`, `desk`, `.local`, `.home.arpa`, `.internal`); with your own certificate and none listed, to any name. The self-signed certificate covers them too |
+| `TLS_NAMES` | | The names and addresses you open the page at, which the self-signed certificate covers. The page answers only to these, IP addresses and names no public DNS holds (`localhost`, `desk`, `.local`, `.home.arpa`, `.internal`); with your own certificate and none listed, to any name |
 | `PUNKTFUNK_HOSTS` | | Hosts mDNS cannot find: `name=address[:port][#fingerprint]`, comma-separated |
 | `DISCOVER` | on | `0` turns the mDNS browse off |
 | `ADD_HOSTS` | on | `0` stops the page reaching a host typed by its address. Either way, the server relays to a typed address only once a Punktfunk host has proven itself there |
@@ -92,8 +92,11 @@ no credential of its own; the browser's device key stays the only one.
 
 ## From outside your network
 
-Tailscale is the simplest way. Put this machine and your hosts on a tailnet, run
-`compose.tailscale.yaml`, and the page opens wherever your devices are on the tailnet.
+Tailscale is the simplest way. Put this machine and your hosts on a tailnet, and the page opens
+wherever your devices are on the tailnet. It takes two files from [`deploy/`](deploy),
+`compose.tailscale.yaml` and `tailscale-serve.json`, side by side. Before the first start, set
+`TLS_NAMES` in the compose file to the page's tailnet name, and `PUNKTFUNK_HOSTS` to your hosts
+by their tailnet addresses, since hosts don't announce themselves across a tailnet.
 
 Without Tailscale, give the page a domain with a real certificate. `compose.public.yaml` puts
 Caddy in front, which gets and renews the certificate for you:

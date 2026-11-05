@@ -2,7 +2,7 @@
 # proxy's certificate, so no browser warns. Point the proxy at http://<this machine>:8080.
 #
 # The page's origin is your proxy's domain: add it to each host's Browser origins (console,
-# Streaming, advanced), or leave that list empty to allow any page.
+# Streaming, advanced). A browser on a domain that isn't listed there has to pair with a PIN.
 #
 # The server tells each host who the visitor is, from the X-Forwarded-For or Forwarded header the
 # proxy adds (nginx: `proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;`). A proxy
