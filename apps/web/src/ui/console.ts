@@ -37,6 +37,7 @@ import {
   tvBack,
 } from "@punktfunk/stream";
 import { FrameMeter, type Row, type Step, Sweep, table } from "./console-cost.ts";
+import { hostRow, originFor } from "./console-hosts.ts";
 import { coverBytes } from "./cover.ts";
 import type { Actions, HostCard, Screen, Ui } from "./types.ts";
 
@@ -791,42 +792,18 @@ export class ConsoleUi implements Ui {
     const known = new Map(this.engine.knownHosts().map((h) => [h.origin, h]));
     this.origins.clear();
     const rows = this.hosts.map((h) => {
-      const row = this.rowOf(h, known.get(h.origin)?.fingerprint ?? h.fingerprint);
+      const row = hostRow(h, known.get(h.origin)?.fingerprint ?? h.fingerprint);
       this.origins.set(row.key, h.origin);
       return row;
     });
     this.engine.console.push(CONSOLE_PUSH.HOSTS, rows);
   }
 
-  private rowOf(h: HostCard, fp: string | undefined): ConsoleHostRow {
-    const url = new URL(h.origin);
-    const addr = h.plane ?? url.hostname;
-    const mgmt = Number(url.port) || 47990;
-    return {
-      key: fp ?? `${addr}:${mgmt}`,
-      id: h.origin,
-      name: h.label ?? h.name ?? addr,
-      addr,
-      port: 9778,
-      fp_hex: fp ?? "",
-      paired: !!fp,
-      saved: true,
-      online: h.reach === "ok",
-      mgmt_port: mgmt,
-      can_wake: !!h.wake && h.reach !== "ok",
-      last_used: h.seen ? Math.floor(h.seen / 1000) : null,
-      os: "",
-      pin: null,
-      bound_preset: null,
-      profile: h.profile ?? null,
-    };
-  }
-
   /** The row for an origin, from the home list or, for one only just added, from what the
    *  engine knows. */
   private row(origin: string): ConsoleHostRow {
     const card = this.hosts.find((h) => h.origin === origin) ?? ({ origin } as HostCard);
-    return this.rowOf(card, this.fingerprint(origin));
+    return hostRow(card, this.fingerprint(origin));
   }
 
   private fingerprint(origin: string): string | undefined {
@@ -1096,10 +1073,7 @@ export class ConsoleUi implements Ui {
 
   /** The origin a console key or address stands for. */
   private originOf(key: string, addr: string): string | undefined {
-    const byKey = this.origins.get(key);
-    if (byKey) return byKey;
-    for (const [k, o] of this.origins) if (k.startsWith(`${addr}:`)) return o;
-    return this.hosts.find((h) => (h.plane ?? new URL(h.origin).hostname) === addr)?.origin;
+    return originFor(this.origins, this.hosts, key, addr);
   }
 }
 
