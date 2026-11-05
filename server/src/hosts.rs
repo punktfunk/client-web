@@ -6,9 +6,11 @@
 //! LAN able to answer in the host's place.
 
 use crate::config::Listed;
+use crate::proof::{Proofs, KEPT};
 use crate::visitor::Machine;
 use anyhow::{Context, Result};
 use std::collections::BTreeMap;
+use std::net::IpAddr;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, RwLock};
 
@@ -36,10 +38,13 @@ impl Host {
 pub struct Hosts {
     /// Whether `/a/<address>/…` proxies a host the page names. See [`crate::config::Config`].
     pub add_hosts: bool,
-    /// What this machine knows of its networks, for classifying visitors.
+    /// What this machine knows of its networks: who is at home, and which addresses are its own.
     pub machine: Machine,
+    /// Which unlisted addresses are Punktfunk hosts.
+    pub proofs: Proofs,
     list: RwLock<Vec<Host>>,
-    pins: Mutex<BTreeMap<String, String>>,
+    /// Hex fingerprints by `addr:port`, least recently used first.
+    pins: Mutex<Vec<(String, String)>>,
     pins_path: PathBuf,
     /// Wake-capable MACs a host announced, by where it answers. Kept in `wake.json`: a host is
     /// woken exactly when it is too asleep to announce them.
@@ -89,8 +94,9 @@ impl Hosts {
         Ok(Arc::new(Self {
             add_hosts,
             machine,
+            proofs: Proofs::default(),
             list: RwLock::new(list),
-            pins: Mutex::new(pins),
+            pins: Mutex::new(pins.into_iter().collect()),
             pins_path,
             macs: Mutex::new(macs),
             macs_path,
@@ -156,31 +162,53 @@ impl Hosts {
 
     /// The pin kept for a host at `addr:port`, whoever named it.
     pub fn pin_at(&self, key: &str) -> Option<[u8; 32]> {
-        self.pins
-            .lock()
-            .unwrap()
-            .get(key)
-            .and_then(|hex| crate::config::parse_fp(hex).ok())
+        let pins = self.pins.lock().unwrap();
+        let (_, hex) = pins.iter().find(|(k, _)| k == key)?;
+        crate::config::parse_fp(hex).ok()
     }
 
-    /// Keep a first-contact pin. An address already pinned keeps its first certificate.
+    /// Keep a listed host's first-contact pin, or a proven host's. An address already pinned keeps
+    /// its first certificate. Unlisted addresses keep at most [`KEPT`], least recently used out.
     pub fn keep(&self, key: &str, fp: [u8; 32]) {
+        let listed: Vec<String> = self
+            .list
+            .read()
+            .unwrap()
+            .iter()
+            .filter(|h| h.fullname.is_none())
+            .map(Host::pin_key)
+            .collect();
         let mut pins = self.pins.lock().unwrap();
-        if pins.contains_key(key) {
-            return;
+        if let Some(i) = pins.iter().position(|(k, _)| k == key) {
+            let used = pins.remove(i);
+            return pins.push(used);
         }
-        tracing::info!(host = key, fingerprint = %hex(&fp), "pinned on first contact");
-        pins.insert(key.to_owned(), hex(&fp));
+        tracing::info!(host = key, fingerprint = %hex(&fp), "pinned");
+        pins.push((key.to_owned(), hex(&fp)));
+        let unlisted = |(k, _): &&(String, String)| !listed.contains(k);
+        while pins.iter().filter(unlisted).count() > KEPT {
+            let Some(i) = pins.iter().position(|p| unlisted(&p)) else {
+                break;
+            };
+            pins.remove(i);
+        }
+        let file: BTreeMap<_, _> = pins.iter().cloned().collect();
         if let Err(e) = write_whole(
             &self.pins_path,
-            &serde_json::to_vec_pretty(&*pins).unwrap_or_default(),
+            &serde_json::to_vec_pretty(&file).unwrap_or_default(),
         ) {
             tracing::warn!(error = %e, "pins.json was not written; the pin lasts until restart");
         }
     }
 
+    /// An address this server may reach without the operator's word: on a home network, and not
+    /// loopback.
+    pub fn may_dial(&self, ip: IpAddr) -> bool {
+        crate::proxy::home_range(ip) && !(self.machine.loopback)(ip)
+    }
+
     /// An mDNS advert. A host already listed, by fingerprint or address, stays as listed, but
-    /// what it wakes on is kept for it.
+    /// what it wakes on is kept for it. Any other joins only at an address this server may dial.
     fn found(&self, a: Advert) {
         let mut list = self.list.write().unwrap();
         if let Some(h) = list.iter().find(|h| {
@@ -190,6 +218,9 @@ impl Hosts {
             let key = h.pin_key();
             drop(list);
             return self.remember_macs(&key, a.macs);
+        }
+        if !a.addr.parse().is_ok_and(|ip| self.may_dial(ip)) {
+            return tracing::debug!(addr = %a.addr, "advert at an address this server does not dial");
         }
         self.remember_macs(&format!("{}:{}", a.addr, a.port), a.macs.clone());
         if let Some(h) = list
@@ -373,6 +404,49 @@ mod tests {
         );
         hosts.lost("couch._punktfunk._udp.local.");
         assert_eq!(hosts.all().len(), 1);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn an_advert_at_loopback_or_off_the_home_network_is_ignored() {
+        let dir = std::env::temp_dir().join(format!("pf-self-adverts-{}", std::process::id()));
+        let hosts = Hosts::new(Vec::new(), &dir, true, Machine::REAL).unwrap();
+        for (name, addr) in [
+            ("loop", "127.0.0.1"),
+            ("far", "203.0.113.5"),
+            ("couch", "10.0.0.3"),
+        ] {
+            hosts.found(Advert {
+                fullname: format!("{name}._punktfunk._udp.local."),
+                name: name.into(),
+                addr: addr.into(),
+                port: crate::config::MGMT_PORT,
+                pin: None,
+                macs: Vec::new(),
+            });
+        }
+        let ids: Vec<_> = hosts.all().into_iter().map(|h| h.id).collect();
+        assert_eq!(ids, ["couch"]);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn unlisted_pins_keep_the_most_recent_64() {
+        let dir = std::env::temp_dir().join(format!("pf-pin-cap-{}", std::process::id()));
+        let hosts = Hosts::new(vec![listed("desk", "10.0.0.2")], &dir, true, TEST).unwrap();
+        hosts.learned("desk", [1; 32]);
+        for i in 0..=KEPT {
+            hosts.keep(&format!("10.1.0.{i}:47990"), [2; 32]);
+            if i == 1 {
+                // Used again: the first is now the least recently used.
+                hosts.keep("10.1.0.0:47990", [2; 32]);
+            }
+        }
+        assert_eq!(hosts.pin_at("10.1.0.1:47990"), None);
+        assert!(hosts.pin_at("10.1.0.0:47990").is_some());
+        assert!(hosts.pin_at(&format!("10.1.0.{KEPT}:47990")).is_some());
+        let again = Hosts::new(vec![listed("desk", "10.0.0.2")], &dir, true, TEST).unwrap();
+        assert_eq!(again.get("desk").unwrap().pin, Some([1; 32]));
         let _ = std::fs::remove_dir_all(dir);
     }
 

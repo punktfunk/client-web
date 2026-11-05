@@ -20,12 +20,15 @@ pub struct Machine {
     pub over_mesh: fn(Ipv4Addr) -> bool,
     /// This address is on one of this machine's own IPv6 /64s.
     pub on_own_prefix: fn(Ipv6Addr) -> bool,
+    /// Loopback: this machine talking to itself, never a host to dial for a visitor.
+    pub loopback: fn(IpAddr) -> bool,
 }
 
 impl Machine {
     pub const REAL: Machine = Machine {
         over_mesh: routes_over_mesh,
         on_own_prefix,
+        loopback: |ip| ip.to_canonical().is_loopback(),
     };
 
     /// The host's classification, plus one rule of this server's: a home network that hands out
@@ -38,11 +41,13 @@ impl Machine {
     }
 }
 
-/// A machine with no mesh VPN and no global IPv6 prefix.
+/// A machine with no mesh VPN, no global IPv6 prefix and no loopback, so a test's loopback
+/// upstream stands in for a host on the network.
 #[cfg(test)]
 pub const TEST: Machine = Machine {
     over_mesh: |_| false,
     on_own_prefix: |_| false,
+    loopback: |_| false,
 };
 
 /// Who a request came from, found once per request and kept in its extensions.
@@ -171,10 +176,12 @@ mod tests {
     const MESH: Machine = Machine {
         over_mesh: |_| true,
         on_own_prefix: on_prefix,
+        loopback: |_| false,
     };
     const NO_MESH: Machine = Machine {
         over_mesh: |_| false,
         on_own_prefix: on_prefix,
+        loopback: |_| false,
     };
     const UNKNOWN: (Option<String>, KnockSource) = (None, Wan);
 

@@ -21,7 +21,6 @@ use frame::Frame;
 use futures_util::stream::{SplitSink, SplitStream};
 use futures_util::{FutureExt, SinkExt, StreamExt};
 use punktfunk_core::provenance::CLIENT_ADDR_UNKNOWN;
-use std::net::IpAddr;
 use std::sync::atomic::{AtomicU64, Ordering::Relaxed};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -50,38 +49,51 @@ struct Dial {
     hash: String,
 }
 
-/// A host this server lists.
+/// Where the bridge dials. A host the operator did not list must first be proven at its
+/// management port, under its pin if it has one.
+struct To {
+    addr: String,
+    proof: Option<(u16, Option<[u8; 32]>)>,
+}
+
+/// A host this server lists; one mDNS found, once proven.
 pub async fn listed(
     State(hosts): State<Arc<Hosts>>,
     Path(id): Path<String>,
     req: Request,
 ) -> Response {
-    let addr = hosts.get(&id).map(|h| h.addr).ok_or(StatusCode::NOT_FOUND);
-    open(addr, id, req).await
+    let to = hosts.get(&id).ok_or(StatusCode::NOT_FOUND).map(|h| To {
+        proof: h.fullname.is_some().then_some((h.port, h.pin)),
+        addr: h.addr,
+    });
+    open(&hosts, to, id, req).await
 }
 
-/// A host the page names by its private address, as `/a/` reaches one.
+/// A host the page names by its address, as `/a/` reaches one.
 pub async fn typed(
     State(hosts): State<Arc<Hosts>>,
     Path(target): Path<String>,
     req: Request,
 ) -> Response {
-    let addr = if !hosts.add_hosts {
-        Err(StatusCode::NOT_FOUND)
-    } else {
-        match proxy::private_target(&target) {
-            Some((IpAddr::V4(v4), _)) => Ok(v4.to_string()),
-            Some((IpAddr::V6(v6), _)) => Ok(format!("[{v6}]")),
-            None => Err(StatusCode::BAD_REQUEST),
+    let to = match proxy::typed_target(&hosts, &target) {
+        _ if !hosts.add_hosts => Err(StatusCode::NOT_FOUND),
+        Ok((ip, port)) => {
+            let addr = proxy::url_host(ip);
+            let pin = hosts.pin_at(&format!("{addr}:{port}"));
+            Ok(To {
+                addr,
+                proof: Some((port, pin)),
+            })
         }
+        Err(_) => Err(StatusCode::BAD_REQUEST),
     };
-    open(addr, target, req).await
+    open(&hosts, to, target, req).await
 }
 
-async fn open(addr: Result<String, StatusCode>, host: String, req: Request) -> Response {
+async fn open(hosts: &Hosts, to: Result<To, StatusCode>, host: String, req: Request) -> Response {
     let (mut parts, _) = req.into_parts();
-    let addr = match addr {
-        Ok(a) => a,
+    let to = match to {
+        Ok(to) => to,
         Err(status) => return status.into_response(),
     };
     let Some((port, hash)) = Query::<Dial>::try_from_uri(&parts.uri)
@@ -90,6 +102,12 @@ async fn open(addr: Result<String, StatusCode>, host: String, req: Request) -> R
     else {
         return StatusCode::BAD_REQUEST.into_response();
     };
+    if let Some((mgmt, pin)) = to.proof {
+        let proof = crate::proof::prove(hosts, &to.addr, mgmt, pin, false).await;
+        if let Some(refused) = proof.refusal() {
+            return refused;
+        }
+    }
     let Some(slots) = parts.extensions.get::<Arc<Semaphore>>().cloned() else {
         return StatusCode::INTERNAL_SERVER_ERROR.into_response();
     };
@@ -101,7 +119,7 @@ async fn open(addr: Result<String, StatusCode>, host: String, req: Request) -> R
         Err(refused) => return refused.into_response(),
     };
     let target = plane::Target {
-        addr,
+        addr: to.addr,
         port,
         hash,
         origin: header_str(&parts, header::ORIGIN.as_str()).map(str::to_owned),
@@ -650,7 +668,7 @@ mod tests {
         let silent = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
         let at = page_server("dial").await;
 
-        let wrong = format!("/wa/127.0.0.1:47990?port={port}&hash={}", "00".repeat(32));
+        let wrong = format!("/w/desk?port={port}&hash={}", "00".repeat(32));
         let mut ws = open(at, &wrong, &[]).await.unwrap();
         assert_eq!(
             close_code(&mut ws).await,

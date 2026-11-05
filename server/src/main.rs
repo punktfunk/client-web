@@ -10,6 +10,7 @@ mod bridge;
 mod config;
 mod hosts;
 mod origin;
+mod proof;
 mod proxy;
 mod tls;
 mod visitor;
@@ -39,6 +40,11 @@ async fn main() -> anyhow::Result<()> {
     let hosts = Hosts::new(cfg.hosts.clone(), &cfg.data, cfg.add_hosts, machine)?;
     for h in hosts.all() {
         tracing::info!(host = %h.id, addr = %h.addr, port = h.port, pinned = h.pin.is_some(), "listed");
+        // Through loopback every visitor reaches the host as one on its own machine.
+        let ip = h.addr.trim_matches(['[', ']']).parse::<std::net::IpAddr>();
+        if ip.is_ok_and(|ip| ip.is_loopback()) {
+            tracing::warn!(host = %h.id, "listed at loopback; list it at its LAN address instead");
+        }
     }
     if cfg.discover {
         hosts::discover(hosts.clone());

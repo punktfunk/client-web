@@ -12,6 +12,8 @@ publish = false
 anyhow = "1"
 axum = { version = "0.8", features = ["ws"] }
 axum-server = { version = "0.8", features = ["tls-rustls-no-provider"] }
+# A host's attestation carries its certificate in base64.
+base64 = "0.22"
 futures-util = { version = "0.3", default-features = false, features = ["sink"] }
 rcgen = "0.14"
 reqwest = { version = "0.13", default-features = false, features = ["stream", "rustls-no-provider", "http2"] }
