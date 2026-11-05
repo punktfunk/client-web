@@ -80,7 +80,7 @@ away from home (`compose.tailscale.yaml`).
 |---|---|---|
 | `LISTEN` | `0.0.0.0:8443` | |
 | `TLS` | `self-signed` | `self-signed`, `off` behind a proxy, or `cert.pem,key.pem` |
-| `TLS_NAMES` | | Names and addresses the page is opened at, for the self-signed certificate |
+| `TLS_NAMES` | | Domains the page is opened at. It answers only to these, IP addresses and names no public DNS holds (`localhost`, `desk`, `.local`, `.home.arpa`, `.internal`); with your own certificate and none listed, to any name. The self-signed certificate covers them too |
 | `PUNKTFUNK_HOSTS` | | Hosts mDNS cannot find: `name=address[:port][#fingerprint]`, comma-separated |
 | `DISCOVER` | on | `0` turns the mDNS browse off |
 | `ADD_HOSTS` | on | `0` stops the page reaching a host typed by address. Set it when the page is reachable from outside your network |

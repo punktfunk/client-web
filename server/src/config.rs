@@ -10,7 +10,8 @@ pub const MGMT_PORT: u16 = 47990;
 pub struct Config {
     pub listen: SocketAddr,
     pub tls: Tls,
-    /// Names the self-signed certificate is issued for, beyond `localhost`.
+    /// Names the page is opened at: the only names it answers to besides addresses and local
+    /// ones, and the self-signed certificate's beyond `localhost`.
     pub tls_names: Vec<String>,
     pub hosts: Vec<Listed>,
     /// Browse mDNS for hosts. Needs the container on the host's network to see anything.
@@ -75,6 +76,20 @@ impl Config {
             dist: get("DIST_DIR").unwrap_or_else(|| "dist".into()).into(),
             data: get("DATA_DIR").unwrap_or_else(|| "data".into()).into(),
         })
+    }
+
+    /// The names the page answers to besides addresses and local names. None to check with the
+    /// operator's certificate and no `TLS_NAMES`: a browser that trusts it refuses other names.
+    pub fn names(&self) -> crate::origin::Names {
+        if matches!(self.tls, Tls::Files { .. }) && self.tls_names.is_empty() {
+            return None;
+        }
+        let names = self.tls_names.iter();
+        Some(
+            names
+                .map(|n| n.trim_end_matches('.').to_ascii_lowercase())
+                .collect(),
+        )
     }
 }
 
@@ -204,5 +219,23 @@ mod tests {
         assert!(c.discover && c.add_hosts && c.hosts.is_empty());
         let off = Config::from_lookup(|k| (k == "TLS").then(|| "off".into())).unwrap();
         assert!(matches!(off.tls, Tls::Off));
+    }
+
+    #[test]
+    fn only_the_operators_certificate_alone_checks_no_name() {
+        let names = |tls: &str, names: &str| {
+            let env = [("TLS", tls), ("TLS_NAMES", names)];
+            let get = |k: &str| env.iter().find(|e| e.0 == k && !e.1.is_empty());
+            Config::from_lookup(|k| get(k).map(|e| e.1.into()))
+                .unwrap()
+                .names()
+                .map(|n| n.to_vec())
+        };
+        assert_eq!(names("c.pem,k.pem", ""), None);
+        let play = Some(vec!["play.example.com".to_string()]);
+        assert_eq!(names("c.pem,k.pem", "Play.Example.com."), play);
+        assert_eq!(names("off", "play.example.com"), play);
+        assert_eq!(names("off", ""), Some(Vec::new()));
+        assert_eq!(names("self-signed", ""), Some(Vec::new()));
     }
 }
