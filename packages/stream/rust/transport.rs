@@ -41,8 +41,8 @@ struct Ring {
     head: usize,
     /// Next slot the pump will read.
     tail: usize,
-    /// Datagrams dropped because the pump did not drain in time. FEC covers the gap; the count is
-    /// what says whether it had to.
+    /// Datagrams the page dropped ([`pf_rx_lost`]). FEC covers the gap; the count is what says
+    /// whether it had to, and the bitrate driver reads it as this receiver's own loss.
     dropped: u64,
 }
 
@@ -113,19 +113,27 @@ pub extern "C" fn pf_rx_stride() -> u32 {
 
 /// Claim the slot to write the next datagram into, or `-1` when the ring is full.
 ///
-/// Full means the pump is behind. Dropping here is the right answer and the protocol's: FEC and
-/// the next keyframe recover a lost datagram, where growing a queue only adds latency to every
-/// packet behind it.
+/// Full means the pump is behind. The page drains it and claims again; a refusal is not a drop
+/// until the page gives the datagram up and says so with [`pf_rx_lost`].
 #[unsafe(no_mangle)]
 pub extern "C" fn pf_rx_claim() -> i32 {
     RING.with(|r| {
-        let mut r = r.borrow_mut();
+        let r = r.borrow();
         if r.is_full() {
-            r.dropped += 1;
-            return -1;
+            -1
+        } else {
+            r.head as i32
         }
-        r.head as i32
     })
+}
+
+/// The page dropped a datagram: the ring stayed full after a drain, or it is longer than a slot.
+///
+/// Dropping is the protocol's answer: FEC and the next keyframe recover a lost datagram, where
+/// growing a queue only adds latency to every packet behind it.
+#[unsafe(no_mangle)]
+pub extern "C" fn pf_rx_lost() {
+    RING.with(|r| r.borrow_mut().dropped += 1);
 }
 
 /// Publish the slot `pf_rx_claim` handed out. `len` is clamped to the slot.
@@ -178,7 +186,7 @@ fn on_host_event(payload: &[u8]) {
     }
 }
 
-/// Datagrams dropped because the ring was full. Read by the page for the §5.4 measurement.
+/// Datagrams the page dropped ([`pf_rx_lost`]). Read by the page for the §5.4 measurement.
 #[unsafe(no_mangle)]
 pub extern "C" fn pf_rx_dropped() -> u32 {
     RING.with(|r| u32::try_from(r.borrow().dropped).unwrap_or(u32::MAX))
@@ -330,14 +338,17 @@ mod tests {
         assert!(t.recv().unwrap().is_none());
     }
 
+    /// A full ring refuses without counting: only the page knows whether a drain then made room.
     #[test]
-    fn a_full_ring_drops_rather_than_grows() {
+    fn a_full_ring_refuses_and_only_a_given_up_datagram_counts() {
         drain();
         for i in 0..(RING_SLOTS - 1) {
             assert!(push(&[i as u8]), "slot {i} should be free");
         }
         assert!(!push(&[0xff]), "the ring is full and must refuse");
-        assert_eq!(pf_rx_dropped(), 1, "a refusal is counted, not silent");
+        assert_eq!(pf_rx_dropped(), 0, "a refusal is not yet a drop");
+        pf_rx_lost();
+        assert_eq!(pf_rx_dropped(), 1, "a datagram given up is counted");
     }
 
     #[test]
