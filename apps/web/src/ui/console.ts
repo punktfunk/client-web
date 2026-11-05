@@ -102,8 +102,9 @@ const RED_KEY = 403;
  *  measuring page prices it once more: a remote with no spare key still gets every screen. */
 const QUIET_MS = 15_000;
 
-/** The screens the console cannot draw; everything else is the console's. */
-const WEB_SCREENS = new Set<Screen["kind"]>(["accept", "trust", "link", "streaming"]);
+/** The screens the console cannot draw, and the page's settings sheet, which the web shell's
+ *  sidebar and stream overlay open and only it can close; everything else is the console's. */
+const WEB_SCREENS = new Set<Screen["kind"]>(["accept", "trust", "link", "streaming", "settings"]);
 
 /** How long the console waits on a `FetchProfiles` answer before it dials without one
  *  (`pf_console_ui` `PROFILES_WAIT`). */
@@ -130,6 +131,9 @@ export class ConsoleUi implements Ui {
   /** The web shell was told to stand aside for a launch hold over the stream. */
   private held = false;
   private screen: Screen | null = null;
+  /** The last screen `follow` saw. The settings sheet is no step of a flow, so the screen after
+   *  it follows the one before it: a stream it opened over still ends. */
+  private followed: Screen | null = null;
   /** Host rows by the key the console knows them by, and the origin each stands for. */
   private origins = new Map<string, string>();
   private hosts: HostCard[] = [];
@@ -287,8 +291,9 @@ export class ConsoleUi implements Ui {
     // A page-level change of screen counts as a move, as a key does.
     if (was?.kind !== screen.kind) this.inputAt = performance.now();
     this.fallback.render(this.shellScreen(screen));
-    if (!this.started) return;
-    this.follow(was, screen);
+    if (!this.started || screen.kind === "settings") return;
+    this.follow(this.followed, screen);
+    this.followed = screen;
   }
 
   /** What the web shell draws for `screen`: one of its own sheets while no launch hold covers
