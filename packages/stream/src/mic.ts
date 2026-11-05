@@ -72,6 +72,9 @@ class PunktfunkMic extends AudioWorkletProcessor {
 registerProcessor("punktfunk-mic", PunktfunkMic);
 `;
 
+/** Safari's audio session, where the browser has one. */
+const audioSession = (): { type: string } | undefined => (navigator as { audioSession?: { type: string } }).audioSession;
+
 export class MicPipe {
   private _state: MicState = MicPipe.supported() ? "off" : "unsupported";
   private stream: MediaStream | null = null;
@@ -103,6 +106,9 @@ export class MicPipe {
     if (this._state === "on" || this._state === "starting" || this._state === "unsupported") return;
     const gen = ++this.gen;
     this._state = "starting";
+    // Safari captures only in a session that records; `stop` gives playback back.
+    const session = audioSession();
+    if (session) session.type = "play-and-record";
     let stream: MediaStream;
     try {
       stream = await navigator.mediaDevices.getUserMedia({
@@ -160,6 +166,8 @@ export class MicPipe {
 
   stop(): void {
     this.gen++;
+    const session = audioSession();
+    if (session?.type === "play-and-record") session.type = "playback";
     this._state = MicPipe.supported() ? "off" : "unsupported";
     try {
       this.encoder?.close();

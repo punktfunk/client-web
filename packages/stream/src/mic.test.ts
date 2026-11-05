@@ -10,8 +10,10 @@ function fakeBrowser() {
   const tracks: Array<{ stopped: boolean }> = [];
   const contexts: Array<{ closed: boolean }> = [];
   const prompts: Array<() => void> = [];
+  const session = { type: "playback" };
   const stubs: Record<string, unknown> = {
     navigator: {
+      audioSession: session,
       mediaDevices: {
         getUserMedia: () =>
           new Promise((resolve) =>
@@ -56,7 +58,7 @@ function fakeBrowser() {
       else delete (globalThis as Record<string, unknown>)[k];
     }
   };
-  return { tracks, contexts, prompts, restore };
+  return { tracks, contexts, prompts, session, restore };
 }
 
 test("on, off and on during the prompt leaves one capture live, and off closes it", async () => {
@@ -71,7 +73,9 @@ test("on, off and on during the prompt leaves one capture live, and off closes i
     assert.equal(mic.state, "on");
     assert.deepEqual(b.tracks.map((t) => t.stopped), [true, false], "the overtaken prompt's track is stopped");
     assert.equal(b.contexts.length, 1);
+    assert.equal(b.session.type, "play-and-record");
     mic.stop();
+    assert.equal(b.session.type, "playback");
     assert.deepEqual(b.tracks.map((t) => t.stopped), [true, true]);
     await Promise.resolve();
     assert.ok(b.contexts.every((c) => c.closed));
