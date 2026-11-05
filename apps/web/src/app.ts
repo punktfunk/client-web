@@ -114,7 +114,7 @@ class App {
   private runningId: string | undefined;
   /** The running title is this device's launch, which End game may end. */
   private runningEndable = false;
-  /** What the host said when End game last ran from the library. */
+  /** What the host said when End game last ran from the library, until the next stream. */
   private endNotice: string | undefined;
   /** The title this device launched that the live stream plays, asked for when the menu opens. */
   private streamGame: { appId: string; title: string } | null = null;
@@ -939,9 +939,12 @@ class App {
       return this.render(this.engine.current);
     }
     const host = this.shelfHost();
+    const shelf = this.libraryFor;
     const [id, title] = [this.runningId, this.running];
     if (!host || !id || !title) return;
     const outcome = await host.endGame(id);
+    // Another shelf opened meanwhile: the answer is not about its titles.
+    if (this.libraryFor !== shelf) return;
     this.endNotice = gameEndNotice(outcome, title);
     if (gameGone(outcome)) {
       this.running = undefined;
@@ -1096,6 +1099,7 @@ class App {
 
   private dial(entry?: LibraryEntry, profile?: string): void {
     this.gate = null;
+    this.endNotice = undefined;
     this.lastPlay = { ...(entry ? { entry } : {}), ...(profile ? { profile } : {}) };
     this.engine.startStream({ ...this.streamOptions(), ...(entry ? { launch: entry } : {}), ...(profile ? { profile } : {}) });
   }
