@@ -12,6 +12,7 @@ mod hosts;
 mod origin;
 mod proxy;
 mod tls;
+mod visitor;
 
 use axum::extract::{Path, Request, State};
 use axum::http::{header, HeaderValue, StatusCode};
@@ -34,18 +35,23 @@ async fn main() -> anyhow::Result<()> {
         .init();
     punktfunk_core::tls::install_default_provider();
     let cfg = config::Config::from_env()?;
-    let hosts = Hosts::new(cfg.hosts.clone(), &cfg.data, cfg.add_hosts)?;
+    let machine = visitor::Machine::REAL;
+    let hosts = Hosts::new(cfg.hosts.clone(), &cfg.data, cfg.add_hosts, machine)?;
     for h in hosts.all() {
         tracing::info!(host = %h.id, addr = %h.addr, port = h.port, pinned = h.pin.is_some(), "listed");
     }
     if cfg.discover {
         hosts::discover(hosts.clone());
     }
-    let app = router(hosts, cfg.dist.clone(), cfg.names());
+    let front = origin::Front {
+        names: cfg.names(),
+        proxied: matches!(cfg.tls, config::Tls::Off),
+    };
+    let app = router(hosts, cfg.dist.clone(), front);
 
     let handle = axum_server::Handle::new();
     tokio::spawn(shutdown(handle.clone()));
-    // The bridge tells the host who the real client is.
+    // Who the visitor is starts from the TCP peer.
     let service = app.into_make_service_with_connect_info::<std::net::SocketAddr>();
     match tls::config(&cfg).await? {
         Some(tls) => {
@@ -70,8 +76,9 @@ async fn main() -> anyhow::Result<()> {
 }
 
 /// Every route but the static files answers only this server's own page; every response, the
-/// files included, answers only the names in `names`.
-pub(crate) fn router(hosts: Arc<Hosts>, dist: PathBuf, names: origin::Names) -> Router {
+/// files included, answers only the names `front` allows, and knows its visitor.
+pub(crate) fn router(hosts: Arc<Hosts>, dist: PathBuf, front: origin::Front) -> Router {
+    let visitor = (hosts.clone(), front.proxied);
     Router::new()
         .route("/config.json", get(config_json))
         .route("/h/{id}/{*rest}", any(proxy::listed))
@@ -84,7 +91,11 @@ pub(crate) fn router(hosts: Arc<Hosts>, dist: PathBuf, names: origin::Names) -> 
         .layer(Extension(Arc::new(Semaphore::new(bridge::SESSIONS))))
         .fallback_service(tower_http::services::ServeDir::new(dist))
         .layer(axum::middleware::from_fn(cache))
-        .layer(axum::middleware::from_fn_with_state(names, origin::guard))
+        .layer(axum::middleware::from_fn_with_state(visitor, visitor::find))
+        .layer(axum::middleware::from_fn_with_state(
+            front.names,
+            origin::guard,
+        ))
 }
 
 /// The hosts the page lists, and whether it may reach others by address through `/a/`. `api` and
@@ -189,8 +200,9 @@ mod tests {
             pin: None,
         };
         for add in [true, false] {
-            let hosts = crate::Hosts::new(vec![desk.clone()], &dir, add).unwrap();
-            let res = crate::router(hosts, dir.clone(), None)
+            let hosts =
+                crate::Hosts::new(vec![desk.clone()], &dir, add, crate::visitor::TEST).unwrap();
+            let res = crate::router(hosts, dir.clone(), Default::default())
                 .oneshot(Request::get("/config.json").body(Body::empty()).unwrap())
                 .await
                 .unwrap();
@@ -215,7 +227,7 @@ mod tests {
             port: 47990,
             pin: None,
         };
-        let hosts = crate::Hosts::new(vec![desk], &dir, true).unwrap();
+        let hosts = crate::Hosts::new(vec![desk], &dir, true, crate::visitor::TEST).unwrap();
         let wake = |path: &str, site: &str| {
             Request::post(path)
                 .header("sec-fetch-site", site)
@@ -223,7 +235,7 @@ mod tests {
                 .unwrap()
         };
         let status = |req: Request<Body>| {
-            let app = crate::router(hosts.clone(), dir.clone(), None);
+            let app = crate::router(hosts.clone(), dir.clone(), Default::default());
             async move { app.oneshot(req).await.unwrap().status() }
         };
         assert_eq!(status(wake("/wake/desk", "cross-site")).await, 403);

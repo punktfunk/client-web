@@ -1,6 +1,7 @@
 //! The dial a browser would make to the plane, made from here.
 
 use anyhow::{Context, Result};
+use punktfunk_core::provenance::CLIENT_ADDR_HEADER;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use wtransport::endpoint::ConnectOptions;
 use wtransport::tls::Sha256Digest;
@@ -14,8 +15,8 @@ pub struct Target {
     pub hash: [u8; 32],
     /// The browser's `Origin`, so the host's origin list applies as on a direct dial.
     pub origin: Option<String>,
-    /// The WebSocket peer, so the host classifies the knock by the real client.
-    pub client: IpAddr,
+    /// The visitor's address, or `unknown`, so the host classifies the knock by the real client.
+    pub client: String,
 }
 
 /// `https://<addr>:<port>/pf2`, pinned to `hash`. One endpoint per dial: wtransport binds the
@@ -36,7 +37,7 @@ pub async fn dial(t: &Target) -> Result<Connection> {
             .build(),
     )?;
     let mut opts = ConnectOptions::builder(format!("https://{to}/pf2"))
-        .add_header("pf-client-addr", t.client.to_string());
+        .add_header(CLIENT_ADDR_HEADER, &t.client);
     if let Some(origin) = &t.origin {
         opts = opts.add_header("origin", origin);
     }

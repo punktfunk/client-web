@@ -22,6 +22,9 @@ time = "0.3"
 # The browse behind pf-client-core's discovery, used directly: that crate would bring core's whole
 # QUIC stack (and libopus) along on Linux for thirty lines of mDNS.
 mdns-sd = "0.21"
+# Which interface a route leaves by, and which addresses are this machine's own. Link-local ones
+# count too.
+if-addrs = { version = "0.15", features = ["link-local"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "fs", "signal", "sync", "time"] }
 tower-http = { version = "0.7", features = ["fs"] }
 tracing = "0.1"

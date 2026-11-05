@@ -8,11 +8,20 @@ use axum::extract::{Request, State};
 use axum::http::{header, HeaderMap, HeaderValue, StatusCode, Uri};
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
+use punktfunk_core::provenance::is_local_name;
 use std::net::{Ipv4Addr, Ipv6Addr};
 use std::sync::Arc;
 
 /// `TLS_NAMES`, lowercase, without a trailing dot. `None` checks no name at all.
 pub type Names = Option<Arc<[String]>>;
+
+/// What stands in front of the server, from its TLS settings.
+#[derive(Clone, Default)]
+pub struct Front {
+    pub names: Names,
+    /// `TLS=off`: a proxy is in front by definition.
+    pub proxied: bool,
+}
 
 /// The page's own scripts and wasm, nothing injected, never framed. `blob:` scripts are the audio
 /// worklets; `blob:` fetches and images, the art read from a host; `data:` images, its cursor;
@@ -96,11 +105,7 @@ fn answers(listed: Option<&[String]>, name: &str) -> bool {
         Some(v6) => v6.parse::<Ipv6Addr>().is_ok(),
         None => name.parse::<Ipv4Addr>().is_ok(),
     };
-    ip || !name.contains('.')
-        || [".local", ".home.arpa", ".internal"]
-            .iter()
-            .any(|zone| name.ends_with(zone))
-        || listed.iter().any(|n| n == name)
+    ip || is_local_name(name) || listed.iter().any(|n| n == name)
 }
 
 #[cfg(test)]
@@ -122,8 +127,12 @@ mod tests {
             port: 47990,
             pin: None,
         };
-        let hosts = Hosts::new(vec![desk], &dir, true).unwrap();
-        crate::router(hosts, dir, names)
+        let hosts = Hosts::new(vec![desk], &dir, true, crate::visitor::TEST).unwrap();
+        let front = super::Front {
+            names,
+            proxied: false,
+        };
+        crate::router(hosts, dir, front)
     }
 
     async fn send(app: &axum::Router, req: Request<Body>) -> axum::response::Response {
@@ -152,6 +161,7 @@ mod tests {
             ("box.internal:8443", 200),
             ("localhost:8443", 200),
             ("desk", 200),
+            ("0x8080808", 421),
         ] {
             let res = send(&listed, at(host, "/")).await;
             assert_eq!(res.status(), status, "{host}");

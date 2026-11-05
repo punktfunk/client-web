@@ -6,6 +6,7 @@
 //! LAN able to answer in the host's place.
 
 use crate::config::Listed;
+use crate::visitor::Machine;
 use anyhow::{Context, Result};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -35,6 +36,8 @@ impl Host {
 pub struct Hosts {
     /// Whether `/a/<address>/…` proxies a host the page names. See [`crate::config::Config`].
     pub add_hosts: bool,
+    /// What this machine knows of its networks, for classifying visitors.
+    pub machine: Machine,
     list: RwLock<Vec<Host>>,
     pins: Mutex<BTreeMap<String, String>>,
     pins_path: PathBuf,
@@ -45,7 +48,12 @@ pub struct Hosts {
 }
 
 impl Hosts {
-    pub fn new(listed: Vec<Listed>, data: &Path, add_hosts: bool) -> Result<Arc<Self>> {
+    pub fn new(
+        listed: Vec<Listed>,
+        data: &Path,
+        add_hosts: bool,
+        machine: Machine,
+    ) -> Result<Arc<Self>> {
         std::fs::create_dir_all(data).with_context(|| format!("create {}", data.display()))?;
         let pins_path = data.join("pins.json");
         // Only a missing file means no pins: one that cannot be read must not re-trust every host.
@@ -80,6 +88,7 @@ impl Hosts {
         }
         Ok(Arc::new(Self {
             add_hosts,
+            machine,
             list: RwLock::new(list),
             pins: Mutex::new(pins),
             pins_path,
@@ -310,6 +319,7 @@ pub fn hex(b: &[u8]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::visitor::TEST;
 
     fn listed(name: &str, addr: &str) -> Listed {
         Listed {
@@ -330,6 +340,7 @@ mod tests {
             ],
             &dir,
             true,
+            TEST,
         )
         .unwrap();
         let ids: Vec<_> = hosts.all().into_iter().map(|h| h.id).collect();
@@ -342,7 +353,7 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("pf-adverts-{}", std::process::id()));
         let mut desk = listed("desk", "10.0.0.2");
         desk.pin = Some([1; 32]);
-        let hosts = Hosts::new(vec![desk], &dir, true).unwrap();
+        let hosts = Hosts::new(vec![desk], &dir, true, TEST).unwrap();
         let advert = |name: &str, addr: &str, pin| Advert {
             fullname: format!("{name}._punktfunk._udp.local."),
             name: name.into(),
@@ -368,10 +379,10 @@ mod tests {
     #[test]
     fn a_first_contact_pin_survives_a_restart() {
         let dir = std::env::temp_dir().join(format!("pf-pins-{}", std::process::id()));
-        let hosts = Hosts::new(vec![listed("desk", "10.0.0.2")], &dir, true).unwrap();
+        let hosts = Hosts::new(vec![listed("desk", "10.0.0.2")], &dir, true, TEST).unwrap();
         hosts.learned("desk", [7; 32]);
         hosts.learned("desk", [9; 32]); // a second certificate does not replace the first
-        let again = Hosts::new(vec![listed("desk", "10.0.0.2")], &dir, true).unwrap();
+        let again = Hosts::new(vec![listed("desk", "10.0.0.2")], &dir, true, TEST).unwrap();
         assert_eq!(again.get("desk").unwrap().pin, Some([7; 32]));
         let _ = std::fs::remove_dir_all(dir);
     }
@@ -379,7 +390,7 @@ mod tests {
     #[test]
     fn a_host_that_can_be_woken_outlives_its_advert() {
         let dir = std::env::temp_dir().join(format!("pf-wake-{}", std::process::id()));
-        let hosts = Hosts::new(vec![listed("desk", "10.0.0.2")], &dir, true).unwrap();
+        let hosts = Hosts::new(vec![listed("desk", "10.0.0.2")], &dir, true, TEST).unwrap();
         let advert = |name: &str, addr: &str, macs: &[&str]| Advert {
             fullname: format!("{name}._punktfunk._udp.local."),
             name: name.into(),
@@ -401,7 +412,7 @@ mod tests {
         assert_eq!(ids, ["desk", "couch"]);
 
         // And its MACs survive a restart of this server.
-        let again = Hosts::new(vec![listed("desk", "10.0.0.2")], &dir, true).unwrap();
+        let again = Hosts::new(vec![listed("desk", "10.0.0.2")], &dir, true, TEST).unwrap();
         assert_eq!(again.macs("desk"), ["aa:bb:cc:dd:ee:01"]);
         let _ = std::fs::remove_dir_all(dir);
     }

@@ -1,14 +1,16 @@
-//! `/h/<id>/…` to `https://<host>:<port>/…`: pinned, streamed both ways, adding nothing.
+//! `/h/<id>/…` to `https://<host>:<port>/…`: pinned, streamed both ways.
 //!
-//! Nothing is injected. The browser's own device token is the only credential that reaches a
-//! host, so this server can never do more than the page could.
+//! The only thing added is `pf-client-addr`, who the visitor is. The browser's own device token is
+//! the only credential that reaches a host, so this server can never do more than the page could.
 
 use crate::hosts::Hosts;
+use crate::visitor::Visitor;
 use axum::body::{Body, HttpBody as _};
 use axum::extract::{Path, Request, State};
 use axum::http::{header, HeaderMap, HeaderName, HeaderValue, StatusCode, Uri};
 use axum::response::{IntoResponse, Response};
 use futures_util::StreamExt;
+use punktfunk_core::provenance::{CLIENT_ADDR_HEADER, CLIENT_ADDR_UNKNOWN};
 use punktfunk_core::tls::PinVerify;
 use std::collections::HashMap;
 use std::net::{IpAddr, SocketAddr};
@@ -178,10 +180,13 @@ async fn relay(
     let (parts, body) = req.into_parts();
     // HTTP/2 can carry a body with neither header.
     let has_body = !body.is_end_stream();
-    let mut out = up
-        .client
-        .request(parts.method, url)
-        .headers(only(&parts.headers, &UP));
+    let mut sent = only(&parts.headers, &UP);
+    let visitor = parts.extensions.get::<Visitor>();
+    let named = visitor.map_or_else(|| CLIENT_ADDR_UNKNOWN.into(), Visitor::header);
+    if let Ok(v) = HeaderValue::from_str(&named) {
+        sent.insert(CLIENT_ADDR_HEADER, v);
+    }
+    let mut out = up.client.request(parts.method, url).headers(sent);
     if has_body {
         out = out.body(reqwest::Body::wrap_stream(body.into_data_stream()));
     }
@@ -345,7 +350,10 @@ mod tests {
             .route(
                 "/api/v1/headers",
                 axum::routing::get(|h: axum::http::HeaderMap| async move {
-                    let names: Vec<_> = h.keys().map(|k| k.as_str()).collect();
+                    let seen: Vec<_> = h
+                        .iter()
+                        .map(|(k, v)| format!("{k}={}", v.to_str().unwrap_or("?")))
+                        .collect();
                     let reply = [
                         ("content-type", "text/plain"),
                         ("etag", "\"v1\""),
@@ -356,7 +364,7 @@ mod tests {
                         ("set-cookie", "a=b"),
                         ("access-control-allow-origin", "*"),
                     ];
-                    (reply, names.join(","))
+                    (reply, seen.join("\n"))
                 }),
             );
         let server = axum_server::from_tcp_rustls(listener, tls).unwrap();
@@ -369,7 +377,7 @@ mod tests {
     }
 
     async fn get(hosts: std::sync::Arc<Hosts>, path: &str) -> (StatusCode, String) {
-        let app = crate::router(hosts, std::env::temp_dir(), None);
+        let app = crate::router(hosts, std::env::temp_dir(), Default::default());
         let res = app
             .oneshot(Request::get(path).body(Body::empty()).unwrap())
             .await
@@ -395,15 +403,22 @@ mod tests {
             }]
         };
 
-        let pinned = Hosts::new(desk(Some(fp)), &dir.join("a"), true).unwrap();
+        let pinned =
+            Hosts::new(desk(Some(fp)), &dir.join("a"), true, crate::visitor::TEST).unwrap();
         assert_eq!(get_health(pinned).await, (StatusCode::OK, "ok".into()));
 
-        let wrong = Hosts::new(desk(Some([0; 32])), &dir.join("b"), true).unwrap();
+        let wrong = Hosts::new(
+            desk(Some([0; 32])),
+            &dir.join("b"),
+            true,
+            crate::visitor::TEST,
+        )
+        .unwrap();
         let (status, body) = get_health(wrong).await;
         assert_eq!(status, StatusCode::BAD_GATEWAY);
         assert!(body.contains("certificate changed"), "{body}");
 
-        let first = Hosts::new(desk(None), &dir.join("c"), true).unwrap();
+        let first = Hosts::new(desk(None), &dir.join("c"), true, crate::visitor::TEST).unwrap();
         assert_eq!(get_health(first.clone()).await.0, StatusCode::OK);
         assert_eq!(first.get("desk").unwrap().pin, Some(fp));
 
@@ -415,7 +430,7 @@ mod tests {
             pin: None,
         };
         drop(closed);
-        let silent = Hosts::new(vec![gone], &dir.join("d"), true).unwrap();
+        let silent = Hosts::new(vec![gone], &dir.join("d"), true, crate::visitor::TEST).unwrap();
         assert_eq!(get_health(silent).await.0, StatusCode::GATEWAY_TIMEOUT);
         let _ = std::fs::remove_dir_all(dir);
     }
@@ -425,7 +440,7 @@ mod tests {
         punktfunk_core::tls::install_default_provider();
         let (port, fp) = upstream().await;
         let dir = std::env::temp_dir().join(format!("pf-typed-{}", std::process::id()));
-        let hosts = Hosts::new(Vec::new(), &dir, true).unwrap();
+        let hosts = Hosts::new(Vec::new(), &dir, true, crate::visitor::TEST).unwrap();
 
         let health = format!("/a/127.0.0.1:{port}/api/v1/health");
         assert_eq!(
@@ -433,7 +448,7 @@ mod tests {
             (StatusCode::OK, "ok".into())
         );
         assert_eq!(hosts.pin_at(&format!("127.0.0.1:{port}")), Some(fp));
-        let res = crate::router(hosts.clone(), std::env::temp_dir(), None)
+        let res = crate::router(hosts.clone(), std::env::temp_dir(), Default::default())
             .oneshot(Request::get(&health).body(Body::empty()).unwrap())
             .await
             .unwrap();
@@ -468,14 +483,15 @@ mod tests {
             .body(Body::empty())
             .unwrap();
         for req in [own, own_h2] {
-            let res = crate::router(hosts.clone(), std::env::temp_dir(), None)
+            let res = crate::router(hosts.clone(), std::env::temp_dir(), Default::default())
                 .oneshot(req)
                 .await
                 .unwrap();
             assert_eq!(res.status(), StatusCode::BAD_REQUEST);
         }
 
-        let closed = Hosts::new(Vec::new(), &dir.join("closed"), false).unwrap();
+        let closed =
+            Hosts::new(Vec::new(), &dir.join("closed"), false, crate::visitor::TEST).unwrap();
         assert_eq!(get(closed, &health).await.0, StatusCode::NOT_FOUND);
         let _ = std::fs::remove_dir_all(dir);
     }
@@ -491,7 +507,7 @@ mod tests {
             port,
             pin: Some(fp),
         };
-        let hosts = Hosts::new(vec![desk], &dir, true).unwrap();
+        let hosts = Hosts::new(vec![desk], &dir, true, crate::visitor::TEST).unwrap();
         let mut req = Request::get("/h/desk/api/v1/headers")
             .header("host", "192.168.1.5:8443")
             .header("origin", "https://192.168.1.5:8443");
@@ -500,7 +516,7 @@ mod tests {
             ("accept", "application/json"),
             ("if-none-match", "\"v0\""),
             ("cookie", "a=b"),
-            ("pf-client-addr", "203.0.113.9"),
+            ("pf-client-addr", "10.9.9.9"),
             ("x-punktfunk-device", "x"),
             ("x-forwarded-for", "203.0.113.9"),
             ("accept-encoding", "gzip"),
@@ -508,8 +524,16 @@ mod tests {
         ] {
             req = req.header(name, value);
         }
-        let res = crate::router(hosts, dir.clone(), Some([].into()))
-            .oneshot(req.body(Body::empty()).unwrap())
+        let mut req = req.body(Body::empty()).unwrap();
+        let peer: std::net::SocketAddr = "127.0.0.1:50000".parse().unwrap();
+        req.extensions_mut()
+            .insert(axum::extract::ConnectInfo(peer));
+        let front = crate::origin::Front {
+            names: Some([].into()),
+            proxied: true,
+        };
+        let res = crate::router(hosts, dir.clone(), front)
+            .oneshot(req)
             .await
             .unwrap();
         assert_eq!(res.status(), StatusCode::OK);
@@ -531,11 +555,17 @@ mod tests {
             .await
             .unwrap();
         let seen = String::from_utf8_lossy(&body).into_owned();
-        let mut seen: Vec<_> = seen.split(',').collect();
+        let mut seen: Vec<_> = seen.lines().collect();
         // The upstream's own `Host`, which the HTTP client adds for HTTP/1.1, is not the visitor's.
-        seen.retain(|n| *n != "host");
+        seen.retain(|n| !n.starts_with("host="));
         seen.sort_unstable();
-        assert_eq!(seen, ["accept", "authorization", "if-none-match"]);
+        let want = [
+            "accept=application/json",
+            "authorization=Bearer x",
+            "if-none-match=\"v0\"",
+            "pf-client-addr=203.0.113.9",
+        ];
+        assert_eq!(seen, want);
         let _ = std::fs::remove_dir_all(dir);
     }
 

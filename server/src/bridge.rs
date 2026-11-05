@@ -11,15 +11,17 @@ mod plane;
 
 use crate::hosts::Hosts;
 use crate::proxy;
+use crate::visitor::Visitor;
 use axum::body::Bytes;
 use axum::extract::ws::{close_code, CloseFrame, Message, WebSocket, WebSocketUpgrade};
-use axum::extract::{ConnectInfo, FromRequestParts, Path, Query, Request, State};
+use axum::extract::{FromRequestParts, Path, Query, Request, State};
 use axum::http::{header, request::Parts, StatusCode};
 use axum::response::{IntoResponse, Response};
 use frame::Frame;
 use futures_util::stream::{SplitSink, SplitStream};
 use futures_util::{FutureExt, SinkExt, StreamExt};
-use std::net::{IpAddr, SocketAddr};
+use punktfunk_core::provenance::CLIENT_ADDR_UNKNOWN;
+use std::net::IpAddr;
 use std::sync::atomic::{AtomicU64, Ordering::Relaxed};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -52,18 +54,16 @@ struct Dial {
 pub async fn listed(
     State(hosts): State<Arc<Hosts>>,
     Path(id): Path<String>,
-    ConnectInfo(peer): ConnectInfo<SocketAddr>,
     req: Request,
 ) -> Response {
     let addr = hosts.get(&id).map(|h| h.addr).ok_or(StatusCode::NOT_FOUND);
-    open(addr, id, peer, req).await
+    open(addr, id, req).await
 }
 
 /// A host the page names by its private address, as `/a/` reaches one.
 pub async fn typed(
     State(hosts): State<Arc<Hosts>>,
     Path(target): Path<String>,
-    ConnectInfo(peer): ConnectInfo<SocketAddr>,
     req: Request,
 ) -> Response {
     let addr = if !hosts.add_hosts {
@@ -75,15 +75,10 @@ pub async fn typed(
             None => Err(StatusCode::BAD_REQUEST),
         }
     };
-    open(addr, target, peer, req).await
+    open(addr, target, req).await
 }
 
-async fn open(
-    addr: Result<String, StatusCode>,
-    host: String,
-    peer: SocketAddr,
-    req: Request,
-) -> Response {
+async fn open(addr: Result<String, StatusCode>, host: String, req: Request) -> Response {
     let (mut parts, _) = req.into_parts();
     let addr = match addr {
         Ok(a) => a,
@@ -110,7 +105,10 @@ async fn open(
         port,
         hash,
         origin: header_str(&parts, header::ORIGIN.as_str()).map(str::to_owned),
-        client: peer.ip().to_canonical(),
+        client: parts
+            .extensions
+            .get::<Visitor>()
+            .map_or_else(|| CLIENT_ADDR_UNKNOWN.into(), Visitor::header),
     };
     ws.max_message_size(MAX_MESSAGE)
         .max_frame_size(MAX_MESSAGE)
@@ -367,6 +365,7 @@ fn close(code: u16, reason: &'static str) -> Message {
 mod tests {
     use super::*;
     use crate::config::Listed;
+    use std::net::SocketAddr;
     use tokio_tungstenite::tungstenite::{self, client::IntoClientRequest, Message as Ws};
     use wtransport::endpoint::endpoint_side::Server;
     use wtransport::{Endpoint, Identity, ServerConfig};
@@ -399,8 +398,8 @@ mod tests {
             port: crate::config::MGMT_PORT,
             pin: None,
         };
-        let hosts = Hosts::new(vec![desk], &dir, true).unwrap();
-        let app = crate::router(hosts, dir, None);
+        let hosts = Hosts::new(vec![desk], &dir, true, crate::visitor::TEST).unwrap();
+        let app = crate::router(hosts, dir, Default::default());
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let at = listener.local_addr().unwrap();
         tokio::spawn(async move {
@@ -591,7 +590,7 @@ mod tests {
             port,
             hash,
             origin: None,
-            client: [127, 0, 0, 1].into(),
+            client: "127.0.0.1".into(),
         })
         .await
         .unwrap();

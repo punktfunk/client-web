@@ -4,8 +4,9 @@
 # The page's origin is your proxy's domain: add it to each host's Browser origins (console,
 # Streaming, advanced), or leave that list empty to allow any page.
 #
-# On networks that block UDP the page streams through this server. The host then sees every
-# such stream as coming from the proxy's address, so it treats it as local.
+# The server tells each host who the visitor is, from the X-Forwarded-For or Forwarded header the
+# proxy adds (nginx: `proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;`). A proxy
+# that sends neither leaves every visitor unknown, which a host treats as the internet.
 services:
   punktfunk-web:
     image: git.unom.io/unom/punktfunk-client-web:latest
