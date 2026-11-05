@@ -1042,7 +1042,8 @@ export class ConsoleUi implements Ui {
   }
 
   /** Wake a host and keep the console's wake card current: seconds while the page's own wake
-   *  polls it, then online (the console connects by itself if asked to) or timed out. */
+   *  polls it, then online (the console connects by itself if asked to) or timed out. A wake
+   *  that never went out takes the card down; the page's toast says why. */
   private startWake(req: ConsoleReq, key: string, origin: string, then: boolean): void {
     this.endWake(false);
     const name = this.hosts.find((h) => h.origin === origin)?.name ?? key;
@@ -1060,8 +1061,11 @@ export class ConsoleUi implements Ui {
         if (online && !then) window.setTimeout(() => this.endWake(true), 1500);
       }
     };
-    this.waking = { req, key, origin, name, then, since, timer: window.setInterval(tick, 1000) };
-    this.actions?.wake(origin);
+    const waking = { req, key, origin, name, then, since, timer: window.setInterval(tick, 1000) };
+    this.waking = waking;
+    void this.actions?.wake(origin).then((sent) => {
+      if (!sent && this.waking === waking) this.endWake(true);
+    });
     tick();
   }
 

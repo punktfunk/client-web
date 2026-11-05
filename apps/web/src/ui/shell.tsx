@@ -80,7 +80,7 @@ export class WebShell implements Ui {
 export const noop: Actions = {
   connect() {}, streamDesktop() {}, browse() {}, navigate() {},
   pair() {}, requestAccess() {}, cancelRequest() {}, retry() {}, back() {}, play() {},
-  forget() {}, wake() {}, disconnect() {},
+  forget() {}, wake: async () => false, disconnect() {},
   openTools() {}, hostAction() {}, endGame() {}, sendLog() {},
   followLink() {}, copyLink() {},
   setAdding() {}, rename() {}, openSettings() {}, setSettings() {}, toggleCapture() {},

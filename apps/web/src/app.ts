@@ -204,7 +204,7 @@ class App {
       hostAction: (id) => void this.hostAction(id),
       endGame: () => void this.endGame(),
       sendLog: () => void this.sendLog(),
-      wake: (origin) => void this.wake(origin),
+      wake: (origin) => this.wake(origin),
       disconnect: (quit) => {
         this.menuOpen = false;
         engine.leave(quit);
@@ -650,18 +650,20 @@ class App {
   /**
    * Wake a host through the page's server, which sits on its network where a browser cannot send
    * a magic packet. Then ask after it every few seconds, as it boots, until it answers or a minute
-   * has gone.
+   * has gone. `false` when no packet went out: refused or failed, which the page has said.
    */
-  private async wake(origin: string): Promise<void> {
+  private async wake(origin: string): Promise<boolean> {
     const url = this.configured.get(origin)?.wake;
-    if (!url || this.waking.has(origin)) return;
+    if (!url) return false;
+    if (this.waking.has(origin)) return true;
     this.waking.add(origin);
     this.redrawLists();
     try {
       const r = await serverFetch()(url, { method: "POST" });
       if (r.status === 403 || r.status === 429) {
         const why = r.status === 429 ? sentence(TOO_MANY) : `Only a browser paired with ${this.nameOf(origin)} can wake it from this page.`;
-        return this.ui.notify(why, "error");
+        this.ui.notify(why, "error");
+        return false;
       }
       if (!r.ok) throw new Error(`wake refused (${r.status})`);
       let up = false;
@@ -672,9 +674,11 @@ class App {
         up = now === "ok";
       }
       if (!up) this.ui.notify(`${this.nameOf(origin)} didn't answer within a minute of waking. It may still be starting.`, "error");
+      return true;
     } catch (e) {
       console.warn("punktfunk: wake", e);
       this.ui.notify(`Couldn't wake ${this.nameOf(origin)} — this page's server didn't send the wake packet.`, "error");
+      return false;
     } finally {
       this.waking.delete(origin);
       this.redrawLists();

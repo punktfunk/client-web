@@ -221,8 +221,9 @@ export interface Actions {
    *  running one. Unsaved progress is lost, so the renderer asks first. */
   endGame(): void;
   sendLog(): void;
-  /** Send a host the magic packet, through the page's server. */
-  wake(origin: string): void;
+  /** Send a host the magic packet, through the page's server. `false` when none went out: the
+   *  page has said why. */
+  wake(origin: string): Promise<boolean>;
   /** Name a host something this browser will remember. An empty label drops the name. */
   rename(origin: string, label: string): void;
   /** Leave the stream for the page it started from. `quit` ends the title too; without it the
