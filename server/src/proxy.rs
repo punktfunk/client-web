@@ -181,7 +181,7 @@ async fn relay(
     let mut out = up
         .client
         .request(parts.method, url)
-        .headers(strip(parts.headers));
+        .headers(only(&parts.headers, &UP));
     if has_body {
         out = out.body(reqwest::Body::wrap_stream(body.into_data_stream()));
     }
@@ -200,7 +200,7 @@ async fn relay(
                         .remove(&(addr.to_string(), port, None));
                 }
             }
-            let (status, mut headers) = (resp.status(), strip(resp.headers().clone()));
+            let (status, mut headers) = (resp.status(), only(resp.headers(), &DOWN));
             // A host's reply is served on the page's origin: never as a document that runs there.
             headers.insert(
                 header::CONTENT_SECURITY_POLICY,
@@ -273,34 +273,41 @@ fn client(pin: Option<[u8; 32]>, seen: Seen) -> anyhow::Result<reqwest::Client> 
         .build()?)
 }
 
-/// Never forwarded either way: headers about one connection rather than the message, and the
-/// page origin's own cookies and identity. A host's management API sets and reads no cookies.
-fn strip(mut h: HeaderMap) -> HeaderMap {
-    for name in [
-        header::CONNECTION,
-        header::HOST,
-        header::PROXY_AUTHENTICATE,
-        header::PROXY_AUTHORIZATION,
-        header::TE,
-        header::TRAILER,
-        header::TRANSFER_ENCODING,
-        header::UPGRADE,
-        header::COOKIE,
-        header::SET_COOKIE,
-        HeaderName::from_static("keep-alive"),
-    ] {
-        h.remove(name);
+/// What crosses the relay, by name; nothing else does, either way. Going up, what the page's API
+/// calls carry, as the host's own tunnel passes them, and the body's length. Coming back, what
+/// describes the body and its caching: a host cannot set a cookie, a prompt, a redirect target,
+/// CORS or anything else on the page's origin.
+const UP: [HeaderName; 5] = [
+    header::AUTHORIZATION,
+    header::CONTENT_TYPE,
+    header::ACCEPT,
+    header::IF_NONE_MATCH,
+    header::CONTENT_LENGTH,
+];
+const DOWN: [HeaderName; 13] = [
+    header::CONTENT_TYPE,
+    header::CONTENT_LENGTH,
+    header::CONTENT_ENCODING,
+    header::CONTENT_DISPOSITION,
+    header::CONTENT_RANGE,
+    header::ACCEPT_RANGES,
+    header::CACHE_CONTROL,
+    header::ETAG,
+    header::LAST_MODIFIED,
+    header::EXPIRES,
+    header::VARY,
+    header::DATE,
+    header::RETRY_AFTER,
+];
+
+fn only(from: &HeaderMap, names: &[HeaderName]) -> HeaderMap {
+    let mut out = HeaderMap::new();
+    for name in names {
+        for value in from.get_all(name) {
+            out.append(name.clone(), value.clone());
+        }
     }
-    // `tailscale serve` names the tailnet user to the page's server, not to a host.
-    let tailscale: Vec<HeaderName> = h
-        .keys()
-        .filter(|k| k.as_str().starts_with("tailscale-"))
-        .cloned()
-        .collect();
-    for name in tailscale {
-        h.remove(name);
-    }
-    h
+    out
 }
 
 #[cfg(test)]
@@ -334,7 +341,24 @@ mod tests {
                 "/api/v1/hop",
                 axum::routing::get(|| async { axum::response::Redirect::to("/secret") }),
             )
-            .route("/secret", axum::routing::get(|| async { "secret" }));
+            .route("/secret", axum::routing::get(|| async { "secret" }))
+            .route(
+                "/api/v1/headers",
+                axum::routing::get(|h: axum::http::HeaderMap| async move {
+                    let names: Vec<_> = h.keys().map(|k| k.as_str()).collect();
+                    let reply = [
+                        ("content-type", "text/plain"),
+                        ("etag", "\"v1\""),
+                        ("clear-site-data", "\"storage\""),
+                        ("www-authenticate", "Basic realm=\"desk\""),
+                        ("alt-svc", "h3=\":443\""),
+                        ("location", "https://elsewhere.example/"),
+                        ("set-cookie", "a=b"),
+                        ("access-control-allow-origin", "*"),
+                    ];
+                    (reply, names.join(","))
+                }),
+            );
         let server = axum_server::from_tcp_rustls(listener, tls).unwrap();
         tokio::spawn(server.serve(app.into_make_service()));
         (port, fp)
@@ -345,7 +369,7 @@ mod tests {
     }
 
     async fn get(hosts: std::sync::Arc<Hosts>, path: &str) -> (StatusCode, String) {
-        let app = crate::router(hosts, std::env::temp_dir());
+        let app = crate::router(hosts, std::env::temp_dir(), None);
         let res = app
             .oneshot(Request::get(path).body(Body::empty()).unwrap())
             .await
@@ -409,7 +433,7 @@ mod tests {
             (StatusCode::OK, "ok".into())
         );
         assert_eq!(hosts.pin_at(&format!("127.0.0.1:{port}")), Some(fp));
-        let res = crate::router(hosts.clone(), std::env::temp_dir())
+        let res = crate::router(hosts.clone(), std::env::temp_dir(), None)
             .oneshot(Request::get(&health).body(Body::empty()).unwrap())
             .await
             .unwrap();
@@ -444,7 +468,7 @@ mod tests {
             .body(Body::empty())
             .unwrap();
         for req in [own, own_h2] {
-            let res = crate::router(hosts.clone(), std::env::temp_dir())
+            let res = crate::router(hosts.clone(), std::env::temp_dir(), None)
                 .oneshot(req)
                 .await
                 .unwrap();
@@ -453,6 +477,65 @@ mod tests {
 
         let closed = Hosts::new(Vec::new(), &dir.join("closed"), false).unwrap();
         assert_eq!(get(closed, &health).await.0, StatusCode::NOT_FOUND);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[tokio::test]
+    async fn a_visitor_vouches_for_nothing_and_a_host_opens_nothing() {
+        punktfunk_core::tls::install_default_provider();
+        let (port, fp) = upstream().await;
+        let dir = std::env::temp_dir().join(format!("pf-scrub-{}", std::process::id()));
+        let desk = Listed {
+            name: "desk".into(),
+            addr: "127.0.0.1".into(),
+            port,
+            pin: Some(fp),
+        };
+        let hosts = Hosts::new(vec![desk], &dir, true).unwrap();
+        let mut req = Request::get("/h/desk/api/v1/headers")
+            .header("host", "192.168.1.5:8443")
+            .header("origin", "https://192.168.1.5:8443");
+        for (name, value) in [
+            ("authorization", "Bearer x"),
+            ("accept", "application/json"),
+            ("if-none-match", "\"v0\""),
+            ("cookie", "a=b"),
+            ("pf-client-addr", "203.0.113.9"),
+            ("x-punktfunk-device", "x"),
+            ("x-forwarded-for", "203.0.113.9"),
+            ("accept-encoding", "gzip"),
+            ("user-agent", "visitor"),
+        ] {
+            req = req.header(name, value);
+        }
+        let res = crate::router(hosts, dir.clone(), Some([].into()))
+            .oneshot(req.body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+        let h = res.headers();
+        for gone in [
+            "clear-site-data",
+            "www-authenticate",
+            "alt-svc",
+            "location",
+            "set-cookie",
+            "access-control-allow-origin",
+        ] {
+            assert!(h.get(gone).is_none(), "{gone} reached the caller");
+        }
+        assert_eq!(h["content-type"], "text/plain");
+        assert_eq!(h["etag"], "\"v1\"");
+        assert_eq!(h["content-security-policy"], "sandbox");
+        let body = axum::body::to_bytes(res.into_body(), 1 << 16)
+            .await
+            .unwrap();
+        let seen = String::from_utf8_lossy(&body).into_owned();
+        let mut seen: Vec<_> = seen.split(',').collect();
+        // The upstream's own `Host`, which the HTTP client adds for HTTP/1.1, is not the visitor's.
+        seen.retain(|n| *n != "host");
+        seen.sort_unstable();
+        assert_eq!(seen, ["accept", "authorization", "if-none-match"]);
         let _ = std::fs::remove_dir_all(dir);
     }
 

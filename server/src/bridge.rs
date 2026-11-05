@@ -85,9 +85,6 @@ async fn open(
     req: Request,
 ) -> Response {
     let (mut parts, _) = req.into_parts();
-    if !same_origin(&parts) {
-        return StatusCode::FORBIDDEN.into_response();
-    }
     let addr = match addr {
         Ok(a) => a,
         Err(status) => return status.into_response(),
@@ -118,21 +115,6 @@ async fn open(
     ws.max_message_size(MAX_MESSAGE)
         .max_frame_size(MAX_MESSAGE)
         .on_upgrade(move |socket| session(socket, target, host, slot))
-}
-
-/// The `wake` route's rule, and an `Origin`, when sent, that names this server: a page on another
-/// site that could open the bridge could drive a host it has no right to.
-fn same_origin(parts: &Parts) -> bool {
-    if header_str(parts, "sec-fetch-site") == Some("cross-site") {
-        return false;
-    }
-    let Some(origin) = header_str(parts, header::ORIGIN.as_str()) else {
-        return true;
-    };
-    let own = proxy::own_authority(&parts.uri, &parts.headers);
-    let theirs = origin.split_once("://").map(|(_, authority)| authority);
-    own.zip(theirs)
-        .is_some_and(|(a, b)| a.eq_ignore_ascii_case(b))
 }
 
 fn header_str<'a>(parts: &'a Parts, name: &str) -> Option<&'a str> {
@@ -418,7 +400,7 @@ mod tests {
             pin: None,
         };
         let hosts = Hosts::new(vec![desk], &dir, true).unwrap();
-        let app = crate::router(hosts, dir);
+        let app = crate::router(hosts, dir, None);
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let at = listener.local_addr().unwrap();
         tokio::spawn(async move {

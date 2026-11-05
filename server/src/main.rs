@@ -9,11 +9,12 @@
 mod bridge;
 mod config;
 mod hosts;
+mod origin;
 mod proxy;
 mod tls;
 
 use axum::extract::{Path, Request, State};
-use axum::http::{header, HeaderMap, HeaderValue, StatusCode};
+use axum::http::{header, HeaderValue, StatusCode};
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
 use axum::routing::{any, get, post};
@@ -40,7 +41,7 @@ async fn main() -> anyhow::Result<()> {
     if cfg.discover {
         hosts::discover(hosts.clone());
     }
-    let app = router(hosts, cfg.dist.clone());
+    let app = router(hosts, cfg.dist.clone(), cfg.names());
 
     let handle = axum_server::Handle::new();
     tokio::spawn(shutdown(handle.clone()));
@@ -68,7 +69,9 @@ async fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
-pub(crate) fn router(hosts: Arc<Hosts>, dist: PathBuf) -> Router {
+/// Every route but the static files answers only this server's own page; every response, the
+/// files included, answers only the names in `names`.
+pub(crate) fn router(hosts: Arc<Hosts>, dist: PathBuf, names: origin::Names) -> Router {
     Router::new()
         .route("/config.json", get(config_json))
         .route("/h/{id}/{*rest}", any(proxy::listed))
@@ -76,10 +79,12 @@ pub(crate) fn router(hosts: Arc<Hosts>, dist: PathBuf) -> Router {
         .route("/wake/{id}", post(wake))
         .route("/w/{id}", get(bridge::listed))
         .route("/wa/{target}", get(bridge::typed))
+        .route_layer(axum::middleware::from_fn(origin::own_page))
         .with_state(hosts)
         .layer(Extension(Arc::new(Semaphore::new(bridge::SESSIONS))))
         .fallback_service(tower_http::services::ServeDir::new(dist))
         .layer(axum::middleware::from_fn(cache))
+        .layer(axum::middleware::from_fn_with_state(names, origin::guard))
 }
 
 /// The hosts the page lists, and whether it may reach others by address through `/a/`. `api` and
@@ -102,19 +107,8 @@ async fn config_json(State(state): State<Arc<Hosts>>) -> impl IntoResponse {
 }
 
 /// Wake a listed host: a magic packet to every MAC it announced while awake, from this machine,
-/// which is on the host's network where a browser cannot send one. Only this page may ask, not one
-/// on another site: a cross-site request is refused.
-async fn wake(
-    State(state): State<Arc<Hosts>>,
-    Path(id): Path<String>,
-    headers: HeaderMap,
-) -> StatusCode {
-    if headers
-        .get("sec-fetch-site")
-        .is_some_and(|v| v == "cross-site")
-    {
-        return StatusCode::FORBIDDEN;
-    }
+/// which is on the host's network where a browser cannot send one.
+async fn wake(State(state): State<Arc<Hosts>>, Path(id): Path<String>) -> StatusCode {
     let Some(host) = state.get(&id) else {
         return StatusCode::NOT_FOUND;
     };
@@ -196,7 +190,7 @@ mod tests {
         };
         for add in [true, false] {
             let hosts = crate::Hosts::new(vec![desk.clone()], &dir, add).unwrap();
-            let res = crate::router(hosts, dir.clone())
+            let res = crate::router(hosts, dir.clone(), None)
                 .oneshot(Request::get("/config.json").body(Body::empty()).unwrap())
                 .await
                 .unwrap();
@@ -229,7 +223,7 @@ mod tests {
                 .unwrap()
         };
         let status = |req: Request<Body>| {
-            let app = crate::router(hosts.clone(), dir.clone());
+            let app = crate::router(hosts.clone(), dir.clone(), None);
             async move { app.oneshot(req).await.unwrap().status() }
         };
         assert_eq!(status(wake("/wake/desk", "cross-site")).await, 403);

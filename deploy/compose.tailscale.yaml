@@ -29,6 +29,9 @@ services:
     environment:
       TLS: "off"
       LISTEN: 127.0.0.1:8080
+      # This machine's tailnet name. The page answers only to addresses, local names and the
+      # names here; `tailscale serve` passes the browser's Host header through, as it must.
+      TLS_NAMES: punktfunk.your-tailnet.ts.net
       PUNKTFUNK_HOSTS: desk=100.64.0.5
     volumes:
       - punktfunk-web:/data
