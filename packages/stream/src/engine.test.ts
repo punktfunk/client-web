@@ -306,3 +306,28 @@ test("only a 401 at sign-in reads as a forgotten pairing", async () => {
     globalThis.fetch = fetched;
   }
 });
+
+test("a bridge that never opens names the page's server, not UDP", async (t: TestContext) => {
+  const message = () => (engine.current as { message: string }).message;
+  // No plane address: the bridge is the only carrier.
+  let { engine } = engineIn("ready", "w/abc", "https://page.example/h/unopened");
+  Object.assign(engine, { planeHost: "" });
+  engine.startStream({ width: 1280, height: 720 });
+  sockets.at(-1)!.onclose!({ code: 1006, reason: "" });
+  await flush();
+  assert.equal(engine.current.kind, "error");
+  assert.match(message(), /page's server couldn't open a connection/);
+
+  t.after(() => Object.assign(globalThis, { WebSocket: FakeSocket }));
+  Object.assign(globalThis, {
+    WebSocket: class {
+      constructor() {
+        throw new SyntaxError("blocked");
+      }
+    },
+  });
+  ({ engine } = engineIn("ready", "w/abc", "https://page.example/h/unbuilt"));
+  Object.assign(engine, { planeHost: "" });
+  engine.startStream({ width: 1280, height: 720 });
+  assert.match(message(), /page's server couldn't open a connection/, "not the WebTransport sentence");
+});

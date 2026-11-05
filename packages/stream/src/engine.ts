@@ -49,6 +49,10 @@ const CLOSE = { QUIT: 0x51, PAIR_DENIED: 0x64, ACCESS_EXPIRED: 0x69, HOST_POWER:
 const PLACEMENT_REFUSED = new Set([0x6c, 0x6d, 0x6e, 0x6f]);
 /** A carrier that never opened: no host was heard at all. */
 const NEVER_OPENED = -2;
+/** Why a dial through the page server's bridge never opened. The browser hides the server's
+ *  answer to a refused upgrade, so this names only where it failed. */
+const BRIDGE_UNOPENED =
+  "this page's server couldn't open a connection to the host. Try again in a minute, and if it keeps happening, check that WebSocket connections reach the server";
 
 /** WebTransport, or a WebSocket through the page server's bridge. */
 type CarrierKind = "wt" | "ws";
@@ -1099,7 +1103,8 @@ export class Engine {
     if (!carrier || !opening) {
       if (fallback) return fallback();
       carrierHint.delete(origin);
-      return this.set({ kind: "error", origin, message: "the browser refused the WebTransport session" });
+      const said = kind === "ws" ? BRIDGE_UNOPENED : "the browser refused the WebTransport session";
+      return this.set({ kind: "error", origin, message: said });
     }
     if (fallback) this.silence = setTimeout(() => this.mod.__pfCarrier === carrier && fallback(), WT_SILENCE_MS);
     opening.then(
@@ -1165,8 +1170,8 @@ export class Engine {
    * plane first, then the transport's own close — and the first one settles the state: the
    * second finds it already in a terminal kind and leaves it. The host closes after every pairing
    * ceremony (nothing to say), refuses with a reason (say it), or drops a live session (say
-   * that). A dial that never opened names the port to check. A close in `idle` is this engine's
-   * own `disconnect`.
+   * that). A dial that never opened names the port to check, or the page's server for the
+   * bridge. A close in `idle` is this engine's own `disconnect`.
    */
   private onClosed(code: number, reason: string): void {
     const origin = this.origin;
@@ -1180,7 +1185,10 @@ export class Engine {
       return this.set({
         kind: "error",
         origin,
-        message: `couldn't reach the host on UDP ${this.seatPlane?.port ?? this.plane?.port}, its browser streaming port. Check that nothing between this device and the host blocks it`,
+        message:
+          this.carrierKind === "ws"
+            ? BRIDGE_UNOPENED
+            : `couldn't reach the host on UDP ${this.seatPlane?.port ?? this.plane?.port}, its browser streaming port. Check that nothing between this device and the host blocks it`,
       });
     }
     switch (this.state.kind) {
