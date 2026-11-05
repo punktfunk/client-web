@@ -716,6 +716,8 @@ export class Engine {
       (codec) => this.undecodable(codec),
     );
     this.video.attach();
+    // A page already fullscreen locks the keyboard again for this stream, as `fullscreen` does.
+    if (globalThis.document?.fullscreenElement) void keyboardLock()?.lock?.()?.catch(() => {});
     this.tier = this.tunable.statsTier;
     this.hud = [];
     this.lastDropped = 0;
@@ -1227,9 +1229,11 @@ export class Engine {
   }
 
   /** The session's pipes and its wasm state, torn down together. Idempotent. The wasm session
-   *  goes too: a refusal leaves it `Offered`, which would read as a forgotten pairing later. */
+   *  goes too: a refusal leaves it `Offered`, which would read as a forgotten pairing later. The
+   *  keyboard lock goes as well, so a page left fullscreen gives system keys back. */
   private stopSession(): void {
     this.mod._pf_session_reset?.();
+    keyboardLock()?.unlock?.();
     this.mic?.stop();
     this.mic = null;
     this.input?.detach();
@@ -1467,4 +1471,8 @@ function withStr<T>(mod: PunktfunkModule, strings: string[], f: (...args: number
 }
 
 const message = (e: unknown): string => (e instanceof Error ? e.message : String(e));
+
+/** The Keyboard Lock API, where the browser has it (Chromium). */
+const keyboardLock = (): { lock?: () => Promise<void>; unlock?: () => void } | undefined =>
+  (navigator as { keyboard?: { lock?: () => Promise<void>; unlock?: () => void } }).keyboard;
 
