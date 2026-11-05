@@ -204,7 +204,8 @@
     var(--background);
 }
 
-/* The exit hint: six seconds on screen, the last 0.6 fading, as on every client. */
+/* The exit hint and the captured-pointer line: six seconds on screen, the last 0.6 fading, as on
+   every client. */
 @keyframes pf-exit-hint {
   0%,
   90% {
