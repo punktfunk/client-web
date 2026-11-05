@@ -123,7 +123,8 @@ class App {
   /** When the live stream began, while its exit hint is up; `0` once the hint is gone. */
   private hintSince = 0;
   private hintTimer = 0;
-  private wasStreaming = false;
+  /** The engine state the last render drew: each edge below is against it. */
+  private lastKind: EngineState["kind"] = "idle";
   private streamNoticeTimer = 0;
   /** The origin whose running title is being polled. */
   private pollingFor: string | null = null;
@@ -283,6 +284,8 @@ class App {
 
   /** Facts in, words out. */
   private render(s: EngineState): void {
+    const was = this.lastKind;
+    this.lastKind = s.kind;
     // The gate waits on its host's `ready`; anything else ends the wait, and a connect that
     // ended short of it drops the Switch profile it was for.
     if (this.gate && (s.kind !== "ready" || s.origin !== this.gate.origin)) this.gate = null;
@@ -293,7 +296,7 @@ class App {
     }
     // The exit hint: armed on the edge into a stream, dropped by its timer or the stream's end.
     const streaming = s.kind === "streaming";
-    if (streaming && !this.wasStreaming && this.prefs.exitHint) {
+    if (streaming && was !== "streaming" && this.prefs.exitHint) {
       this.hintSince = Date.now();
       clearTimeout(this.hintTimer);
       this.hintTimer = window.setTimeout(() => {
@@ -302,8 +305,14 @@ class App {
       }, EXIT_HINT_MS);
     } else if (!streaming) {
       this.hintSince = 0;
+      clearTimeout(this.hintTimer);
     }
-    this.wasStreaming = streaming;
+    // A stream that ends takes the settings dialog over it along: how it ended is what to show.
+    // One that drops is what "Try again" brings back.
+    if (live(was) && !live(s.kind)) {
+      this.settingsOpen = false;
+      if (s.kind === "error") this.dropped = this.lastPlay;
+    }
     if (this.settingsOpen) {
       return this.show({ kind: "settings", values: this.prefs, streaming: s.kind === "streaming" });
     }
@@ -422,15 +431,11 @@ class App {
         });
       case "error": {
         this.windowed();
-        // Was a stream live, or starting, when this happened? Then trying again resumes it.
-        const was = this.screen;
-        const streamed = was.kind === "streaming" || (was.kind === "connecting" && was.phase === "starting");
-        if (streamed) this.dropped = this.lastPlay;
         return this.show({
           kind: "error",
           head: s.skew
             ? "This host speaks a different version"
-            : streamed
+            : this.dropped
               ? "The stream stopped"
               : "Something went wrong",
           text: s.skew
@@ -1229,6 +1234,9 @@ class App {
     };
   }
 }
+
+/** A stream live or on its way: what a settings dialog sits over, and what a drop ends. */
+const live = (kind: EngineState["kind"]): boolean => kind === "streaming" || kind === "starting";
 
 /** A stream asked for: the title (unset: the desktop), and the profile the console picked. */
 interface Play {
