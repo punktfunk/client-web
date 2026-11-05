@@ -23,6 +23,7 @@ import {
   type LibraryEntry,
   type ListedProfile,
   linkFor,
+  onPass,
   packaged,
   type PageLink,
   pageLog,
@@ -35,9 +36,11 @@ import {
   reachTarget,
   SEAT_POLL_MS,
   seatGate,
+  serverFetch,
   type Settings,
   settings,
   statusOf,
+  TOO_MANY,
   VersionSkew,
   wakeFailed,
   wakingLine,
@@ -165,6 +168,8 @@ class App {
     /** Whether that server also proxies a host typed here by its IP address. */
     private readonly viaServer: boolean,
   ) {
+    // A login's pass covers another host: the server now tells this browser its address and wake.
+    onPass(() => void this.refreshConfigured());
     ui.mount({
       connect: (address) => {
         this.adding = false;
@@ -487,6 +492,13 @@ class App {
     void this.probe(cards.map((h) => h.origin));
   }
 
+  /** The server's list again, as a pass holder sees it. */
+  private async refreshConfigured(): Promise<void> {
+    const again = await configuredHosts();
+    for (const [origin, c] of again.listed) this.configured.set(origin, c);
+    this.redrawLists();
+  }
+
   /** Every host this page knows: the server's first, under the name it gives them; then the ones
    *  typed here. Each with what a probe last said about it. */
   private cards(): HostCard[] {
@@ -496,7 +508,7 @@ class App {
         ...known.get(origin),
         origin,
         name: c.name,
-        plane: c.plane,
+        ...(c.plane ? { plane: c.plane } : {}),
         ...(c.wake ? { wake: c.wake, waking: this.waking.has(origin) } : {}),
       })),
       ...[...known.values()].filter((h) => !this.configured.has(h.origin)),
@@ -539,7 +551,7 @@ class App {
     if (known) {
       const { origin: _old, ...record } = known;
       hosts.forget(address);
-      hosts.remember(routed.api, { ...record, plane: routed.plane });
+      hosts.remember(routed.api, { ...record, ...(routed.plane ? { plane: routed.plane } : {}) });
     }
     return routed;
   }
@@ -646,7 +658,11 @@ class App {
     this.waking.add(origin);
     this.redrawLists();
     try {
-      const r = await fetch(url, { method: "POST" });
+      const r = await serverFetch()(url, { method: "POST" });
+      if (r.status === 403 || r.status === 429) {
+        const why = r.status === 429 ? sentence(TOO_MANY) : `Only a browser paired with ${this.nameOf(origin)} can wake it from this page.`;
+        return this.ui.notify(why, "error");
+      }
       if (!r.ok) throw new Error(`wake refused (${r.status})`);
       let up = false;
       for (let tries = 0; tries < 20 && !up; tries++) {
@@ -1323,9 +1339,9 @@ interface Configured extends HostTarget {
  */
 async function configuredHosts(): Promise<{ listed: Map<string, Configured>; viaServer: boolean }> {
   try {
-    const r = await fetch("./config.json", { cache: "no-store" });
+    const r = await serverFetch()("./config.json", { cache: "no-store" });
     const c = (await r.json()) as {
-      hosts?: Array<{ name: string; api: string; plane: string; wake?: string; bridge?: string }>;
+      hosts?: Array<{ name: string; api: string; plane?: string; wake?: string; bridge?: string }>;
       add?: boolean;
     };
     const listed = new Map(
@@ -1333,7 +1349,8 @@ async function configuredHosts(): Promise<{ listed: Map<string, Configured>; via
         const api = new URL(h.api, location.href).href.replace(/\/+$/, "");
         const wake = h.wake ? new URL(h.wake, location.href).href : undefined;
         const bridge = h.bridge ? { bridge: h.bridge } : {};
-        return [api, { api, plane: h.plane, name: h.name, ...(wake ? { wake } : {}), ...bridge }];
+        const plane = h.plane ? { plane: h.plane } : {};
+        return [api, { api, ...plane, name: h.name, ...(wake ? { wake } : {}), ...bridge }];
       }),
     );
     return { listed, viaServer: c.add === true };

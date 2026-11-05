@@ -5,8 +5,10 @@
 //! the request. Anything else has received that one request, and receives nothing more.
 
 use crate::hosts::Hosts;
+use crate::lanes::Pass;
+use crate::visitor::Visitor;
 use axum::body::Bytes;
-use axum::http::{header, StatusCode};
+use axum::http::{header, Extensions, StatusCode};
 use axum::response::{IntoResponse, Response};
 use base64::Engine as _;
 use punktfunk_core::tls::verify_plane_attestation;
@@ -80,6 +82,14 @@ struct Entry {
 pub struct Proofs(Mutex<HashMap<String, Entry>>);
 
 impl Proofs {
+    /// Whether proving `key` now would send the address its request.
+    pub fn would_ask(&self, key: &str, fresh: bool) -> bool {
+        let all = self.0.lock().unwrap();
+        all.get(key).is_none_or(|e| {
+            e.until <= Instant::now() || (fresh && matches!(e.outcome, Outcome::Host { .. }))
+        })
+    }
+
     fn recall(&self, key: &str, fresh: bool) -> Option<Outcome> {
         let mut all = self.0.lock().unwrap();
         let entry = all.get_mut(key)?;
@@ -118,6 +128,22 @@ impl Proofs {
             all.remove(&oldest);
         }
     }
+}
+
+/// A stranger pays the proof meter for each request proving an address they typed would send.
+/// The `429` when they are over it.
+pub fn over_meter(hosts: &Hosts, ext: &Extensions, key: &str, fresh: bool) -> Option<Response> {
+    let stranger = ext.get::<Pass>().is_none_or(Pass::stranger);
+    if !stranger || !hosts.proofs.would_ask(key, fresh) {
+        return None;
+    }
+    let who = ext.get::<Visitor>().and_then(|v| v.addr);
+    hosts
+        .lanes
+        .proofs
+        .take(who)
+        .err()
+        .map(crate::origin::too_many)
 }
 
 /// The proof for `addr:port`: remembered, or fetched now under `pin`. `fresh` passes over a
@@ -162,27 +188,33 @@ pub async fn prove(
     outcome
 }
 
-async fn fetch(addr: &str, port: u16, pin: Option<[u8; 32]>) -> Outcome {
+/// One `GET /api/v1/webtransport` under `pin`, with nothing of a visitor's in it.
+struct Answer {
+    status: StatusCode,
+    json: bool,
+    body: Bytes,
+    /// The TLS leaf the address presented.
+    presented: Option<[u8; 32]>,
+}
+
+async fn ask(addr: &str, port: u16, pin: Option<[u8; 32]>) -> Result<Answer, Outcome> {
     let seen: Arc<Mutex<Option<[u8; 32]>>> = Arc::default();
-    let client = match crate::proxy::client(pin, seen.clone()) {
-        Ok(c) => c,
-        Err(e) => {
-            tracing::warn!(host = %addr, cause = %format!("{e:#}"), "proof client did not build");
-            return Outcome::Unreachable;
-        }
-    };
+    let client = crate::proxy::client(pin, seen.clone()).map_err(|e| {
+        tracing::warn!(host = %addr, cause = %format!("{e:#}"), "proof client did not build");
+        Outcome::Unreachable
+    })?;
     let url = format!("https://{addr}:{port}/api/v1/webtransport");
     let sent = client.get(url).timeout(TIMEOUT).send().await;
     let presented = *seen.lock().unwrap();
     let mut res = match sent {
         Ok(res) => res,
         Err(_) if pin.is_some() && presented.is_some() && presented != pin => {
-            return Outcome::PinChanged
+            return Err(Outcome::PinChanged)
         }
         Err(e) => {
             let cause = format!("{:#}", anyhow::Error::new(e));
             tracing::warn!(host = %addr, cause, "host did not answer the proof");
-            return Outcome::Unreachable;
+            return Err(Outcome::Unreachable);
         }
     };
     let json = res
@@ -196,15 +228,36 @@ async fn fetch(addr: &str, port: u16, pin: Option<[u8; 32]>) -> Outcome {
         match res.chunk().await {
             Ok(Some(c)) if body.len() + c.len() <= MAX_BODY => body.extend_from_slice(&c),
             Ok(None) => break,
-            _ => return Outcome::Refused(NOT_A_HOST),
+            _ => return Err(Outcome::Refused(NOT_A_HOST)),
         }
     }
-    let body = Bytes::from(body);
-    match status {
-        StatusCode::OK if json => attested(body, presented),
-        StatusCode::NOT_FOUND if json && host_error(&body) => Outcome::NoPlane(body),
+    Ok(Answer {
+        status,
+        json,
+        body: body.into(),
+        presented,
+    })
+}
+
+async fn fetch(addr: &str, port: u16, pin: Option<[u8; 32]>) -> Outcome {
+    let a = match ask(addr, port, pin).await {
+        Ok(a) => a,
+        Err(outcome) => return outcome,
+    };
+    match a.status {
+        StatusCode::OK if a.json => attested(a.body, a.presented),
+        StatusCode::NOT_FOUND if a.json && host_error(&a.body) => Outcome::NoPlane(a.body),
         _ => Outcome::Refused(NOT_A_HOST),
     }
+}
+
+/// The plane a listed host publishes, as it says: the operator's list vouches for the host, so
+/// no signature is asked for.
+pub async fn published(addr: &str, port: u16, pin: Option<[u8; 32]>) -> Option<(u16, [u8; 32])> {
+    let a = ask(addr, port, pin).await.ok()?;
+    let p = (a.status == StatusCode::OK && a.json)
+        .then(|| serde_json::from_slice::<Published>(&a.body).ok())??;
+    Some((p.port, crate::config::parse_fp(&p.cert_hash_sha256).ok()?))
 }
 
 /// The host's error shape: `{"error": "…"}`.

@@ -6,6 +6,7 @@
 //! LAN able to answer in the host's place.
 
 use crate::config::Listed;
+use crate::lanes::Lanes;
 use crate::proof::{Proofs, KEPT};
 use crate::visitor::Machine;
 use anyhow::{Context, Result};
@@ -42,6 +43,8 @@ pub struct Hosts {
     pub machine: Machine,
     /// Which unlisted addresses are Punktfunk hosts.
     pub proofs: Proofs,
+    /// Passes, and the limits strangers share.
+    pub lanes: Lanes,
     list: RwLock<Vec<Host>>,
     /// Hex fingerprints by `addr:port`, least recently used first.
     pins: Mutex<Vec<(String, String)>>,
@@ -95,6 +98,7 @@ impl Hosts {
             add_hosts,
             machine,
             proofs: Proofs::default(),
+            lanes: Lanes::new(data),
             list: RwLock::new(list),
             pins: Mutex::new(pins.into_iter().collect()),
             pins_path,
@@ -313,7 +317,7 @@ pub fn discover(hosts: Arc<Hosts>) {
 }
 
 /// Write `path` whole or not at all: a crash mid-write leaves the old file, never half of one.
-fn write_whole(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+pub(crate) fn write_whole(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     let tmp = path.with_extension("tmp");
     std::fs::write(&tmp, bytes)?;
     std::fs::rename(&tmp, path)

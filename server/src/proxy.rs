@@ -109,8 +109,61 @@ pub async fn typed(
         Ok(url) => url,
         Err((status, why)) => return api_error(status, why),
     };
-    let pin = hosts.pin_at(&format!("{addr}:{port}"));
+    let key = format!("{addr}:{port}");
+    let fresh = plane(&req, &url);
+    if let Some(refused) = crate::proof::over_meter(&hosts, req.extensions(), &key, fresh) {
+        return refused;
+    }
+    let pin = hosts.pin_at(&key);
     unlisted(&hosts, &addr, port, pin, url, req).await
+}
+
+/// `POST /pass/h/<id>`: see [`mint`].
+pub async fn pass_listed(
+    State(hosts): State<Arc<Hosts>>,
+    Path(id): Path<String>,
+    req: Request,
+) -> Response {
+    let (ask, asked) = asking(req, &format!("/h/{id}/api/v1/host"));
+    let answer = listed(State(hosts.clone()), Path((id, String::new())), ask).await;
+    mint(&hosts, answer, &asked)
+}
+
+/// `POST /pass/a/<ip:port>`: see [`mint`].
+pub async fn pass_typed(
+    State(hosts): State<Arc<Hosts>>,
+    Path(target): Path<String>,
+    req: Request,
+) -> Response {
+    let (ask, asked) = asking(req, &format!("/a/{target}/api/v1/host"));
+    let answer = typed(State(hosts.clone()), Path((target, String::new())), ask).await;
+    mint(&hosts, answer, &asked)
+}
+
+/// The page's pass request as the host question it stands for: `GET /api/v1/host` with the
+/// same token, visitor and pass. The headers come back too, for [`mint`].
+fn asking(req: Request, path: &str) -> (Request, HeaderMap) {
+    let (parts, _) = req.into_parts();
+    let mut ask = Request::new(Body::empty());
+    *ask.uri_mut() = path.parse().unwrap_or_default();
+    *ask.headers_mut() = parts.headers.clone();
+    *ask.extensions_mut() = parts.extensions;
+    (ask, parts.headers)
+}
+
+/// A pass for a browser whose token the host just accepted: `GET /api/v1/host` answered `200`
+/// over a connection whose leaf is the identity the page named. A valid pass the page already
+/// holds is extended to this host; otherwise a new one is made. Any other answer is the host's.
+fn mint(hosts: &Hosts, answer: Response, asked: &HeaderMap) -> Response {
+    let Some(host) = paired_with(asked).filter(|_| answer.status() == StatusCode::OK) else {
+        return answer;
+    };
+    let held = asked
+        .get(crate::visitor::PASS_HEADER)
+        .and_then(|v| v.to_str().ok());
+    let pass = hosts.lanes.passes.prove(held, host);
+    let body = axum::Json(serde_json::json!({ "pass": pass }));
+    ([(header::CACHE_CONTROL, "no-store")], body).into_response()
 }
 
 const OWN_ADDRESS: &str = "That is this server's own address, not a host.";
@@ -133,7 +186,7 @@ async fn unlisted(
     url: reqwest::Url,
     req: Request,
 ) -> Response {
-    let plane = req.method() == Method::GET && url.path() == "/api/v1/webtransport";
+    let plane = plane(&req, &url);
     match crate::proof::prove(hosts, addr, port, pin, plane).await {
         Outcome::Host { body, .. } if plane => host_reply(StatusCode::OK, body),
         Outcome::NoPlane(body) if plane => host_reply(StatusCode::NOT_FOUND, body),
@@ -142,6 +195,11 @@ async fn unlisted(
             .refusal()
             .unwrap_or_else(|| StatusCode::BAD_GATEWAY.into_response()),
     }
+}
+
+/// The page's own plane request, which a proof answers fresh.
+fn plane(req: &Request, url: &reqwest::Url) -> bool {
+    req.method() == Method::GET && url.path() == "/api/v1/webtransport"
 }
 
 /// A host's JSON answer, served as [`relay`] serves one.
@@ -249,7 +307,10 @@ pub(crate) fn typed_target(hosts: &Hosts, s: &str) -> Result<(IpAddr, u16), &'st
     Ok((ip, port))
 }
 
-/// `learn`: the listed host whose first-contact certificate becomes its pin.
+/// `learn`: the listed host whose first-contact certificate becomes its pin. A token, and the
+/// device exchange that earns one, go only over a connection whose leaf is the identity the page
+/// paired with, named in `pf-host`. Only health and the plane's hash are asked without it. A
+/// request without a token carries at most [`OPEN_BODY`].
 async fn relay(
     hosts: &Hosts,
     addr: &str,
@@ -259,6 +320,30 @@ async fn relay(
     url: reqwest::Url,
     req: Request,
 ) -> Response {
+    let (parts, body) = req.into_parts();
+    let token = parts.headers.contains_key(header::AUTHORIZATION);
+    let bound = token || !matches!(url.path(), "/api/v1/health" | "/api/v1/webtransport");
+    let pin = match (bound, paired_with(&parts.headers), pin) {
+        (false, _, pin) => pin,
+        (true, None, _) => return (StatusCode::BAD_REQUEST, RELOAD).into_response(),
+        (true, Some(paired), Some(known)) if paired != known => {
+            tracing::warn!(host = %addr, "a request named another host than this address's");
+            return (StatusCode::BAD_GATEWAY, NOT_PAIRED).into_response();
+        }
+        (true, Some(paired), _) => Some(paired),
+    };
+    // HTTP/2 can carry a body with neither header.
+    let body = match body.is_end_stream() {
+        true => None,
+        false if token => Some(reqwest::Body::wrap_stream(body.into_data_stream())),
+        false => match axum::body::to_bytes(body, OPEN_BODY).await {
+            Ok(bytes) => Some(reqwest::Body::from(bytes)),
+            Err(_) => {
+                let why = "a request without a device token carries at most 4 KiB";
+                return api_error(StatusCode::PAYLOAD_TOO_LARGE, why);
+            }
+        },
+    };
     let up = match upstream(addr, port, pin) {
         Ok(up) => up,
         Err(e) => return gateway(addr, "the proxy client did not build", &format!("{e:#}")),
@@ -269,9 +354,6 @@ async fn relay(
         .acquire_owned()
         .await
         .expect("the gate is never closed");
-    let (parts, body) = req.into_parts();
-    // HTTP/2 can carry a body with neither header.
-    let has_body = !body.is_end_stream();
     let mut sent = only(&parts.headers, &UP);
     let visitor = parts.extensions.get::<Visitor>();
     let named = visitor.map_or_else(|| CLIENT_ADDR_UNKNOWN.into(), Visitor::header);
@@ -279,12 +361,12 @@ async fn relay(
         sent.insert(CLIENT_ADDR_HEADER, v);
     }
     let mut out = up.client.request(parts.method, url).headers(sent);
-    if has_body {
-        out = out.body(reqwest::Body::wrap_stream(body.into_data_stream()));
+    if let Some(body) = body {
+        out = out.body(body);
     }
     match out.send().await {
         Ok(resp) => {
-            if let (None, Some(id)) = (pin, learn) {
+            if let Some(id) = learn {
                 if let Some(fp) = *up.seen.lock().unwrap() {
                     hosts.learned(&id, fp);
                     // Pinned from here on: the next request builds that client instead.
@@ -327,7 +409,8 @@ async fn relay(
                     presented = %crate::hosts::hex(&presented.unwrap_or_default()),
                     "certificate does not match the pin"
                 );
-                return (StatusCode::BAD_GATEWAY, PIN_CHANGED).into_response();
+                let say = if bound { NOT_PAIRED } else { PIN_CHANGED };
+                return (StatusCode::BAD_GATEWAY, say).into_response();
             }
             // The chain, not the top line: reqwest's own message is only "error sending request".
             gateway(
@@ -337,6 +420,19 @@ async fn relay(
             )
         }
     }
+}
+
+/// What a request without a device token may carry: the device exchange's JSON is far less.
+const OPEN_BODY: usize = 4 << 10;
+/// The header the page names its paired host in, by identity fingerprint. Never forwarded.
+pub const HOST_HEADER: &str = "pf-host";
+const RELOAD: &str = "This page is out of date. Reload it and try again.";
+const NOT_PAIRED: &str = "The host at this address isn't the one this browser paired with.";
+
+/// The identity the page paired with, from `pf-host`.
+fn paired_with(headers: &HeaderMap) -> Option<[u8; 32]> {
+    let named = headers.get(HOST_HEADER)?.to_str().ok()?;
+    crate::config::parse_fp(named).ok()
 }
 
 pub(crate) const PIN_CHANGED: &str =
@@ -406,146 +502,12 @@ fn only(from: &HeaderMap, names: &[HeaderName]) -> HeaderMap {
 mod tests {
     use crate::config::Listed;
     use crate::hosts::Hosts;
+    use crate::testing::{upstream, Plane};
     use crate::visitor::{Machine, TEST};
     use axum::body::Body;
-    use axum::extract::State;
     use axum::http::{Request, StatusCode};
-    use std::sync::{Arc, Mutex};
+    use std::sync::Arc;
     use tower::ServiceExt;
-
-    /// What a fake host's `/api/v1/webtransport` answers.
-    #[derive(PartialEq)]
-    enum Plane {
-        /// Nothing: an older host, or a test that never asks.
-        Off,
-        /// Its plane, signed by the identity that serves its TLS.
-        Attested,
-        /// A plane signed by some other identity.
-        Borrowed,
-        /// A plane and no signature: an RSA identity.
-        Unattested,
-        /// Not a host at all: `200` to anything.
-        Decoy,
-    }
-
-    /// A TLS server on a loopback port: its port, its certificate's pin, and what it was asked.
-    struct Up {
-        port: u16,
-        fp: [u8; 32],
-        asked: Arc<Mutex<Vec<String>>>,
-    }
-
-    impl Up {
-        fn asked(&self) -> Vec<String> {
-            self.asked.lock().unwrap().clone()
-        }
-    }
-
-    fn identity() -> (rcgen::Certificate, rcgen::KeyPair) {
-        let key = rcgen::KeyPair::generate().unwrap();
-        let cert = rcgen::CertificateParams::new(vec!["localhost".into()])
-            .unwrap()
-            .self_signed(&key)
-            .unwrap();
-        (cert, key)
-    }
-
-    /// The host's `/api/v1/webtransport` answer, signed by `key`, whose certificate is `cert`.
-    fn published(cert: &rcgen::Certificate, key: &rcgen::KeyPair) -> serde_json::Value {
-        use base64::Engine as _;
-        use rcgen::SigningKey as _;
-        let hash = "ab".repeat(32);
-        let msg = format!("{}{hash}", punktfunk_core::tls::PLANE_ATTESTATION_CONTEXT);
-        let sig = key.sign(msg.as_bytes()).unwrap();
-        serde_json::json!({
-            "port": 9778,
-            "cert_hash_sha256": hash,
-            "expires_at": 4_000_000_000u64,
-            "allow_pooling": false,
-            "cert_hash_sig": crate::hosts::hex(&sig),
-            "host_cert_der": base64::engine::general_purpose::STANDARD.encode(cert.der()),
-        })
-    }
-
-    async fn upstream(plane: Plane) -> Up {
-        let (cert, key) = identity();
-        let fp = punktfunk_core::tls::cert_fingerprint(cert.der());
-        let answer = match plane {
-            Plane::Attested => Some(published(&cert, &key)),
-            Plane::Borrowed => {
-                let (other, other_key) = identity();
-                Some(published(&other, &other_key))
-            }
-            Plane::Unattested => {
-                let mut plane = published(&cert, &key);
-                let fields = plane.as_object_mut().unwrap();
-                fields.remove("cert_hash_sig");
-                fields.remove("host_cert_der");
-                Some(plane)
-            }
-            Plane::Off | Plane::Decoy => None,
-        };
-        let asked: Arc<Mutex<Vec<String>>> = Arc::default();
-        let mut app = axum::Router::new()
-            .route("/api/v1/health", axum::routing::get(|| async { "ok" }))
-            .route(
-                "/api/v1/host",
-                axum::routing::get(|| async { axum::response::Redirect::to("/secret") }),
-            )
-            .route("/secret", axum::routing::get(|| async { "secret" }))
-            .route(
-                "/api/v1/status",
-                axum::routing::get(|h: axum::http::HeaderMap| async move {
-                    let seen: Vec<_> = h
-                        .iter()
-                        .map(|(k, v)| format!("{k}={}", v.to_str().unwrap_or("?")))
-                        .collect();
-                    let reply = [
-                        ("content-type", "text/plain"),
-                        ("etag", "\"v1\""),
-                        ("clear-site-data", "\"storage\""),
-                        ("www-authenticate", "Basic realm=\"desk\""),
-                        ("alt-svc", "h3=\":443\""),
-                        ("location", "https://elsewhere.example/"),
-                        ("set-cookie", "a=b"),
-                        ("access-control-allow-origin", "*"),
-                    ];
-                    (reply, seen.join("\n"))
-                }),
-            );
-        if let Some(answer) = answer {
-            let answer = axum::Json(answer);
-            app = app.route(
-                "/api/v1/webtransport",
-                axum::routing::get(move || async move { answer }),
-            );
-        }
-        if plane == Plane::Decoy {
-            app = axum::Router::new().fallback(|| async { "hello" });
-        }
-        let app = app.layer(axum::middleware::from_fn_with_state(
-            asked.clone(),
-            |State(asked): State<Arc<Mutex<Vec<String>>>>,
-             req: axum::extract::Request,
-             next: axum::middleware::Next| async move {
-                let line = format!("{} {}", req.method(), req.uri().path());
-                asked.lock().unwrap().push(line);
-                next.run(req).await
-            },
-        ));
-        let tls = axum_server::tls_rustls::RustlsConfig::from_pem(
-            cert.pem().into(),
-            key.serialize_pem().into(),
-        )
-        .await
-        .unwrap();
-        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-        listener.set_nonblocking(true).unwrap();
-        let port = listener.local_addr().unwrap().port();
-        let server = axum_server::from_tcp_rustls(listener, tls).unwrap();
-        tokio::spawn(server.serve(app.into_make_service()));
-        Up { port, fp, asked }
-    }
 
     fn hosts(name: &str, listed: Vec<Listed>, machine: Machine) -> Arc<Hosts> {
         let dir = std::env::temp_dir().join(format!("pf-proxy-{name}-{}", std::process::id()));
@@ -576,8 +538,11 @@ mod tests {
         send(hosts, Request::get(path).body(Body::empty()).unwrap()).await
     }
 
-    async fn get_with_token(hosts: &Arc<Hosts>, path: &str) -> (StatusCode, String) {
-        let req = Request::get(path).header("authorization", "Bearer x");
+    /// A request with a token, naming the host it was paired with.
+    async fn get_with_token(hosts: &Arc<Hosts>, path: &str, fp: [u8; 32]) -> (StatusCode, String) {
+        let req = Request::get(path)
+            .header("authorization", "Bearer x")
+            .header("pf-host", crate::hosts::hex(&fp));
         send(hosts, req.body(Body::empty()).unwrap()).await
     }
 
@@ -623,7 +588,7 @@ mod tests {
             "/h/desk/api/..%2fsecret",
             "/h/desk/api/v1/health/../../../secret",
         ] {
-            let (status, body) = get_with_token(&hosts, path).await;
+            let (status, body) = get_with_token(&hosts, path, up.fp).await;
             assert_ne!(body, "secret", "{path}");
             assert!(matches!(status.as_u16(), 400 | 404), "{path}: {status}");
         }
@@ -632,10 +597,10 @@ mod tests {
         assert_eq!(up.asked(), Vec::<String>::new());
 
         // A redirect is relayed as its status, without a target, and never followed.
-        let (status, body) = get_with_token(&hosts, "/h/desk/api/v1/host").await;
+        let (status, body) = get_with_token(&hosts, "/h/desk/api/v1/compositors", up.fp).await;
         assert!(status.is_redirection(), "{status}");
         assert_ne!(body, "secret");
-        assert_eq!(up.asked(), ["GET /api/v1/host"]);
+        assert_eq!(up.asked(), ["GET /api/v1/compositors"]);
     }
 
     #[tokio::test]
@@ -654,7 +619,7 @@ mod tests {
                 (format!("/wa/{at}?port=9778&hash={hash}"), false),
             ] {
                 let (status, body) = if token {
-                    get_with_token(&hosts, &path).await
+                    get_with_token(&hosts, &path, [0; 32]).await
                 } else {
                     get(&hosts, &path).await
                 };
@@ -767,6 +732,8 @@ mod tests {
             .header("origin", "https://192.168.1.5:8443");
         for (name, value) in [
             ("authorization", "Bearer x"),
+            ("pf-host", &crate::hosts::hex(&up.fp)),
+            ("pf-pass", &"ab".repeat(32)),
             ("accept", "application/json"),
             ("if-none-match", "\"v0\""),
             ("cookie", "a=b"),
@@ -820,6 +787,139 @@ mod tests {
             "pf-client-addr=203.0.113.9",
         ];
         assert_eq!(seen, want);
+    }
+
+    fn post_pass(path: &str, token: &str, fp: [u8; 32], pass: Option<&str>) -> Request<Body> {
+        let mut req = Request::post(path)
+            .header("authorization", format!("Bearer {token}"))
+            .header("pf-host", crate::hosts::hex(&fp));
+        if let Some(pass) = pass {
+            req = req.header("pf-pass", pass);
+        }
+        req.body(Body::empty()).unwrap()
+    }
+
+    fn pass_of(body: &str) -> String {
+        let json: serde_json::Value = serde_json::from_str(body).unwrap();
+        json["pass"].as_str().unwrap().to_owned()
+    }
+
+    #[tokio::test]
+    async fn a_pass_is_minted_only_for_a_token_the_host_takes() {
+        punktfunk_core::tls::install_default_provider();
+        let up = upstream(Plane::Off).await;
+        let hosts = hosts("mint", desk(up.port, Some(up.fp)), TEST);
+        let refused = post_pass("/pass/h/desk", "bad", up.fp, None);
+        assert_eq!(send(&hosts, refused).await.0, StatusCode::UNAUTHORIZED);
+        let (status, body) = send(&hosts, post_pass("/pass/h/desk", "good", up.fp, None)).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        let pass = pass_of(&body);
+        assert!(hosts.lanes.passes.hosts(&pass).covers(Some(up.fp)));
+        assert_eq!(up.asked(), ["GET /api/v1/host", "GET /api/v1/host"]);
+
+        // A typed host, proven first: the same pass is extended to it.
+        let other = upstream(Plane::Attested).await;
+        let at = format!("/pass/a/127.0.0.1:{}", other.port);
+        let (status, body) = send(&hosts, post_pass(&at, "good", other.fp, Some(&pass))).await;
+        assert_eq!((status, pass_of(&body)), (StatusCode::OK, pass.clone()));
+        let held = hosts.lanes.passes.hosts(&pass);
+        assert!(held.covers(Some(up.fp)) && held.covers(Some(other.fp)));
+    }
+
+    #[tokio::test]
+    async fn a_token_goes_only_to_the_host_it_was_paired_with() {
+        punktfunk_core::tls::install_default_provider();
+        let up = upstream(Plane::Off).await;
+        let pinned = hosts("bound", desk(up.port, Some(up.fp)), TEST);
+        let unpinned = hosts("bound-first", desk(up.port, None), TEST);
+        for hosts in [&pinned, &unpinned] {
+            let (status, body) = get_with_token(hosts, "/h/desk/api/v1/status", [9; 32]).await;
+            assert_eq!(status, StatusCode::BAD_GATEWAY);
+            assert!(
+                body.contains("isn't the one this browser paired with"),
+                "{body}"
+            );
+        }
+        let unnamed = Request::get("/h/desk/api/v1/status").header("authorization", "Bearer x");
+        let (status, body) = send(&pinned, unnamed.body(Body::empty()).unwrap()).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert!(body.contains("Reload"), "{body}");
+        assert_eq!(up.asked(), Vec::<String>::new());
+
+        // The browser's own host, first contact included: reached, and pinned to it.
+        let (status, _) = get_with_token(&unpinned, "/h/desk/api/v1/status", up.fp).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(unpinned.get("desk").unwrap().pin, Some(up.fp));
+
+        // A proven host that is not the paired one.
+        let other = upstream(Plane::Attested).await;
+        let typed = hosts("bound-typed", Vec::new(), TEST);
+        let path = format!("/a/127.0.0.1:{}/api/v1/status", other.port);
+        assert_eq!(get_with_token(&typed, &path, up.fp).await.0, 502);
+        assert_eq!(other.asked(), ["GET /api/v1/webtransport"]);
+    }
+
+    #[tokio::test]
+    async fn an_impostor_never_hears_the_device_exchange() {
+        punktfunk_core::tls::install_default_provider();
+        let real = upstream(Plane::Attested).await;
+        let impostor = upstream(Plane::Attested).await;
+        let hosts = hosts("impostor", Vec::new(), TEST);
+        let at = format!("/a/127.0.0.1:{}/api/v1/auth/device", impostor.port);
+        for step in ["challenge", "token"] {
+            let named = Request::post(format!("{at}/{step}"))
+                .header("pf-host", crate::hosts::hex(&real.fp))
+                .body(Body::from("{}"))
+                .unwrap();
+            let (status, body) = send(&hosts, named).await;
+            assert_eq!(status, StatusCode::BAD_GATEWAY, "{step}");
+            assert!(
+                body.contains("isn't the one this browser paired with"),
+                "{body}"
+            );
+            let unnamed = Request::post(format!("{at}/{step}")).body(Body::from("{}"));
+            assert_eq!(send(&hosts, unnamed.unwrap()).await.0, 400, "{step}");
+        }
+        assert_eq!(impostor.asked(), ["GET /api/v1/webtransport"]);
+        assert_eq!(real.asked(), Vec::<String>::new());
+    }
+
+    #[tokio::test]
+    async fn a_stranger_is_metered_and_a_pass_holder_is_not() {
+        punktfunk_core::tls::install_default_provider();
+        let up = upstream(Plane::Off).await;
+        let hosts = hosts("meter", desk(up.port, Some(up.fp)), TEST);
+        for _ in 0..30 {
+            assert_eq!(get(&hosts, "/h/desk/api/v1/health").await.0, 200);
+        }
+        let app = crate::router(hosts.clone(), std::env::temp_dir(), Default::default());
+        let health = || Request::get("/h/desk/api/v1/health");
+        let res = app
+            .clone()
+            .oneshot(health().body(Body::empty()).unwrap())
+            .await;
+        let res = res.unwrap();
+        assert_eq!(res.status(), StatusCode::TOO_MANY_REQUESTS);
+        assert_eq!(res.headers()["retry-after"], "2");
+        assert_eq!(up.asked().len(), 30);
+
+        let pass = hosts.lanes.passes.prove(None, up.fp);
+        for _ in 0..40 {
+            let req = health()
+                .header("pf-pass", &pass)
+                .body(Body::empty())
+                .unwrap();
+            assert_eq!(app.clone().oneshot(req).await.unwrap().status(), 200);
+        }
+
+        // Without a token a request body stops at 4 KiB.
+        let big = Request::post("/h/desk/api/v1/auth/device/token")
+            .header("pf-pass", &pass)
+            .header("pf-host", crate::hosts::hex(&up.fp))
+            .body(Body::from(vec![b'x'; 5000]))
+            .unwrap();
+        assert_eq!(app.oneshot(big).await.unwrap().status(), 413);
+        assert_eq!(up.asked().len(), 70);
     }
 
     #[test]

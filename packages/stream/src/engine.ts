@@ -31,6 +31,7 @@ import { type TunnelFetch, tunnelFetch } from "./tunnel.ts";
 import { type Feed, wasmFeed } from "./carrier/feed.ts";
 import { WtCarrier } from "./carrier/wt.ts";
 import { bridgeUrl, WsCarrier } from "./carrier/ws.ts";
+import { passFor } from "./pass.ts";
 
 export type { AudioSnapshot, AudioState } from "./audio.ts";
 export type { MicState } from "./mic.ts";
@@ -431,7 +432,7 @@ export class Engine {
     this.planeHost =
       typeof address === "string"
         ? (this.opts.transportHost ?? new URL(origin).hostname)
-        : address.plane;
+        : (address.plane ?? "");
     this.set({ kind: "reaching", origin });
 
     const tunnel = typeof address === "object" && address.tunnel === true;
@@ -497,7 +498,8 @@ export class Engine {
       }
       if (stale()) return;
     }
-    pf.hosts.remember(origin, typeof this.target === "object" && this.target ? { plane: this.target.plane } : {});
+    const plane = typeof this.target === "object" ? this.target?.plane : undefined;
+    pf.hosts.remember(origin, plane ? { plane } : {});
     // Every management call from here rides the plane, pinned to the hash just verified. The
     // tunnel is dialled by the first call, not now: the key may still say this host is unpaired.
     if (tunnel) {
@@ -1052,7 +1054,10 @@ export class Engine {
     const port = this.seatPlane?.port ?? this.plane.port;
     const hash = this.seatPlane?.certHash ?? this.plane.cert_hash_sha256;
     const pin = this.opts.carrier;
-    const wt = pin === "wt" || (!pin && "WebTransport" in globalThis && carrierHint.get(this.origin) !== "ws");
+    // No plane address: a stranger outside the server's network, whom only the bridge carries.
+    const wt =
+      this.planeHost !== "" &&
+      (pin === "wt" || (!pin && "WebTransport" in globalThis && carrierHint.get(this.origin) !== "ws"));
     this.openCarrier(wt ? "wt" : "ws", port, hash);
   }
 
@@ -1075,7 +1080,7 @@ export class Engine {
       kind === "wt"
         ? new WtCarrier(this.feed, `https://${this.planeHost}:${port}/pf2`, hash)
         : bridge
-          ? new WsCarrier(this.feed, bridgeUrl(bridge, port, hash))
+          ? new WsCarrier(this.feed, bridgeUrl(bridge, port, hash), passFor(pf.hosts.fingerprint(origin)))
           : null;
     let opening: Promise<void> | null = null;
     if (carrier) {

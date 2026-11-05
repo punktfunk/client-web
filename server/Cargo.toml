@@ -14,6 +14,11 @@ axum = { version = "0.8", features = ["ws"] }
 axum-server = { version = "0.8", features = ["tls-rustls-no-provider"] }
 # A host's attestation carries its certificate in base64.
 base64 = "0.22"
+# The listener's header-read timeout needs hyper's timer.
+hyper-util = { version = "0.1", features = ["tokio"] }
+# A pass is random, and kept as its SHA-256.
+getrandom = "0.3"
+sha2 = "0.11"
 futures-util = { version = "0.3", default-features = false, features = ["sink"] }
 rcgen = "0.14"
 reqwest = { version = "0.13", default-features = false, features = ["stream", "rustls-no-provider", "http2"] }

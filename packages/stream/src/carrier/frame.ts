@@ -7,16 +7,28 @@
 //   2  host → browser  one whole unidirectional stream
 //   3  both            u32 close code, then the UTF-8 reason
 //   4  both            ping: f64 sender ms; pong: the same f64, then u32 the bridge's RTT in µs
+//   5  browser → host  first: the 32-byte pass, for the paired pool
+//   6  browser → host  first, empty: a browser without a pass for this host, asking to pair
 
-export const TAG = { DATAGRAM: 0, CONTROL: 1, UNI: 2, CLOSE: 3, PING: 4 } as const;
+export const TAG = { DATAGRAM: 0, CONTROL: 1, UNI: 2, CLOSE: 3, PING: 4, PASS: 5, PAIR: 6 } as const;
 
 export type Frame =
   | { tag: typeof TAG.DATAGRAM | typeof TAG.CONTROL | typeof TAG.UNI; bytes: Uint8Array }
   | { tag: typeof TAG.CLOSE; code: number; reason: string }
-  | { tag: typeof TAG.PING; sentMs: number; bridgeRttUs?: number };
+  | { tag: typeof TAG.PING; sentMs: number; bridgeRttUs?: number }
+  | { tag: typeof TAG.PASS; pass: Uint8Array }
+  | { tag: typeof TAG.PAIR };
 
 export function encode(f: Frame): Uint8Array<ArrayBuffer> {
   switch (f.tag) {
+    case TAG.PASS: {
+      const out = new Uint8Array(33);
+      out[0] = f.tag;
+      out.set(f.pass, 1);
+      return out;
+    }
+    case TAG.PAIR:
+      return new Uint8Array([f.tag]);
     case TAG.CLOSE: {
       const reason = new TextEncoder().encode(f.reason);
       const out = new Uint8Array(5 + reason.length);
@@ -59,6 +71,10 @@ export function decode(msg: Uint8Array): Frame | null {
       if (msg.length === 9) return { tag, sentMs: view.getFloat64(1) };
       if (msg.length === 13) return { tag, sentMs: view.getFloat64(1), bridgeRttUs: view.getUint32(9) };
       return null;
+    case TAG.PASS:
+      return msg.length === 33 ? { tag, pass: msg.subarray(1) } : null;
+    case TAG.PAIR:
+      return msg.length === 1 ? { tag } : null;
     default:
       return null;
   }

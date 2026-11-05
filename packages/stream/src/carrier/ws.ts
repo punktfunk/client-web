@@ -32,6 +32,9 @@ export class WsCarrier implements Carrier {
   constructor(
     private readonly feed: Feed,
     private readonly url: string,
+    /** This browser's pass when it covers the host: the paired pool. Without one, the pairing
+     *  pool, which reaches only the plane the host published. */
+    private readonly pass: Uint8Array | null = null,
   ) {}
 
   open(): Promise<void> {
@@ -42,6 +45,8 @@ export class WsCarrier implements Carrier {
       ws.onopen = () => {
         if (this.ws !== ws) return;
         this.live = true;
+        // First, before anything else: which of the bridge's two pools this session is for.
+        this.send(this.pass ? { tag: TAG.PASS, pass: this.pass } : { tag: TAG.PAIR });
         this.ping = setInterval(() => this.send({ tag: TAG.PING, sentMs: performance.now() }), PING_MS);
         this.openControl();
         resolve();

@@ -94,7 +94,10 @@ impl Visitor {
     }
 }
 
-/// Every route: the visitor, as [`Visitor::of`] finds them.
+/// The header a page sends its pass in. Never forwarded: the relay passes an allowlist.
+pub const PASS_HEADER: &str = "pf-pass";
+
+/// Every route: the visitor, as [`Visitor::of`] finds them, and the hosts their pass opens.
 pub async fn find(
     State((hosts, proxied)): State<(Arc<Hosts>, bool)>,
     mut req: Request,
@@ -105,7 +108,12 @@ pub async fn find(
         .get::<ConnectInfo<SocketAddr>>()
         .map(|c| c.0.ip());
     let visitor = Visitor::of(peer, req.headers(), proxied, &hosts.machine);
+    let pass = req.headers().get(PASS_HEADER).and_then(|v| v.to_str().ok());
+    let pass = pass
+        .map(|p| hosts.lanes.passes.hosts(p))
+        .unwrap_or_default();
     req.extensions_mut().insert(visitor);
+    req.extensions_mut().insert(pass);
     next.run(req).await
 }
 

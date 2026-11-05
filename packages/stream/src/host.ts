@@ -23,6 +23,7 @@ import { Effect } from "effect";
 import { SchemaError } from "effect/Schema";
 import { type GameEnd, gameEndOf } from "./game-end.ts";
 import { PAGE_LIMIT, walkPages } from "./pages.ts";
+import { renewPass, serverFetch, TOO_MANY } from "./pass.ts";
 
 export { DeviceRefused };
 export type LibraryEntry = api.OperatorGameEntry;
@@ -53,12 +54,24 @@ export class Host {
      *  packaged page. Every call goes through it, the device exchange included. */
     fetch?: Fetch,
   ) {
-    const via = fetch ? { fetch } : {};
-    this.conn = connection({
-      url: origin,
-      credential: deviceKey({ url: origin, hostFingerprint, signer, ...via }),
-      ...via,
-    });
+    // The plane's tunnel for a packaged page; otherwise this page's own server, told which host
+    // a token is for, and shown the pass a login renews.
+    const via = fetch ?? serverFetch(hostFingerprint);
+    const key = deviceKey({ url: origin, hostFingerprint, signer, fetch: via });
+    let earned = "";
+    const credential = {
+      kind: key.kind,
+      header: async () => {
+        const header = await key.header();
+        if (!fetch && header && header !== earned) {
+          earned = header;
+          await renewPass(origin, header, hostFingerprint).catch(() => undefined);
+        }
+        return header;
+      },
+      invalidate: () => key.invalidate(),
+    };
+    this.conn = connection({ url: origin, credential, fetch: via });
     this.client = Effect.runPromise(httpClientFor(this.conn)).then((http) => api.make(http));
   }
 
@@ -210,6 +223,7 @@ async function refusal(res: Response, fallback: string): Promise<string> {
 /** The SDK's errors, as the three things the app can act on. */
 function translate(operation: string, e: unknown): Error {
   const cause = unwrap(e);
+  if (statusOf(cause) === 429) return new Error(TOO_MANY);
   if (cause instanceof DeviceRefused) return cause;
   if (cause instanceof SchemaError) return new VersionSkew(operation, String(cause));
   if (cause instanceof Error) return cause;

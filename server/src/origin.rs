@@ -3,7 +3,10 @@
 //! The device key lives in the origin, so a site that rebinds a name to this server, or a page on
 //! another site that calls its routes, must get nothing back.
 
+use crate::hosts::Hosts;
+use crate::lanes::Pass;
 use crate::proxy::own_authority;
+use crate::visitor::Visitor;
 use axum::extract::{Request, State};
 use axum::http::{header, HeaderMap, HeaderValue, StatusCode, Uri};
 use axum::middleware::Next;
@@ -11,6 +14,7 @@ use axum::response::{IntoResponse, Response};
 use punktfunk_core::provenance::is_local_name;
 use std::net::{Ipv4Addr, Ipv6Addr};
 use std::sync::Arc;
+use std::time::Duration;
 
 /// `TLS_NAMES`, lowercase, without a trailing dot. `None` checks no name at all.
 pub type Names = Option<Arc<[String]>>;
@@ -32,18 +36,10 @@ const CSP: &str = "default-src 'self'; script-src 'self' 'wasm-unsafe-eval' blob
                    connect-src 'self' https: blob:; object-src 'none'; base-uri 'none'; \
                    form-action 'none'; frame-ancestors 'none'";
 
-/// Every request: the name first, then this server's word on the origin. A host's reply keeps the
-/// `sandbox` CSP the relay gave it; the rest is set over whatever the host sent.
-pub async fn guard(State(names): State<Names>, req: Request, next: Next) -> Response {
-    let name = own_authority(req.uri(), req.headers()).map(name_of);
-    let mut res = match name {
-        Some(name) if !answers(names.as_deref(), &name) => {
-            tracing::warn!(name, "refused a name not in TLS_NAMES");
-            let say = format!("Add {name} to TLS_NAMES to open the page at that name.");
-            (StatusCode::MISDIRECTED_REQUEST, say).into_response()
-        }
-        _ => next.run(req).await,
-    };
+/// Every response this server sends: its word on the origin. A host's reply keeps the `sandbox`
+/// CSP the relay gave it; the rest is set over whatever the host sent.
+pub async fn headers(req: Request, next: Next) -> Response {
+    let mut res = next.run(req).await;
     let h = res.headers_mut();
     h.entry(header::CONTENT_SECURITY_POLICY)
         .or_insert(HeaderValue::from_static(CSP));
@@ -58,6 +54,60 @@ pub async fn guard(State(names): State<Names>, req: Request, next: Next) -> Resp
         h.insert(name, HeaderValue::from_static(value));
     }
     res
+}
+
+/// Every request: the name, then the stranger meter. A stranger pays for every routed request
+/// and for a refused name, so a flood meets `429` before it reaches the log; a `401` or `403`
+/// back costs one more.
+pub async fn gate(
+    State((names, hosts)): State<(Names, Arc<Hosts>)>,
+    req: Request,
+    next: Next,
+) -> Response {
+    let name = own_authority(req.uri(), req.headers()).map(name_of);
+    let refused = name.filter(|n| !answers(names.as_deref(), n));
+    let routed = routed(req.uri().path());
+    let stranger = req.extensions().get::<Pass>().is_none_or(Pass::stranger);
+    let who = req.extensions().get::<Visitor>().and_then(|v| v.addr);
+    if stranger && (routed || refused.is_some()) {
+        if let Err(wait) = hosts.lanes.strangers.take(who) {
+            return too_many(wait);
+        }
+    }
+    if let Some(name) = refused {
+        tracing::warn!(name, "refused a name not in TLS_NAMES");
+        let say = format!("Add {name} to TLS_NAMES to open the page at that name.");
+        return (StatusCode::MISDIRECTED_REQUEST, say).into_response();
+    }
+    let res = next.run(req).await;
+    let refusal = matches!(
+        res.status(),
+        StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN
+    );
+    if stranger && routed && refusal {
+        let _ = hosts.lanes.strangers.take(who);
+    }
+    res
+}
+
+/// A route of this server's own, not a static file.
+fn routed(path: &str) -> bool {
+    path == "/config.json"
+        || ["/h/", "/a/", "/w/", "/wa/", "/wake/", "/pass/"]
+            .iter()
+            .any(|p| path.starts_with(p))
+}
+
+/// `429`, and when to come back.
+pub fn too_many(wait: Duration) -> Response {
+    let secs = wait.as_secs_f64().ceil().max(1.0).to_string();
+    let say = "Too many requests from this address. Wait a minute, then try again.";
+    (
+        StatusCode::TOO_MANY_REQUESTS,
+        [(header::RETRY_AFTER, secs)],
+        say,
+    )
+        .into_response()
 }
 
 /// Every route but the static files: only this server's own page, or no page at all.
@@ -135,7 +185,13 @@ mod tests {
         crate::router(hosts, dir, front)
     }
 
-    async fn send(app: &axum::Router, req: Request<Body>) -> axum::response::Response {
+    /// Each from a peer of its own, so no one visitor's meter runs out.
+    async fn send(app: &axum::Router, mut req: Request<Body>) -> axum::response::Response {
+        static NEXT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(1);
+        let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let peer = std::net::SocketAddr::from((((10u32 << 24) | n).to_be_bytes(), 1));
+        req.extensions_mut()
+            .insert(axum::extract::ConnectInfo(peer));
         app.clone().oneshot(req).await.unwrap()
     }
 
