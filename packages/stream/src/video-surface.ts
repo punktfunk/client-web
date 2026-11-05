@@ -49,6 +49,9 @@ uniform sampler2D tex;
 out vec4 colour;
 void main() { colour = texture(tex, uv); }`;
 
+/** Canvases whose WebGL2 loss is claimed for life, so a context lost between streams comes back. */
+const claimed = new WeakSet<HTMLCanvasElement>();
+
 function compile(gl: WebGL2RenderingContext, type: number, src: string): WebGLShader {
   const sh = gl.createShader(type);
   if (!sh) throw new Error("video surface: could not create a shader");
@@ -93,6 +96,10 @@ export class VideoSurface implements VideoPlane {
       powerPreference: "high-performance",
     });
     if (!gl) throw new Error("no WebGL2 context for the video plane");
+    if (!claimed.has(canvas)) {
+      claimed.add(canvas);
+      canvas.addEventListener("webglcontextlost", (e) => e.preventDefault());
+    }
     if (gl.isContextLost()) throw new Error("the video plane's WebGL2 context is lost");
     this.gl = gl;
 
@@ -125,15 +132,9 @@ export class VideoSurface implements VideoPlane {
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
     gl.uniform1i(gl.getUniformLocation(prog, "tex"), 0);
 
-    // A context comes back only if its loss is claimed.
-    const lost = (e: Event) => e.preventDefault();
     const restored = () => onLost?.();
-    canvas.addEventListener("webglcontextlost", lost);
     canvas.addEventListener("webglcontextrestored", restored);
-    this.unwatch = () => {
-      canvas.removeEventListener("webglcontextlost", lost);
-      canvas.removeEventListener("webglcontextrestored", restored);
-    };
+    this.unwatch = () => canvas.removeEventListener("webglcontextrestored", restored);
   }
 
   /** Source dimensions and colour. `colorSpace` comes from the frame's own `VideoColorSpace`;
@@ -194,7 +195,7 @@ export class VideoSurface implements VideoPlane {
   }
 
   /** Frees the plane's own objects and keeps the context: the canvas outlives this plane, and
-   *  hands the next one this same context. A loss after this is no longer claimed. */
+   *  hands the next one this same context. */
   destroy(): void {
     this.unwatch();
     const gl = this.gl;
