@@ -153,3 +153,24 @@ test("a bridge that refuses the upgrade rejects the open", async () => {
   await assert.rejects(opening);
   assert.deepEqual(got, []);
 });
+
+test("a bridge whose pongs stop ends as a lost connection", async (t) => {
+  const { ws, got } = await opened(t);
+  t.mock.timers.tick(30_000);
+  assert.deepEqual(got, ["ready"], "no pong yet: the server may still be dialling");
+  ws.deliver({ tag: TAG.PING, sentMs: 0, bridgeRttUs: 0 });
+  t.mock.timers.tick(10_000);
+  assert.deepEqual(got, ["ready"], "ten pings without an answer");
+  t.mock.timers.tick(1000);
+  assert.deepEqual(got, ["ready", "closed -1 "]);
+  assert.equal(ws.closedWith, 1000);
+});
+
+test("a pong restarts the count", async (t) => {
+  const { ws, got } = await opened(t);
+  ws.deliver({ tag: TAG.PING, sentMs: 0, bridgeRttUs: 0 });
+  t.mock.timers.tick(9000);
+  ws.deliver({ tag: TAG.PING, sentMs: 0, bridgeRttUs: 0 });
+  t.mock.timers.tick(9000);
+  assert.deepEqual(got, ["ready"]);
+});

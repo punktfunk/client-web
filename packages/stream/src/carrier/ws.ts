@@ -8,6 +8,9 @@ import { decode, encode, type Frame, TAG } from "./frame.ts";
 
 /** How often the bridge is pinged. The round trip it measures is what `rttUs` reports. */
 const PING_MS = 1000;
+/** Pings in a row without a pong before the bridge counts as gone. Counted rather than timed: a
+ *  background tab's slowed timer sends fewer pings and never trips it. */
+const UNANSWERED = 10;
 /** `WebSocket.OPEN`. */
 const OPEN = 1;
 
@@ -28,6 +31,8 @@ export class WsCarrier implements Carrier {
   /** The smoothed pong round trip, and the bridge's own round trip to the host, in µs. */
   private rtt = 0;
   private bridgeRtt = 0;
+  /** Pings since the last pong; `-1` until the first, while the server is still dialling. */
+  private unanswered = -1;
 
   constructor(
     private readonly feed: Feed,
@@ -47,7 +52,12 @@ export class WsCarrier implements Carrier {
         this.live = true;
         // First, before anything else: which of the bridge's two pools this session is for.
         this.send(this.pass ? { tag: TAG.PASS, pass: this.pass } : { tag: TAG.PAIR });
-        this.ping = setInterval(() => this.send({ tag: TAG.PING, sentMs: performance.now() }), PING_MS);
+        this.ping = setInterval(() => {
+          // A dead TCP leg says nothing: no pongs is how it shows, and it ends as a lost connection.
+          if (this.unanswered >= UNANSWERED) return this.end(-1, "", 1000);
+          if (this.unanswered >= 0) this.unanswered++;
+          this.send({ tag: TAG.PING, sentMs: performance.now() });
+        }, PING_MS);
         this.openControl();
         resolve();
       };
@@ -114,6 +124,7 @@ export class WsCarrier implements Carrier {
       case TAG.PING: {
         // A bare ping asks nothing of the page: the server's own WebSocket pings keep the line up.
         if (f.bridgeRttUs === undefined) return;
+        this.unanswered = 0;
         const sample = Math.round((performance.now() - f.sentMs) * 1000);
         this.rtt = this.rtt ? Math.round(this.rtt + (sample - this.rtt) / 8) : sample;
         this.bridgeRtt = f.bridgeRttUs;
@@ -141,5 +152,6 @@ export class WsCarrier implements Carrier {
     this.ctl = false;
     this.rtt = 0;
     this.bridgeRtt = 0;
+    this.unanswered = -1;
   }
 }
