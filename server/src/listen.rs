@@ -21,8 +21,9 @@ use tokio::time::{Instant, Sleep};
 pub const CONNS: usize = 256;
 pub const PER_PEER: usize = 32;
 /// A connection that moves no byte either way for this long is closed. A live bridge never
-/// gets near it: the page pings every second, the server every ten.
-pub const IDLE: Duration = Duration::from_secs(30);
+/// gets near it: the page pings every second, the server every ten. 60 s is nginx's own read
+/// timeout, so a slow host reply on an HTTP/2 connection is not cut sooner than a proxy would.
+pub const IDLE: Duration = Duration::from_secs(60);
 const HANDSHAKE: Duration = Duration::from_secs(10);
 /// Per request on a kept-alive connection: a peer that never finishes its headers holds nothing.
 const HEADERS: Duration = Duration::from_secs(30);
