@@ -752,6 +752,7 @@ mod tests {
         let front = crate::origin::Front {
             names: Some([].into()),
             proxied: true,
+            self_signed: false,
         };
         let res = crate::router(hosts, std::env::temp_dir(), front)
             .oneshot(req)

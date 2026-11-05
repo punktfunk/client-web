@@ -3,6 +3,9 @@
 #   docker compose up -d
 #   open https://<this machine>:8443 and accept its certificate once
 #
+# The self-made certificate is for your own network. A browser at a public address gets a page
+# saying so and nothing else; from outside, use compose.tailscale.yaml or compose.public.yaml.
+#
 # Each host also needs Browser streaming on (its console, Streaming settings) and UDP 9778 open:
 # video goes from the host to the browser directly, never through this container.
 services:

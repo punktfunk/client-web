@@ -6,13 +6,14 @@
 use crate::hosts::Hosts;
 use crate::lanes::Pass;
 use crate::proxy::own_authority;
-use crate::visitor::Visitor;
-use axum::extract::{Request, State};
+use crate::visitor::{Machine, Visitor};
+use axum::extract::{ConnectInfo, Request, State};
 use axum::http::{header, HeaderMap, HeaderValue, StatusCode, Uri};
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
 use punktfunk_core::provenance::is_local_name;
-use std::net::{Ipv4Addr, Ipv6Addr};
+use punktfunk_core::provenance::KnockSource;
+use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -25,6 +26,8 @@ pub struct Front {
     pub names: Names,
     /// `TLS=off`: a proxy is in front by definition.
     pub proxied: bool,
+    /// `TLS=self-signed`: a certificate a browser cannot tell from an impostor's.
+    pub self_signed: bool,
 }
 
 /// The page's own scripts and wasm, nothing injected, never framed. `blob:` scripts are the audio
@@ -56,23 +59,28 @@ pub async fn headers(req: Request, next: Next) -> Response {
     res
 }
 
-/// Every request: the name, then the stranger meter. A stranger pays for every routed request
-/// and for a refused name, so a flood meets `429` before it reaches the log; a `401` or `403`
-/// back costs one more.
+/// Every request: the certificate rule, the name, then the stranger meter. A stranger pays for
+/// every routed request and every refusal, so a flood meets `429` before it reaches the log; a
+/// `401` or `403` back costs one more.
 pub async fn gate(
-    State((names, hosts)): State<(Names, Arc<Hosts>)>,
+    State((front, hosts)): State<(Front, Arc<Hosts>)>,
     req: Request,
     next: Next,
 ) -> Response {
     let name = own_authority(req.uri(), req.headers()).map(name_of);
-    let refused = name.filter(|n| !answers(names.as_deref(), n));
+    let refused = name.filter(|n| !answers(front.names.as_deref(), n));
     let routed = routed(req.uri().path());
+    let outside = front.self_signed && straight_from_outside(&req, &hosts.machine);
     let stranger = req.extensions().get::<Pass>().is_none_or(Pass::stranger);
     let who = req.extensions().get::<Visitor>().and_then(|v| v.addr);
-    if stranger && (routed || refused.is_some()) {
+    if stranger && (routed || refused.is_some() || outside) {
         if let Err(wait) = hosts.lanes.strangers.take(who) {
             return too_many(wait);
         }
+    }
+    if outside {
+        let html = [(header::CONTENT_TYPE, "text/html; charset=utf-8")];
+        return (StatusCode::FORBIDDEN, html, OUTSIDE).into_response();
     }
     if let Some(name) = refused {
         tracing::warn!(name, "refused a name not in TLS_NAMES");
@@ -89,6 +97,30 @@ pub async fn gate(
     }
     res
 }
+
+/// A browser on a public address that sees the self-made certificate itself: nothing there tells
+/// this server from an impostor. With a forwarding header, a proxy ended the browser's TLS.
+fn straight_from_outside(req: &Request, m: &Machine) -> bool {
+    let h = req.headers();
+    let forwarded = h.contains_key("x-forwarded-for") || h.contains_key(header::FORWARDED);
+    let peer = req.extensions().get::<ConnectInfo<SocketAddr>>();
+    !forwarded && peer.is_some_and(|p| m.class(p.0.ip()) == KnockSource::Wan)
+}
+
+/// What a browser at a public address gets instead of the page: no script, no route.
+const OUTSIDE: &str = r#"<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Punktfunk</title>
+<style>body{font:17px/1.5 system-ui,sans-serif;max-width:34em;margin:4em auto;padding:0 1em}</style>
+<h1>This page can't be opened from the internet</h1>
+<p>A self-made certificate gives a browser no way to tell this server from an impostor, so the
+page stays closed to addresses outside your network.</p>
+<p>Reach it over Tailscale, or give it a real certificate.
+<a href="https://docs.punktfunk.unom.io/docs/browser-client">The documentation</a> shows both.</p>
+</html>
+"#;
 
 /// A route of this server's own, not a static file.
 fn routed(path: &str) -> bool {
@@ -180,7 +212,7 @@ mod tests {
         let hosts = Hosts::new(vec![desk], &dir, true, crate::visitor::TEST).unwrap();
         let front = super::Front {
             names,
-            proxied: false,
+            ..Default::default()
         };
         crate::router(hosts, dir, front)
     }
@@ -309,5 +341,75 @@ mod tests {
             assert_eq!(h["referrer-policy"], "no-referrer");
             assert_eq!(h["cross-origin-opener-policy"], "same-origin");
         }
+    }
+
+    #[tokio::test]
+    async fn a_self_made_certificate_is_never_shown_to_the_internet() {
+        let dir = std::env::temp_dir().join(format!("pf-origin-outside-{}", std::process::id()));
+        std::fs::create_dir_all(dir.join("assets")).unwrap();
+        std::fs::write(dir.join("index.html"), "<!doctype html>app").unwrap();
+        std::fs::write(dir.join("assets/app.js"), "app").unwrap();
+        // This machine's own IPv6 prefix is 2001:db8:1::/64.
+        let machine = crate::visitor::Machine {
+            on_own_prefix: |v6| v6.segments()[..4] == [0x2001, 0xdb8, 1, 0],
+            ..crate::visitor::TEST
+        };
+        let hosts = Hosts::new(Vec::new(), &dir, true, machine).unwrap();
+        let app = |self_signed, proxied| {
+            let front = super::Front {
+                names: None,
+                proxied,
+                self_signed,
+            };
+            crate::router(hosts.clone(), dir.clone(), front)
+        };
+        let from = |peer: &str, path: &str, forwarded: bool| {
+            let mut req = Request::get(path);
+            if forwarded {
+                req = req.header("x-forwarded-for", "203.0.113.9");
+            }
+            let mut req = req.body(Body::empty()).unwrap();
+            let peer: std::net::SocketAddr = peer.parse().unwrap();
+            req.extensions_mut()
+                .insert(axum::extract::ConnectInfo(peer));
+            req
+        };
+        let body = |res: axum::response::Response| async move {
+            let b = axum::body::to_bytes(res.into_body(), 1 << 16).await;
+            String::from_utf8(b.unwrap().to_vec()).unwrap()
+        };
+        let public = "203.0.113.9:5000";
+        for path in ["/", "/assets/app.js", "/config.json"] {
+            let res = app(true, false).oneshot(from(public, path, false)).await;
+            let res = res.unwrap();
+            assert_eq!(res.status(), 403, "{path}");
+            assert_eq!(res.headers()["content-security-policy"], super::CSP);
+            let page = body(res).await;
+            assert!(
+                page.contains("Tailscale") && !page.contains("<script"),
+                "{path}"
+            );
+        }
+        let app_for = [
+            (true, false, "192.168.1.20:5000", false),
+            (true, false, "[2001:db8:1::20]:5000", false),
+            (true, false, public, true),
+            (false, true, public, false),
+            (false, false, public, false),
+        ];
+        for (self_signed, proxied, peer, forwarded) in app_for {
+            let res = app(self_signed, proxied).oneshot(from(peer, "/", forwarded));
+            let res = res.await.unwrap();
+            assert_eq!(
+                res.status(),
+                200,
+                "{peer} {self_signed} {proxied} {forwarded}"
+            );
+            assert!(body(res).await.ends_with("app"));
+        }
+        // An IPv6 address off this machine's prefix is the internet.
+        let off = app(true, false).oneshot(from("[2001:db8:2::20]:5000", "/", false));
+        assert_eq!(off.await.unwrap().status(), 403);
+        let _ = std::fs::remove_dir_all(dir);
     }
 }

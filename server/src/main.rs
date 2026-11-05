@@ -59,6 +59,7 @@ async fn main() -> anyhow::Result<()> {
     let front = origin::Front {
         names: cfg.names(),
         proxied: matches!(cfg.tls, config::Tls::Off),
+        self_signed: matches!(cfg.tls, config::Tls::SelfSigned),
     };
     let app = router(hosts, cfg.dist.clone(), front);
 
@@ -84,7 +85,7 @@ async fn main() -> anyhow::Result<()> {
 /// files included, answers only the names `front` allows, and knows its visitor.
 pub(crate) fn router(hosts: Arc<Hosts>, dist: PathBuf, front: origin::Front) -> Router {
     let visitor = (hosts.clone(), front.proxied);
-    let gate = (front.names, hosts.clone());
+    let gate = (front, hosts.clone());
     Router::new()
         .route("/config.json", get(config_json))
         .route("/h/{id}/{*rest}", any(proxy::listed))

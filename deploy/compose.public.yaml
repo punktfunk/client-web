@@ -1,0 +1,50 @@
+# The browser client at your own domain, with a real certificate, reachable from anywhere.
+#
+#   DOMAIN=play.example.com docker compose -f compose.public.yaml up -d
+#   open https://play.example.com
+#
+# Point the domain at your home's public address and forward TCP 80 and 443 on the router to this
+# machine; Caddy gets and renews the certificate on its own. Keep the hosts' own ports closed on
+# the router: a browser outside your network streams through this server, never straight to a host.
+services:
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    # Listens on 80 and 443 of this machine.
+    network_mode: host
+    configs:
+      - source: caddyfile
+        target: /etc/caddy/Caddyfile
+    volumes:
+      - caddy-data:/data
+      - caddy-config:/config
+
+  punktfunk-web:
+    image: git.unom.io/unom/punktfunk-client-web:latest
+    restart: unless-stopped
+    # The host's network, so the server finds hosts over mDNS and can wake them. It listens on
+    # loopback only: everything from outside comes through Caddy.
+    network_mode: host
+    environment:
+      TLS: "off"
+      LISTEN: 127.0.0.1:8080
+      TLS_NAMES: ${DOMAIN:?set DOMAIN to the page's domain}
+      # Hosts mDNS cannot find: name=address[:port][#fingerprint], comma-separated.
+      # PUNKTFUNK_HOSTS: desk=192.168.1.21
+    volumes:
+      - punktfunk-web:/data
+
+# Caddy passes the browser's Host header through and sets X-Forwarded-For itself, over whatever
+# the browser sent. HSTS belongs here, where the name is the page's own.
+configs:
+  caddyfile:
+    content: |
+      ${DOMAIN} {
+        header Strict-Transport-Security "max-age=31536000"
+        reverse_proxy 127.0.0.1:8080
+      }
+
+volumes:
+  caddy-data:
+  caddy-config:
+  punktfunk-web:

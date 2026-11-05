@@ -33,7 +33,7 @@ impl Machine {
 
     /// The host's classification, plus one rule of this server's: a home network that hands out
     /// global IPv6 addresses is still at home.
-    fn class(&self, ip: IpAddr) -> KnockSource {
+    pub fn class(&self, ip: IpAddr) -> KnockSource {
         match ip.to_canonical() {
             IpAddr::V6(v6) if (self.on_own_prefix)(v6) => KnockSource::Lan,
             ip => classify_with(Some(ip), self.over_mesh),

@@ -72,9 +72,10 @@ them over mDNS, and one typed by its IP address goes through the server too. On 
 video goes from the host to the browser directly; only the host's management API passes through
 the container, on the page's own origin, which is what Safari needs.
 
-Two other shapes, in [`deploy/`](deploy): behind a reverse proxy that already has a certificate
-(`compose.proxy.yaml`), and on a tailnet with Tailscale's certificate, which also lets you play
-away from home (`compose.tailscale.yaml`).
+Three other shapes, in [`deploy/`](deploy): behind a reverse proxy that already has a certificate
+(`compose.proxy.yaml`), on a tailnet with Tailscale's certificate (`compose.tailscale.yaml`), and
+at your own domain with Caddy in front (`compose.public.yaml`). The last two let you play away
+from home.
 
 | Setting | Default | |
 |---|---|---|
@@ -83,11 +84,32 @@ away from home (`compose.tailscale.yaml`).
 | `TLS_NAMES` | | Domains the page is opened at. It answers only to these, IP addresses and names no public DNS holds (`localhost`, `desk`, `.local`, `.home.arpa`, `.internal`); with your own certificate and none listed, to any name. The self-signed certificate covers them too |
 | `PUNKTFUNK_HOSTS` | | Hosts mDNS cannot find: `name=address[:port][#fingerprint]`, comma-separated |
 | `DISCOVER` | on | `0` turns the mDNS browse off |
-| `ADD_HOSTS` | on | `0` stops the page reaching a host typed by address. Set it when the page is reachable from outside your network |
+| `ADD_HOSTS` | on | `0` stops the page reaching a host typed by its address. Either way, the server relays to a typed address only once a Punktfunk host has proven itself there |
 
 The server pins every host before trusting it, as the native clients do: by the fingerprint it
 was listed with, the one it announces, or the one it presented first (`/data/pins.json`). It adds
 no credential of its own; the browser's device key stays the only one.
+
+## From outside your network
+
+Tailscale is the simplest way. Put this machine and your hosts on a tailnet, run
+`compose.tailscale.yaml`, and the page opens wherever your devices are on the tailnet.
+
+Without Tailscale, give the page a domain with a real certificate. `compose.public.yaml` puts
+Caddy in front, which gets and renews the certificate for you:
+
+```sh
+DOMAIN=play.example.com docker compose -f compose.public.yaml up -d
+```
+
+Point the domain at your home's address and forward TCP 80 and 443 on your router to this machine.
+Keep the hosts' own ports closed: a browser outside your network streams through the server.
+
+Forwarding the port of the self-signed setup does not work. From the internet, a browser can't
+tell a self-made certificate from an impostor's, so the server shows a browser at a public
+address a page that says so instead of the client.
+
+A browser that isn't paired with a host is rate-limited and can't wake that host.
 
 ## Trust, and the one step it costs you
 
