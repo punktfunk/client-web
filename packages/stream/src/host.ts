@@ -236,7 +236,7 @@ function translate(operation: string, e: unknown): Error {
     return new Error(
       cause.status === 429
         ? TOO_MANY
-        : `this browser couldn't sign in to the host — it answered ${cause.status}. Try again in a moment`,
+        : "this browser couldn't sign in to the host. Try again in a moment",
     );
   }
   if (cause instanceof DeviceRefused) return cause;

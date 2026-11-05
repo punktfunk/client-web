@@ -1074,9 +1074,10 @@ export class Engine {
     const host = this.host;
     if (!renewed && host && fp && bridge && !passFor(fp)) {
       // Without a pass the bridge carries a paired device in the pairing pool, closed at 3 min.
-      const epoch = this.epoch;
+      // Any dial (stream, PIN, knock) resumes, unless the connect moved on meanwhile.
+      const [epoch, kind] = [this.epoch, this.state.kind];
       void host.renewPass().then(() => {
-        if (this.epoch === epoch && this.host === host && this.state.kind === "starting") this.dial(true);
+        if (this.epoch === epoch && this.host === host && this.state.kind === kind) this.dial(true);
       });
       return;
     }
