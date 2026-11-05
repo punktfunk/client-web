@@ -144,6 +144,9 @@ class App {
   /** A connect link the page opened with, until it is answered, and the title it asked for. */
   private link: { target: string | HostTarget; fp?: string; launch?: string } | null = null;
   private launchOnReady: string | null = null;
+  /** The fingerprint a followed link pinned its host to. Every reconnect to that host carries it
+   *  until the page is idle again. */
+  private pin: { origin: string; fp: string } | null = null;
   /** The settings page, or its dialog over a live stream. */
   private settingsOpen = false;
   /** The quick menu over a live picture; closed whenever the stream is not. */
@@ -196,7 +199,7 @@ class App {
         // Otherwise a stream a card asked for is still what the retry is for.
         if (this.dropped) this.resumeOnReady = this.dropped;
         this.dropped = null;
-        if ("origin" in s && s.origin) void engine.connect(this.targetOf(s.origin));
+        if ("origin" in s && s.origin) this.reconnect(s.origin);
       },
       // Leaving the profile gate goes back to the host, not away from it.
       back: () => (this.gate ? this.cancelGate() : engine.disconnect()),
@@ -315,6 +318,7 @@ class App {
         this.launchOnReady = null;
         this.resumeOnReady = null;
         this.dropped = null;
+        this.pin = null;
         return this.web && this.tab === "library" ? this.showLibrary() : this.home();
       case "bad-address":
         // The field stays in front: what was typed is wrong and this is where it is fixed.
@@ -353,7 +357,7 @@ class App {
         // The host closes after the ceremony, as it does for native clients; streaming is a
         // fresh connection.
         const origin = s.origin;
-        setTimeout(() => void this.engine.connect(this.targetOf(origin)), 300);
+        setTimeout(() => this.reconnect(origin), 300);
         return;
       }
       case "pair-refused":
@@ -650,7 +654,19 @@ class App {
     this.link = null;
     if (!yes || !link) return this.home();
     this.launchOnReady = link.launch ?? null;
-    void this.engine.connect(link.target, link.fp ? { expectFingerprint: link.fp } : {});
+    const origin = typeof link.target === "string" ? originOf(link.target) : link.target.api.replace(/\/+$/, "");
+    this.pin = link.fp ? { origin, fp: link.fp } : null;
+    void this.engine.connect(link.target, this.pinned(origin));
+  }
+
+  /** Reach `origin` again: a retry, or the connection after a pairing. */
+  private reconnect(origin: string): void {
+    void this.engine.connect(this.targetOf(origin), this.pinned(origin));
+  }
+
+  /** What a connect to `origin` must check: the fingerprint a link pinned it to, if any. */
+  private pinned(origin: string): { expectFingerprint?: string } {
+    return this.pin?.origin === origin ? { expectFingerprint: this.pin.fp } : {};
   }
 
   /** A link to this host, pinned to its fingerprint when this browser has paired with it. The
@@ -705,14 +721,18 @@ class App {
   }
 
   /** Forget a host. From the trust screen this is "forget and pair again", so the reconnect
-   *  follows — with the stored fingerprint gone, the next connection is a first one. */
+   *  follows — with the stored fingerprint gone, the next connection is a first one, held to
+   *  the fingerprint of a link that brought it here. */
   private forget(origin: string): void {
     const reconnect = this.screen.kind === "trust" && this.screen.origin === origin;
     this.reachCache.delete(origin);
     if (this.libraryFor === origin) this.clearLibrary();
+    const pin = this.pin;
     this.engine.forget(origin);
-    if (reconnect) void this.engine.connect(this.targetOf(origin));
-    else this.redrawLists();
+    if (!reconnect) return this.redrawLists();
+    // Forgetting disconnects, which drops a link's pin; pairing again is still held to it.
+    this.pin = pin;
+    this.reconnect(origin);
   }
 
   // --- the library ---------------------------------------------------------------------
