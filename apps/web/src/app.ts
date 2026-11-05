@@ -1316,21 +1316,17 @@ function sentence(message: string): string {
  *  `https://` that `originOf` put there. */
 const bare = (origin: string): string => origin.replace(/^https:\/\//, "");
 
-/** The stream mode from the canvas: device pixels capped at 2×, and always even.
+/** The stream mode from the canvas's box: device pixels capped at 2×, and always even.
  *
  * H.264/HEVC are 4:2:0 — one chroma sample per 2×2 luma block — so a codec has no valid chroma
  * grid for an odd width or height, and the host refuses one. The window is whatever size it is,
- * so round each dimension down to even here rather than send the host something it must reject. */
+ * so round each dimension down to even here rather than send the host something it must reject.
+ * Measured only: the console sizes the canvas's buffer itself, and a write here would clear the
+ * frame it just drew. */
 function size(canvas: HTMLCanvasElement): [number, number] {
   const dpr = Math.min(window.devicePixelRatio || 1, 2);
   const even = (px: number) => Math.max(2, Math.floor(px) & ~1);
-  const w = even(canvas.clientWidth * dpr);
-  const h = even(canvas.clientHeight * dpr);
-  if (canvas.width !== w || canvas.height !== h) {
-    canvas.width = w;
-    canvas.height = h;
-  }
-  return [w, h];
+  return [even(canvas.clientWidth * dpr), even(canvas.clientHeight * dpr)];
 }
 
 /**
