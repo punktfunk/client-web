@@ -115,7 +115,9 @@ export class MicPipe {
         audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true },
       });
     } catch {
-      if (gen === this.gen) this._state = "denied";
+      if (gen !== this.gen) return;
+      this._state = "denied";
+      if (session?.type === "play-and-record") session.type = "playback";
       return;
     }
     if (gen !== this.gen) {
