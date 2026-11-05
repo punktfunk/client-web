@@ -368,6 +368,14 @@ export class InputPipe {
     e.preventDefault();
     if (phase === "down") {
       this.canvas.focus();
+      // Unlocked, a release over the HUD or another overlay still comes here.
+      if (!this.captured) {
+        try {
+          this.canvas.setPointerCapture(e.pointerId);
+        } catch {
+          // A pointer the browser no longer tracks: nothing to capture.
+        }
+      }
       // Pointer lock can only be taken from a gesture, so the first click in capture mode is
       // what arms it.
       if (this.opts.pointer === "capture" && !this.captured) this.lock();
