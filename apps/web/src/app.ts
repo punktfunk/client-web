@@ -45,6 +45,7 @@ import {
   wakeFailed,
   wakingLine,
 } from "@punktfunk/stream";
+import { type Configured, readConfig, type ServerConfig } from "./config.ts";
 import { ConsoleUi } from "./ui/console.ts";
 import { noop, WebShell } from "./ui/shell.tsx";
 import type { HostCard, HostTools, ProfileCard, Screen, Tab, Ui } from "./ui/types.ts";
@@ -156,6 +157,12 @@ class App {
   private gate: Gate | null = null;
   /** A Switch profile asked for a host that was not connected: it opens once the host is ready. */
   private switchOnReady: string | null = null;
+  /** The hosts the page's own server proxies, by the API origin the engine keys them under. */
+  private readonly configured: Map<string, Configured>;
+  /** Whether that server also proxies a host typed here by its IP address. */
+  private viaServer: boolean;
+  /** When the server's list may be asked for again after it turned the read away; `0`: not owed. */
+  private configAgainAt = 0;
 
   constructor(
     private readonly engine: Engine,
@@ -163,11 +170,10 @@ class App {
     /** The web shell, rather than the gamepad console: only it has tabs to keep. */
     private readonly web: boolean,
     private readonly uiCanvas: HTMLCanvasElement,
-    /** The hosts the page's own server proxies, by the API origin the engine keys them under. */
-    private readonly configured: Map<string, Configured>,
-    /** Whether that server also proxies a host typed here by its IP address. */
-    private readonly viaServer: boolean,
+    server: ServerConfig,
   ) {
+    this.configured = server.listed;
+    this.viaServer = server.viaServer;
     // A login's pass covers another host: the server now tells this browser its address and wake.
     onPass(() => void this.refreshConfigured());
     ui.mount({
@@ -250,6 +256,11 @@ class App {
         engine.setStatsTier(on ? (start === "off" ? "normal" : start) : "off");
       },
     });
+    // The server turned its list away: say so, and ask again on a later redraw of the hosts.
+    if (server.wait) {
+      this.configAgainAt = Date.now() + server.wait * 1000;
+      ui.notify(sentence(TOO_MANY), "error");
+    }
     this.applyPrefs();
     this.watchSize();
     if (packaged()) this.watchSleep();
@@ -481,6 +492,7 @@ class App {
   private home(error?: string): void {
     // A link waiting for its answer stays in front of the probes that redraw this list.
     if (this.link) return;
+    if (this.configAgainAt && Date.now() >= this.configAgainAt) void this.refreshConfigured();
     const cards = this.cards();
     this.show({
       kind: "home",
@@ -492,10 +504,17 @@ class App {
     void this.probe(cards.map((h) => h.origin));
   }
 
-  /** The server's list again, as a pass holder sees it. */
+  /** The server's list again: as a pass holder sees it, or once a turned-away read may retry. */
   private async refreshConfigured(): Promise<void> {
-    const again = await configuredHosts();
+    this.configAgainAt = 0;
+    const again = await readConfig(serverFetch(), location.href);
+    if (!again) return;
+    if (again.wait) {
+      this.configAgainAt = Date.now() + again.wait * 1000;
+      return;
+    }
     for (const [origin, c] of again.listed) this.configured.set(origin, c);
+    this.viaServer = again.viaServer;
     this.redrawLists();
   }
 
@@ -1330,39 +1349,6 @@ function routeOf(address: string): HostTarget | null {
   return plane ? { api: address.replace(/\/+$/, ""), plane, bridge: `wa/${ipPort}` } : null;
 }
 
-/** A host from the page server's `config.json`. `wake` is its wake URL when the server can. */
-interface Configured extends HostTarget {
-  name: string;
-  wake?: string;
-}
-
-/**
- * The hosts `punktfunk-client-web-server` proxies, from its `config.json`. Any other server has
- * none (a dev server answers `index.html`, which does not parse), and the page falls back to
- * addresses typed here.
- */
-async function configuredHosts(): Promise<{ listed: Map<string, Configured>; viaServer: boolean }> {
-  try {
-    const r = await serverFetch()("./config.json", { cache: "no-store" });
-    const c = (await r.json()) as {
-      hosts?: Array<{ name: string; api: string; plane?: string; wake?: string; bridge?: string }>;
-      add?: boolean;
-    };
-    const listed = new Map(
-      (c.hosts ?? []).map((h): [string, Configured] => {
-        const api = new URL(h.api, location.href).href.replace(/\/+$/, "");
-        const wake = h.wake ? new URL(h.wake, location.href).href : undefined;
-        const bridge = h.bridge ? { bridge: h.bridge } : {};
-        const plane = h.plane ? { plane: h.plane } : {};
-        return [api, { api, ...plane, name: h.name, ...(wake ? { wake } : {}), ...bridge }];
-      }),
-    );
-    return { listed, viaServer: c.add === true };
-  } catch {
-    return { listed: new Map(), viaServer: false };
-  }
-}
-
 /** Set by `vite.config.ts` when the dev server proxies a host; absent in a build. */
 declare const __PF_TRANSPORT_HOST__: string | undefined;
 
@@ -1378,9 +1364,9 @@ try {
     uiCanvas,
     ...(__PF_TRANSPORT_HOST__ ? { transportHost: __PF_TRANSPORT_HOST__ } : {}),
   });
-  const server = await configuredHosts();
+  const server = (await readConfig(serverFetch(), location.href)) ?? { listed: new Map(), viaServer: false };
   const ui = pickUi(engine, uiCanvas);
-  new App(engine, ui, ui instanceof WebShell, uiCanvas, server.listed, server.viaServer);
+  new App(engine, ui, ui instanceof WebShell, uiCanvas, server);
 } catch (e) {
   // Before there is an engine there is no interface to say this on; the one sheet the page
   // carries for exactly this case does.
