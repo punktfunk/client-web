@@ -9,6 +9,7 @@ import { type JSX, type KeyboardEvent as ReactKeyboardEvent, useEffect, useState
 import { Badge, type BadgeVariant } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
+import { m } from "../paraglide/messages.js";
 import { bare } from "./pieces.tsx";
 import type { Actions, Screen, SessionStats } from "./types.ts";
 
@@ -25,12 +26,15 @@ const RISE = { initial: { opacity: 0, y: 8 }, animate: { opacity: 1, y: 0 }, exi
 /** The connection dot is the wire's verdict, rated in core (`hud::quality`) from loss, repairs
  *  and round trip. Presentation skips are the page's own pacing, not loss: they stay in the
  *  overlay's skipped line. */
-const QUALITY: Record<SessionStats["quality"], { variant: BadgeVariant; text: string }> = {
-  starting: { variant: "outline", text: "starting" },
-  good: { variant: "success", text: "good" },
-  fair: { variant: "warning", text: "fair" },
-  poor: { variant: "destructive", text: "poor" },
+const QUALITY: Record<SessionStats["quality"], { variant: BadgeVariant; text: () => string }> = {
+  starting: { variant: "outline", text: () => m.browser_quality_starting() },
+  good: { variant: "success", text: () => m.browser_quality_good() },
+  fair: { variant: "warning", text: () => m.browser_quality_fair() },
+  poor: { variant: "destructive", text: () => m.browser_quality_poor() },
 };
+
+/** Stands where the key cap goes while the message is split around it. */
+const KEY_SLOT = "\uE000";
 
 export function Hud({ screen, actions }: { screen: Extract<Screen, { kind: "streaming" }>; actions: Actions }): JSX.Element {
   const [idle, setIdle] = useState(false);
@@ -66,7 +70,7 @@ export function Hud({ screen, actions }: { screen: Extract<Screen, { kind: "stre
           this one sits over a game. */}
       <div
         role="toolbar"
-        aria-label="Stream"
+        aria-label={m.browser_hud_toolbar_a11y()}
         className={cn(
           "pointer-events-auto m-3 flex max-w-[calc(100vw-1.5rem)] items-center gap-2 rounded-full border border-border bg-card/95 py-1.5 pr-2 pl-3 shadow-lg transition-[opacity,transform] duration-400 *:shrink-0",
           idle && !screen.diagnostics && "pointer-events-none -translate-y-2 opacity-0",
@@ -77,10 +81,10 @@ export function Hud({ screen, actions }: { screen: Extract<Screen, { kind: "stre
           type="button"
           className="rounded-full outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50"
           aria-pressed={screen.diagnostics}
-          title="Connection quality"
+          title={m.browser_hud_quality_title()}
           onClick={() => actions.showDiagnostics(!screen.diagnostics)}
         >
-          <Badge variant={q.variant}>{q.text}</Badge>
+          <Badge variant={q.variant}>{q.text()}</Badge>
         </button>
         {/* The one part that gives way on a phone. */}
         <span className="min-w-0 shrink! truncate font-semibold">{bare(stats.origin)}</span>
@@ -91,21 +95,21 @@ export function Hud({ screen, actions }: { screen: Extract<Screen, { kind: "stre
           size="icon"
           variant="ghost"
           aria-pressed={stats.pointerCaptured}
-          aria-label={stats.pointerCaptured ? "Release mouse" : "Capture mouse"}
-          title={stats.pointerCaptured ? "Release mouse" : "Capture mouse"}
+          aria-label={stats.pointerCaptured ? m.browser_release_mouse() : m.browser_capture_mouse()}
+          title={stats.pointerCaptured ? m.browser_release_mouse() : m.browser_capture_mouse()}
           onClick={() => actions.toggleCapture()}
         >
           <MousePointer2 className="size-4" />
         </Button>
-        <Button size="icon" variant="ghost" aria-label="Settings" title="Settings" onClick={() => actions.openSettings(true)}>
+        <Button size="icon" variant="ghost" aria-label={m.browser_hud_settings_a11y()} title={m.browser_hud_settings_a11y()} onClick={() => actions.openSettings(true)}>
           <Settings className="size-4" />
         </Button>
-        <Button size="icon" variant="ghost" aria-label="Fullscreen" title="Fullscreen" onClick={() => actions.fullscreen()}>
+        <Button size="icon" variant="ghost" aria-label={m.browser_hud_fullscreen_a11y()} title={m.browser_hud_fullscreen_a11y()} onClick={() => actions.fullscreen()}>
           <Maximize className="size-4" />
         </Button>
         <Button size="sm" variant="ghost" aria-expanded={screen.menu} onClick={() => actions.openMenu(!screen.menu)}>
           <Menu className="size-4" />
-          <span className="hidden sm:inline">Menu</span>
+          <span className="hidden sm:inline">{m.browser_hud_menu()}</span>
         </Button>
       </div>
       <AnimatePresence>
@@ -147,7 +151,7 @@ export function Hud({ screen, actions }: { screen: Extract<Screen, { kind: "stre
         {stats.pointerCaptured && (
           <motion.div key="captured" {...RISE} className="pointer-events-none fixed inset-x-0 bottom-[12%] flex justify-center">
             <span className="animate-[pf-exit-hint_6s_forwards] rounded-full bg-card/95 px-4 py-2 text-sm">
-              Mouse captured — press <kbd className="rounded bg-white/10 px-1.5 py-0.5 font-mono text-xs">Esc</kbd> to release
+              <Keyed text={m.browser_mouse_captured({ keys: KEY_SLOT })} cap="Esc" />
             </span>
           </motion.div>
         )}
@@ -155,7 +159,7 @@ export function Hud({ screen, actions }: { screen: Extract<Screen, { kind: "stre
             one, the stream is silent, and this says so. */}
         {stats.audio.state === "suspended" && !stats.pointerCaptured && (
           <motion.div key="sound" {...RISE} role="status" className="pointer-events-none fixed inset-x-0 bottom-[12%] flex justify-center px-inset">
-            <span className="rounded-full bg-card/95 px-4 py-2 text-sm">Sound is off until you click or press a key.</span>
+            <span className="rounded-full bg-card/95 px-4 py-2 text-sm">{m.browser_sound_suspended()}</span>
           </motion.div>
         )}
       </AnimatePresence>
@@ -198,7 +202,7 @@ function QuickMenu({ screen, actions }: { screen: Extract<Screen, { kind: "strea
   return (
     <Card
       role="menu"
-      aria-label="Quick actions"
+      aria-label={m.browser_ring_menu_a11y()}
       data-pf-keys="local"
       className="flex flex-col gap-1 bg-card/95 p-2"
       onKeyDown={rows}
@@ -210,7 +214,7 @@ function QuickMenu({ screen, actions }: { screen: Extract<Screen, { kind: "strea
         className={item}
         onClick={() => (armed ? actions.disconnect(true) : setArmed(true))}
       >
-        {armed ? "End stream? Press again" : "End stream"}
+        {armed ? m.ring_end_stream_confirm() : m.ring_end_stream()}
       </Button>
       {/* Only while this device's launch is on the stream: it closes the game, then the stream. */}
       {screen.endGame && (
@@ -220,15 +224,15 @@ function QuickMenu({ screen, actions }: { screen: Extract<Screen, { kind: "strea
           className={item}
           onClick={() => (endArmed ? actions.endGame() : setEndArmed(true))}
         >
-          {endArmed ? "End game? Press again" : "End game"}
+          {endArmed ? m.ring_end_game_confirm() : m.ring_end_game()}
         </Button>
       )}
       <Button role="menuitem" autoFocus={tv} variant="ghost" className={item} onClick={() => actions.disconnect(false)}>
-        Disconnect, keep the game running
+        {m.ring_disconnect_linger()}
       </Button>
       <Button role="menuitem" variant="ghost" className={item} onClick={() => actions.cycleStats()}>
-        Statistics
-        <span className="ml-auto text-muted-foreground">{screen.diagnostics ? "On" : "Off"}</span>
+        {m.ring_stats()}
+        <span className="ml-auto text-muted-foreground">{screen.diagnostics ? m.browser_ring_stats_on() : m.browser_ring_stats_off()}</span>
       </Button>
       <Button
         role="menuitem"
@@ -237,29 +241,31 @@ function QuickMenu({ screen, actions }: { screen: Extract<Screen, { kind: "strea
         disabled={screen.stats.mic === "unsupported"}
         onClick={() => actions.toggleMic()}
       >
-        Microphone
-        <span className="ml-auto text-muted-foreground">{MIC_STATE[screen.stats.mic ?? "off"]}</span>
+        {m.ring_mic()}
+        <span className="ml-auto text-muted-foreground">{MIC_STATE[screen.stats.mic ?? "off"]()}</span>
       </Button>
       <Button role="menuitem" variant="ghost" className={item} onClick={() => actions.fullscreen()}>
-        Fullscreen
+        {m.browser_ring_fullscreen()}
       </Button>
       <Button role="menuitem" variant="ghost" className={item} onClick={() => actions.toggleCapture()}>
-        {screen.stats.pointerCaptured ? "Release mouse" : "Capture mouse"}
+        {screen.stats.pointerCaptured ? m.browser_ring_release_mouse() : m.browser_ring_capture_mouse()}
       </Button>
       <p className="px-3 pt-1 pb-0.5 text-xs text-muted-foreground">
-        {tv ? "Back on the remote, or Back+A on a controller" : "Ctrl+Alt+Shift+O, or Back+A on a controller"}
+        {tv
+          ? m.browser_ring_menu_hint_tv({ remote: "Back", pad: "Back+A" })
+          : m.browser_ring_menu_hint({ keys: "Ctrl+Alt+Shift+O", pad: "Back+A" })}
       </p>
     </Card>
   );
 }
 
 /** The microphone item's state, as the player reads it. */
-const MIC_STATE: Record<NonNullable<SessionStats["mic"]>, string> = {
-  off: "Off",
-  starting: "Asking…",
-  on: "On",
-  denied: "Blocked by the browser",
-  unsupported: "Not in this browser",
+const MIC_STATE: Record<NonNullable<SessionStats["mic"]>, () => string> = {
+  off: () => m.browser_ring_mic_off(),
+  starting: () => m.browser_ring_mic_asking(),
+  on: () => m.ring_mic_on(),
+  denied: () => m.browser_ring_mic_blocked(),
+  unsupported: () => m.browser_ring_mic_unsupported(),
 };
 
 /** How each overlay role reads: headline, breakdown, aside, warning. */
@@ -285,15 +291,15 @@ function Diagnostics({ stats: s, scale }: { stats: SessionStats; scale: number }
   const lines = s.hud ?? [];
   const browser = [
     s.backend ?? "",
-    s.uploadMs ? `upload ${s.uploadMs.toFixed(2)} ms` : "",
-    `audio ${s.audio.state}`,
-    s.audio.underruns ? `${s.audio.underruns.toLocaleString()} underruns` : "",
+    s.uploadMs ? m.browser_overlay_upload({ value: `${s.uploadMs.toFixed(2)} ms` }) : "",
+    m.browser_overlay_audio({ state: s.audio.state }),
+    s.audio.underruns ? m.browser_overlay_underruns({ count: s.audio.underruns }) : "",
   ]
     .filter(Boolean)
     .join(" · ");
   return (
     <Card
-      aria-label="Statistics"
+      aria-label={m.browser_stats_a11y()}
       className="max-h-[60dvh] overflow-y-auto bg-card/95 px-5 py-4 font-mono leading-relaxed"
       style={{ fontSize: `${0.875 * scale}rem` }}
     >
@@ -305,5 +311,18 @@ function Diagnostics({ stats: s, scale }: { stats: SessionStats; scale: number }
       ))}
       <div className="mt-2 text-xs text-muted-foreground">{browser}</div>
     </Card>
+  );
+}
+
+/** A message with a key cap in it: `text` was filled with `KEY_SLOT` where the cap goes, so a
+ *  language can put the key anywhere in its sentence. */
+function Keyed({ text, cap }: { text: string; cap: string }): JSX.Element {
+  const [before = "", after = ""] = text.split(KEY_SLOT);
+  return (
+    <>
+      {before}
+      <kbd className="rounded bg-white/10 px-1.5 py-0.5 font-mono text-xs">{cap}</kbd>
+      {after}
+    </>
   );
 }
