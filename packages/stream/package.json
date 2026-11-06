@@ -29,6 +29,7 @@
     "build:lib": "tsdown && cp wasm/punktfunk_client_web.wasm dist/",
     "build": "npm run build:wasm && npm run build:lib",
     "check": "tsc --noEmit",
+    "pretest": "node ../../scripts/l10n-messages.mjs",
     "test": "node --experimental-transform-types --disable-warning=ExperimentalWarning --test 'src/**/*.test.ts'"
   },
   "dependencies": {

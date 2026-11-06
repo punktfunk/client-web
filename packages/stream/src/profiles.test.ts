@@ -4,6 +4,9 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { initials, pickOf, pickerDecision, profileNote, seatGate, type ProfileRow } from "./profiles.ts";
+import { useEnglish } from "./words.testing.ts";
+
+useEnglish();
 
 const row = (id: string, display_name: string, more: Partial<ProfileRow> = {}): ProfileRow => ({ id, display_name, ...more });
 const MIA = row("a1", "Mia");
@@ -64,6 +67,15 @@ test("the seat decides: dial, wake, wait or refuse", () => {
   for (const state of ["ready", "occupied", "from-a-newer-host"]) {
     assert.deepEqual(seatGate(row("x", "X", { seat: { state } })), { kind: "dial" }, state);
   }
+});
+
+test("a seat line the host names by id reads in the page's words, else as the host sent it", () => {
+  const starting = (seat: object) => row("x", "X", { seat: { state: "starting", detail: "The host's English", ...seat } });
+  const named = starting({ detail_id: "seatline_stage_host_try", detail_params: { attempt: "2", total: "3" } });
+  assert.equal(profileNote(named), "Starting Punktfunk on the seat (try 2 of 3)…");
+  assert.deepEqual(seatGate(named), { kind: "wait", detail: "Starting Punktfunk on the seat (try 2 of 3)…" });
+  assert.equal(profileNote(starting({ detail_id: "seatline_from_a_newer_host" })), "The host's English");
+  assert.equal(profileNote(starting({ detail_id: "seatline_sign_in_once" })), "The host's English", "a value it needs is missing");
 });
 
 test("a card says what its seat is doing", () => {

@@ -40,9 +40,8 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 # core's `tls` installs: a second rustls provider in the tree makes `ClientConfig::builder()` panic.
 wtransport = { version = "0.7", default-features = false, features = ["aws-lc-rs"] }
 # The same PinVerify and address ranking the native clients use, and the route table, address
-# classes and plane attestation check the host itself reads. Ahead of packages/stream's pin,
-# which moves with the wire.
-punktfunk-core = { git = "https://git.unom.io/unom/punktfunk", rev = "f29f933fa365cb737bd57ae9079adf2c96d8fda8", default-features = false, features = ["tls"] }
+# classes and plane attestation check the host itself reads. The same rev as packages/stream.
+punktfunk-core = { git = "https://git.unom.io/unom/punktfunk", rev = "c4d6fe182882dd1874afc47e78bbe7ff8d8c822c", default-features = false, features = ["tls"] }
 
 [dev-dependencies]
 tower = { version = "0.5", features = ["util"] }

@@ -3,10 +3,17 @@
 // kept with the fingerprints of the hosts it was proven to. `serverFetch` is the one place it,
 // and the paired host's fingerprint, go on a request.
 
+import { words } from "./words.ts";
+
 const KEY = "punktfunk.pass";
 
-/** What a `429` from this page's own server means to the person reading it. */
-export const TOO_MANY = "too many requests from this address. Wait a minute, then try again";
+/** A `429` from this page's own server: too many requests from this address. */
+export class TooMany extends Error {
+  constructor() {
+    super(words.browser_too_many());
+    this.name = "TooMany";
+  }
+}
 
 interface Held {
   pass: string;

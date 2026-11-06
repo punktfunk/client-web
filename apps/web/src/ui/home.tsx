@@ -12,6 +12,7 @@ import { Card } from "@/components/ui/card";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Menu, MenuContent, MenuItem, MenuSeparator, MenuTrigger } from "@/components/ui/menu";
+import { m } from "../paraglide/messages.js";
 import { Body, PageHead } from "./frame.tsx";
 import { bare, ErrorLine, labelOf, status } from "./pieces.tsx";
 import type { Actions, HostCard, Screen } from "./types.ts";
@@ -32,11 +33,11 @@ export function Home({ screen, actions }: { screen: HomeScreen; actions: Actions
   const first = screen.hosts.length === 0;
   return (
     <Body>
-      <PageHead title="Hosts" sub={first ? "Add the machine you want to stream from." : "Click a host to stream its desktop."}>
+      <PageHead title={m.hosts_tab()} sub={first ? m.browser_hosts_sub_first() : m.browser_hosts_sub()}>
         {!first && (
           <Button size="sm" variant="secondary" onClick={() => actions.setAdding(true)}>
             <Plus className="size-4" />
-            Add host
+            {m.hosts_add()}
           </Button>
         )}
       </PageHead>
@@ -59,8 +60,8 @@ export function Home({ screen, actions }: { screen: HomeScreen; actions: Actions
         <Dialog open={screen.adding} onOpenChange={(open) => actions.setAdding(open)}>
           <DialogContent>
             <DialogHeader>
-              <DialogTitle>Add a host</DialogTitle>
-              <DialogDescription>The address of a machine running punktfunk on your network.</DialogDescription>
+              <DialogTitle>{m.hosts_add_title()}</DialogTitle>
+              <DialogDescription>{m.hosts_add_hint()}</DialogDescription>
             </DialogHeader>
             <AddHostForm screen={screen} actions={actions} />
           </DialogContent>
@@ -87,14 +88,14 @@ function AddHostForm({ screen, actions }: { screen: HomeScreen; actions: Actions
         placeholder="192.168.1.25"
         autoComplete="off"
         spellCheck={false}
-        aria-label="Host address"
+        aria-label={m.hosts_field_address()}
         disabled={!!screen.busy}
         value={address}
         onChange={(e) => setAddress(e.currentTarget.value)}
       />
       {screen.error && <ErrorLine text={screen.error} />}
       <Button type="submit" disabled={!!screen.busy || !address.trim()}>
-        {screen.busy ? "Connecting…" : "Connect"}
+        {screen.busy ? m.dial_connecting() : m.common_connect()}
       </Button>
     </form>
   );
@@ -123,14 +124,14 @@ function HostTile({ host, actions }: { host: HostCard; actions: Actions }): JSX.
           <Input
             autoFocus
             defaultValue={label}
-            aria-label={`Name for ${bare(host.origin)}`}
+            aria-label={m.browser_hostcard_rename_a11y({ address: bare(host.origin) })}
             onKeyDown={(e) => {
               if (e.key === "Enter") commit(e.currentTarget.value);
               if (e.key === "Escape") setEditing(false);
             }}
             onBlur={(e) => commit(e.currentTarget.value)}
           />
-          <span className="text-xs text-muted-foreground">Enter to save, Escape to cancel</span>
+          <span className="text-xs text-muted-foreground">{m.browser_hostcard_rename_hint({ save_key: "Enter", cancel_key: "Escape" })}</span>
         </Card>
       </motion.li>
     );
@@ -142,7 +143,7 @@ function HostTile({ host, actions }: { host: HostCard; actions: Actions }): JSX.
           type="button"
           disabled={host.waking}
           onClick={() => (asleep ? actions.wake(host.origin) : actions.streamDesktop(host.origin))}
-          aria-label={`${asleep ? "Wake" : "Stream"} ${label}, ${state.text}`}
+          aria-label={`${asleep ? m.browser_hostcard_wake_a11y({ host: label }) : m.browser_hostcard_stream_a11y({ host: label })}, ${state.text}`}
           title={bare(host.origin)}
         >
           <span className="flex min-w-0 items-center gap-3 pr-9">
@@ -170,45 +171,45 @@ function HostTile({ host, actions }: { host: HostCard; actions: Actions }): JSX.
       </Card>
       <Menu>
         <MenuTrigger asChild>
-          <Button size="icon" variant="ghost" className="absolute top-3 right-3 size-8" aria-label={`More for ${label}`}>
+          <Button size="icon" variant="ghost" className="absolute top-3 right-3 size-8" aria-label={m.browser_hostcard_more_a11y({ host: label })}>
             <MoreHorizontal className="size-4" />
           </Button>
         </MenuTrigger>
         <MenuContent>
           <MenuItem onSelect={() => actions.streamDesktop(host.origin)}>
             <Play />
-            Stream desktop
+            {m.browser_hostcard_stream_desktop()}
           </MenuItem>
           {paired && (
             <MenuItem onSelect={() => actions.browse(host.origin)}>
               <LibraryBig />
-              Browse library
+              {m.hostcard_browse_library()}
             </MenuItem>
           )}
           {paired && (
             <MenuItem onSelect={() => actions.switchProfile(host.origin)}>
               <UserRound />
-              Switch profile…
+              {m.hostcard_switch_profile()}
             </MenuItem>
           )}
           {host.wake && (
             <MenuItem disabled={host.waking || host.reach === "ok"} onSelect={() => actions.wake(host.origin)}>
               <Power />
-              Wake
+              {m.hostcard_wake()}
             </MenuItem>
           )}
           <MenuSeparator />
           <MenuItem onSelect={() => setEditing(true)}>
             <Pencil />
-            Rename
+            {m.browser_hostcard_rename()}
           </MenuItem>
           <MenuItem onSelect={() => actions.copyLink(host.origin)}>
             <Link2 />
-            Copy link
+            {m.hostcard_copy_link()}
           </MenuItem>
           <MenuItem className="text-destructive [&_svg]:text-destructive" onSelect={() => actions.forget(host.origin)}>
             <Trash2 />
-            Forget
+            {m.hostcard_remove()}
           </MenuItem>
         </MenuContent>
       </Menu>

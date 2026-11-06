@@ -4,6 +4,7 @@
 
 import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
+import { paraglideVitePlugin } from "@inlang/paraglide-js";
 import tailwindcss from "@tailwindcss/vite";
 import react from "@vitejs/plugin-react";
 import { defineConfig } from "vite";
@@ -22,7 +23,16 @@ function version(): string {
 export default defineConfig({
   // Relative asset URLs, so the same `dist/` works at a host's root, under a path, or packaged.
   base: "./",
-  plugins: [react(), tailwindcss()],
+  plugins: [
+    react(),
+    tailwindcss(),
+    // The browser's own language list, with no switch: the page has no setting for it.
+    paraglideVitePlugin({
+      project: "./project.inlang",
+      outdir: "./src/paraglide",
+      strategy: ["preferredLanguage", "baseLocale"],
+    }),
+  ],
   // Through the dev proxy the API answers on the page's origin but the WebTransport plane does
   // not; this tells the engine where it is. Undefined in a real build, so the address the user
   // typed is used — exactly as designed.

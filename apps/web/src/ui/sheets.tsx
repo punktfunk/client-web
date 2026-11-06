@@ -5,6 +5,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Spinner } from "@/components/ui/spinner";
+import { m } from "../paraglide/messages.js";
 import { bare, ErrorLine, Row, Sheet, Sub } from "./pieces.tsx";
 import type { Actions, Screen } from "./types.ts";
 
@@ -12,15 +13,15 @@ type Props<K extends Screen["kind"]> = { screen: Extract<Screen, { kind: K }>; a
 
 export function Connecting({ screen, actions }: Props<"connecting">): JSX.Element {
   const title =
-    screen.phase === "reaching" ? "Looking for the host"
-      : screen.phase === "starting" ? "Starting the stream"
-      : "Connecting";
+    screen.phase === "reaching" ? m.browser_dial_reaching()
+      : screen.phase === "starting" ? m.browser_dial_starting_stream()
+      : m.dial_connecting();
   return (
     <Sheet title={title}>
       <Sub>{bare(screen.origin)}</Sub>
       <Spinner className="mx-auto my-8 block size-12" />
       <Row>
-        <Button variant="secondary" onClick={() => actions.back()}>Cancel</Button>
+        <Button variant="secondary" onClick={() => actions.back()}>{m.common_cancel()}</Button>
       </Row>
     </Sheet>
   );
@@ -30,12 +31,12 @@ export function Connecting({ screen, actions }: Props<"connecting">): JSX.Elemen
 export function Profiles({ screen, actions }: Props<"profiles">): JSX.Element {
   const cards = [...screen.cards].sort((a, b) => Number(b.id === screen.saved) - Number(a.id === screen.saved));
   return (
-    <Sheet title={`Who's playing on ${screen.host}?`}>
-      {screen.gone && <Sub>{screen.gone} is gone from this host.</Sub>}
+    <Sheet title={m.profile_title({ host: screen.host })}>
+      {screen.gone && <Sub>{m.profile_gone({ name: screen.gone })}</Sub>}
       {screen.error ? (
         <ErrorLine text={screen.error} />
       ) : cards.length === 0 ? (
-        <Sub>No profiles on this host.</Sub>
+        <Sub>{m.profile_none()}</Sub>
       ) : (
         <div className="grid grid-cols-[repeat(auto-fill,minmax(7rem,1fr))] gap-3">
           {cards.map((c, i) => (
@@ -65,7 +66,7 @@ export function Profiles({ screen, actions }: Props<"profiles">): JSX.Element {
       )}
       <Row>
         <Button variant="secondary" autoFocus={cards.length === 0} onClick={() => actions.back()}>
-          {cards.length ? "Cancel" : "Close"}
+          {cards.length ? m.common_cancel() : m.common_close()}
         </Button>
       </Row>
     </Sheet>
@@ -79,7 +80,7 @@ export function SeatWait({ screen, actions }: Props<"seat">): JSX.Element {
       {screen.detail && <Sub>{screen.detail}</Sub>}
       <Spinner className="mx-auto my-8 block size-12" />
       <Row>
-        <Button variant="secondary" autoFocus onClick={() => actions.back()}>Cancel</Button>
+        <Button variant="secondary" autoFocus onClick={() => actions.back()}>{m.common_cancel()}</Button>
       </Row>
     </Sheet>
   );
@@ -87,18 +88,9 @@ export function SeatWait({ screen, actions }: Props<"seat">): JSX.Element {
 
 export function Accept({ screen, actions }: Props<"accept">): JSX.Element {
   return (
-    <Sheet title="Accept this host's certificate">
-      <Sub>
-        A punktfunk host signs its own certificate, so your browser will not talk to it until
-        you say so once. Open this, accept the warning, then come back.
-      </Sub>
-      {screen.again && (
-        <Sub>
-          Still asking after you accepted it? Then the host is not answering pages like this one:
-          turn on Browser streaming in its console. Safari reaches a host this way only through a
-          punktfunk server.
-        </Sub>
-      )}
+    <Sheet title={m.browser_accept_title()}>
+      <Sub>{m.browser_accept_body()}</Sub>
+      {screen.again && <Sub>{m.browser_accept_again()}</Sub>}
       <a
         autoFocus
         className="break-all text-primary underline-offset-4 hover:underline"
@@ -109,8 +101,8 @@ export function Accept({ screen, actions }: Props<"accept">): JSX.Element {
         {screen.url}
       </a>
       <Row>
-        <Button variant="secondary" onClick={() => actions.back()}>Back</Button>
-        <Button onClick={() => actions.retry()}>I have accepted it</Button>
+        <Button variant="secondary" onClick={() => actions.back()}>{m.common_back()}</Button>
+        <Button onClick={() => actions.retry()}>{m.browser_accept_done()}</Button>
       </Row>
     </Sheet>
   );
@@ -121,13 +113,9 @@ export function Pair({ screen, actions }: Props<"pair">): JSX.Element {
   const submit = () => { const v = pin.trim(); if (v) actions.pair(v); };
   const again = screen.mode === "again";
   return (
-    <Sheet title={again ? "Pair with this host again" : "Pair with this host"}>
-      <Sub>
-        {again
-          ? "This host no longer knows this browser — it was unpaired there. Enter the PIN it is showing to pair again."
-          : "Enter the PIN this host is showing. It is on the host's own screen, and it expires after a couple of minutes."}
-      </Sub>
-      <Sub>No PIN? Request access, and approve this browser in the host's console.</Sub>
+    <Sheet title={again ? m.browser_pair_title_again() : m.pair_title({ host: bare(screen.origin) })}>
+      <Sub>{again ? m.browser_pair_again_body() : m.pair_intro_pin_only()}</Sub>
+      <Sub>{m.pair_no_pin_hint()}</Sub>
       {/* The console's PIN readout, as a field: it is copied off another screen digit by
           digit, and a mistyped one costs a whole pairing window. `h-auto!` because the input's
           own `h-input-height` is a token tailwind-merge cannot see as a height. */}
@@ -138,7 +126,7 @@ export function Pair({ screen, actions }: Props<"pair">): JSX.Element {
         maxLength={8}
         placeholder="0000"
         autoComplete="one-time-code"
-        aria-label="Pairing PIN"
+        aria-label={m.pair_pin()}
         disabled={!!screen.busy}
         className="h-auto! rounded-lg bg-muted/40 py-5 text-center font-mono text-4xl font-semibold tracking-[0.3em] tabular-nums placeholder:text-muted-foreground/30 md:text-4xl"
         value={pin}
@@ -147,12 +135,12 @@ export function Pair({ screen, actions }: Props<"pair">): JSX.Element {
       />
       {screen.error && <ErrorLine text={screen.error} />}
       <Row>
-        <Button variant="secondary" onClick={() => actions.back()}>Back</Button>
+        <Button variant="secondary" onClick={() => actions.back()}>{m.common_back()}</Button>
         <Button variant="secondary" disabled={!!screen.busy} onClick={() => actions.requestAccess()}>
-          Request access
+          {m.pair_request_access()}
         </Button>
         <Button disabled={!!screen.busy} onClick={submit}>
-          {screen.busy ? "Pairing…" : "Pair"}
+          {screen.busy ? m.pair_pairing() : m.pair_action()}
         </Button>
       </Row>
     </Sheet>
@@ -161,14 +149,11 @@ export function Pair({ screen, actions }: Props<"pair">): JSX.Element {
 
 export function Waiting({ screen, actions }: Props<"waiting">): JSX.Element {
   return (
-    <Sheet title="Waiting for approval">
-      <Sub>
-        Approve “{screen.name}” in the console of {bare(screen.origin)}, under Pairing. The
-        stream starts as soon as you do. The request lapses after three minutes.
-      </Sub>
+    <Sheet title={m.pair_waiting_for_approval()}>
+      <Sub>{m.dial_approve_no_pin({ host: bare(screen.origin) })}</Sub>
       <Spinner className="mx-auto my-8 block size-12" />
       <Row>
-        <Button autoFocus variant="secondary" onClick={() => actions.cancelRequest()}>Cancel</Button>
+        <Button autoFocus variant="secondary" onClick={() => actions.cancelRequest()}>{m.common_cancel()}</Button>
       </Row>
     </Sheet>
   );
@@ -179,21 +164,14 @@ export function Waiting({ screen, actions }: Props<"waiting">): JSX.Element {
 // in the way of it — need different things from the person reading it.
 export function Trust({ screen, actions }: Props<"trust">): JSX.Element {
   return (
-    <Sheet title="This is not the same host">
-      <Sub>
-        Something is answering at {bare(screen.origin)}, but it cannot prove it is the machine
-        this browser paired with.
-      </Sub>
-      <Sub>
-        If you reinstalled punktfunk on it, or reset its configuration, that is expected — forget
-        this host and pair again. If you did not, stop here: something else is answering at that
-        address.
-      </Sub>
+    <Sheet title={m.trust_mismatch_title()}>
+      <Sub>{m.browser_trust_body({ host: bare(screen.origin) })}</Sub>
+      <Sub>{m.browser_trust_advice()}</Sub>
       <Badge variant="outline">{screen.reason}</Badge>
       <Row>
-        <Button autoFocus variant="secondary" onClick={() => actions.back()}>Back</Button>
+        <Button autoFocus variant="secondary" onClick={() => actions.back()}>{m.common_back()}</Button>
         <Button variant="destructive" onClick={() => actions.forget(screen.origin)}>
-          Forget and pair again
+          {m.browser_trust_forget()}
         </Button>
       </Row>
     </Sheet>
@@ -202,15 +180,19 @@ export function Trust({ screen, actions }: Props<"trust">): JSX.Element {
 
 export function LinkSheet({ screen, actions }: Props<"link">): JSX.Element {
   return (
-    <Sheet title={`Connect to ${screen.name}?`}>
+    <Sheet title={m.link_confirm_title()}>
       <Sub>
-        A link asks this browser to connect to {screen.address}
-        {screen.launch ? ` and start ${screen.launch}` : ""}. Only go ahead if you opened it
-        yourself.
+        {[
+          m.link_confirm_asks({ host: screen.name, address: screen.address }),
+          screen.launch ? m.link_confirm_launch({ game: screen.launch }) : "",
+          m.link_confirm_guessable(),
+        ]
+          .filter(Boolean)
+          .join(" ")}
       </Sub>
       <Row>
-        <Button variant="secondary" onClick={() => actions.followLink(false)}>Cancel</Button>
-        <Button autoFocus onClick={() => actions.followLink(true)}>Connect</Button>
+        <Button variant="secondary" onClick={() => actions.followLink(false)}>{m.common_cancel()}</Button>
+        <Button autoFocus onClick={() => actions.followLink(true)}>{m.common_connect()}</Button>
       </Row>
     </Sheet>
   );
@@ -221,8 +203,8 @@ export function ErrorCard({ screen, actions }: Props<"error">): JSX.Element {
     <Sheet title={screen.head}>
       <Sub>{screen.text}</Sub>
       <Row>
-        <Button autoFocus variant="secondary" onClick={() => actions.back()}>Back</Button>
-        {screen.retry && <Button onClick={() => actions.retry()}>Try again</Button>}
+        <Button autoFocus variant="secondary" onClick={() => actions.back()}>{m.common_back()}</Button>
+        {screen.retry && <Button onClick={() => actions.retry()}>{m.common_try_again()}</Button>}
       </Row>
     </Sheet>
   );

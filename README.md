@@ -173,6 +173,12 @@ Four tools, each for what it is for, in this order:
 4. **Vite** builds the app from source — the library through a workspace alias, the SDK, Effect —
    and turns the library's wasm reference into an emitted asset.
 
+The page's words are not in this repo. They are the pinned monorepo's `l10n/messages`, which
+`scripts/l10n-messages.mjs` finds through cargo and copies into `apps/web/l10n/` before the app's
+`dev`, `check`, `test` and `build` run, so those need the Rust toolchain and the checkout cargo
+fetches for the pin. The page follows the browser's language list, and a language shows once the
+pinned monorepo ships it.
+
 For development against a real host without accepting its certificate first, build the debug
 module once (`packages/stream/build.sh`, seconds to relink) and run the dev server:
 

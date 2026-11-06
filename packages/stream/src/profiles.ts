@@ -4,6 +4,8 @@
 // card's line — so a browser asks, wakes and waits exactly as the native clients do. The host
 // refuses a dial to a seat that isn't up, so the gate runs before the dial, not after.
 
+import { hostWord, words } from "./words.ts";
+
 /** One row of `GET /api/v1/profiles/enumerate`, the fields this page reads. */
 export interface ProfileRow {
   readonly id: string;
@@ -21,8 +23,11 @@ export interface ProfileRow {
 export interface SeatRow {
   /** `ready`, `starting`, `stopped`, `occupied` or `unavailable`; a newer word reads as ready. */
   readonly state: string;
-  /** The progress line while starting, or why while unavailable. */
+  /** The progress line while starting, or why while unavailable, in the host's English. */
   readonly detail?: string | null;
+  /** The host's message for `detail` (`seatline_…`) and the values it reads. */
+  readonly detail_id?: string | null;
+  readonly detail_params?: Readonly<Record<string, string>> | null;
   /** The device playing on it while occupied. */
   readonly occupant?: string | null;
   readonly steam_sign_in?: unknown;
@@ -61,8 +66,9 @@ export type SeatGate =
 /** How often the list is read again while a seat comes up. */
 export const SEAT_POLL_MS = 2000;
 
-/** The host's refusal of another profile's seat (its 403), in its own words. */
-export const WAKE_REFUSED = "This device isn't allowed to start another profile's seat.";
+/** The seat's own line: the host's message in the page's language, else its English. */
+const seatDetail = (seat: SeatRow): string | null | undefined =>
+  hostWord(seat.detail_id, seat.detail_params, seat.detail);
 
 export const pickOf = (p: ProfileRow): ProfilePick => ({
   id: p.id,
@@ -110,10 +116,12 @@ export function seatGate(p: ProfileRow): SeatGate {
   switch (seat.state) {
     case "stopped":
       return { kind: "wake" };
-    case "starting":
-      return { kind: "wait", ...(seat.detail ? { detail: seat.detail } : {}) };
+    case "starting": {
+      const detail = seatDetail(seat);
+      return { kind: "wait", ...(detail ? { detail } : {}) };
+    }
     case "unavailable":
-      return { kind: "refuse", line: seat.detail ?? "That profile can't play on this host right now." };
+      return { kind: "refuse", line: seatDetail(seat) ?? words.reject_seat_unavailable() };
     default:
       return { kind: "dial" };
   }
@@ -125,13 +133,13 @@ export function profileNote(p: ProfileRow): string | undefined {
   if (!seat) return undefined;
   switch (seat.state) {
     case "occupied":
-      return seat.occupant ? `In use by ${seat.occupant}` : "In use";
+      return seat.occupant ? words.profile_in_use_by({ device: seat.occupant }) : words.profile_in_use();
     case "starting":
-      return seat.detail ?? "Getting ready…";
+      return seatDetail(seat) ?? words.profile_getting_ready();
     case "unavailable":
-      return seat.detail ?? "Unavailable";
+      return seatDetail(seat) ?? words.profile_unavailable();
     default:
-      return seat.steam_sign_in === true ? "Steam sign-in once" : undefined;
+      return seat.steam_sign_in === true ? words.profile_steam_sign_in() : undefined;
   }
 }
 
@@ -146,10 +154,10 @@ export function initials(name: string): string {
 }
 
 /** The line while a seat comes up. */
-export const wakingLine = (name: string): string => `Getting ${name}'s desk ready…`;
+export const wakingLine = (name: string): string => words.profile_waking({ name });
 
 /** The line a failed wake ends a seat wait with: a refusal as its own sentence, anything else
  *  under the desk it was for. */
 export function wakeFailed(name: string, status: number | undefined, why: string): string {
-  return status === 403 ? WAKE_REFUSED : `Couldn't wake ${name}'s desk — ${why}`;
+  return status === 403 ? words.profile_wake_refused() : words.profile_wake_failed({ name, reason: why });
 }

@@ -23,6 +23,11 @@ await engine.connect("192.168.1.25");
 The state carries facts, never wording, so any interface can sit on it. What each fact means
 and what a person can do about it is documented on `EngineState`.
 
+The few sentences the engine does say are Punktfunk's shared messages, which this library does not
+carry: install the page's own with `setWords(messages, host?)` before the first connect, or a message
+reads as its key. `host` looks up a message the host names by id, such as a seat line or a launch
+verdict. `apps/web/src/words.ts` installs the compiled Paraglide messages.
+
 ## Install
 
 ```ini

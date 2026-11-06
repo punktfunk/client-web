@@ -23,7 +23,8 @@ import { Effect } from "effect";
 import { SchemaError } from "effect/Schema";
 import { type GameEnd, gameEndOf } from "./game-end.ts";
 import { PAGE_LIMIT, walkPages } from "./pages.ts";
-import { renewPass, serverFetch, TOO_MANY } from "./pass.ts";
+import { renewPass, serverFetch, TooMany } from "./pass.ts";
+import { hostWord, words } from "./words.ts";
 
 export { DeviceRefused };
 export type LibraryEntry = api.OperatorGameEntry;
@@ -217,11 +218,12 @@ export function statusOf(e: unknown): number | undefined {
   return (e as { response?: { status?: number } } | null)?.response?.status;
 }
 
-/** The host's own sentence for a refusal, when its body carries one, else `fallback`. */
+/** The host's sentence for a refusal, when its body carries one, else `fallback`: its message
+ *  `apierr_<code>` in the page's language, else the English it sent beside it. */
 async function refusal(res: Response, fallback: string): Promise<string> {
   try {
-    const body = (await res.json()) as { error?: string };
-    return body.error ?? fallback;
+    const body = (await res.json()) as { error?: string; code?: string; params?: Record<string, string> };
+    return hostWord(body.code && `apierr_${body.code}`, body.params, body.error ?? fallback);
   } catch {
     return fallback;
   }
@@ -230,14 +232,10 @@ async function refusal(res: Response, fallback: string): Promise<string> {
 /** The SDK's errors, as the three things the app can act on. */
 function translate(operation: string, e: unknown): Error {
   const cause = unwrap(e);
-  if (statusOf(cause) === 429) return new Error(TOO_MANY);
+  if (statusOf(cause) === 429) return new TooMany();
   // The sign-in: only a 401 says the host no longer knows this device.
   if (cause instanceof DeviceRefused && cause.status !== 401) {
-    return new Error(
-      cause.status === 429
-        ? TOO_MANY
-        : "this browser couldn't sign in to the host. Try again in a moment",
-    );
+    return cause.status === 429 ? new TooMany() : new Error(words.browser_sign_in_failed());
   }
   if (cause instanceof DeviceRefused) return cause;
   if (cause instanceof SchemaError) return new VersionSkew(operation, String(cause));

@@ -18,7 +18,8 @@
 // over the short-lived WebTransport hash, and `verify` refuses to dial a host that cannot produce
 // it.
 
-import { ours, serverFetch, TOO_MANY } from "./pass.ts";
+import { ours, serverFetch, TooMany } from "./pass.ts";
+import { words } from "./words.ts";
 import type { ProfilePick } from "./profiles.ts";
 import { derToRaw, fromBase64, hexToBytes } from "@punktfunk/host/core";
 
@@ -50,21 +51,21 @@ const hex = (b: Uint8Array): string =>
 // error the user reads as "the host is down".
 export function originOf(input: string | null | undefined): string {
   const raw = String(input ?? "").trim().replace(/\/+$/, "");
-  if (!raw) throw new Error("enter the host's address");
+  if (!raw) throw new Error(words.hosts_error_address_empty());
   let url: URL;
   try {
     url = new URL(/^https?:\/\//.test(raw) ? raw : `https://${raw}`);
   } catch {
     // The browser's own message quotes the `https://` we just added, which reads as though the
     // user typed it. Say what they can act on instead.
-    throw new Error(`"${raw}" is not an address — try something like 192.168.1.25`);
+    throw new Error(words.hosts_error_address_invalid({ address: raw }));
   }
   // A host is https. Loopback is the one exception: it is a secure context in every browser,
   // and a dev server there is how this client is developed against a real host without
   // accepting its certificate — `npm run dev` proxies `/api` to one.
   const loopback = /^(localhost|127\.0\.0\.1|\[::1\])$/.test(url.hostname);
   if (url.protocol !== "https:" && !(url.protocol === "http:" && loopback)) {
-    throw new Error("a punktfunk host is https");
+    throw new Error(words.browser_host_https());
   }
   if (!url.port) url.port = String(DEFAULT_MGMT_PORT);
   return url.origin;
@@ -93,7 +94,7 @@ export async function reachWhy(origin: string, timeoutMs = 4000): Promise<{ reac
       cache: "no-store",
       signal: abort.signal,
     });
-    if (r.status === 429) return { reach: "unreachable", said: TOO_MANY };
+    if (r.status === 429) return { reach: "unreachable", said: words.browser_too_many() };
     if (r.status === 503 || r.status === 504) return { reach: "unreachable" };
     if (r.status === 502 || (own && !r.ok)) {
       // Plain text is the page's server speaking; anything else (a proxy's HTML page) says nothing.
@@ -178,9 +179,9 @@ export async function reachTarget(target: string | HostTarget): Promise<Reach> {
 /** What the host says about its browser plane. Everything here is public. */
 export async function fetchPlane(origin: string): Promise<Plane> {
   const r = await serverFetch()(`${origin}/api/v1/webtransport`, { cache: "no-store" });
-  if (r.status === 404) throw new Error("this host does not offer the browser plane");
-  if (r.status === 429) throw new Error(TOO_MANY);
-  if (!r.ok) throw new Error(`the host answered ${r.status}`);
+  if (r.status === 404) throw new Error(words.browser_no_plane());
+  if (r.status === 429) throw new TooMany();
+  if (!r.ok) throw new Error(words.browser_host_status({ status: r.status }));
   return (await r.json()) as Plane;
 }
 
@@ -191,12 +192,12 @@ export async function fetchPlane(origin: string): Promise<Plane> {
 // not dialled — the point is to refuse before the connection, not after.
 export async function verify(plane: Plane, hostFingerprint: string): Promise<true> {
   if (!plane.cert_hash_sig || !plane.host_cert_der) {
-    throw new Error("this host published no attestation, so a paired browser cannot dial it");
+    throw new Error(words.browser_no_attestation());
   }
   const der = fromBase64(plane.host_cert_der);
   const seen = hex(new Uint8Array(await crypto.subtle.digest("SHA-256", buffer(der))));
   if (seen !== hostFingerprint) {
-    throw new Error("this is not the host that was paired with");
+    throw new Error(words.browser_not_paired_host());
   }
   const key = await crypto.subtle.importKey(
     "spki",
@@ -213,7 +214,7 @@ export async function verify(plane: Plane, hostFingerprint: string): Promise<tru
     buffer(derToRaw(hexToBytes(plane.cert_hash_sig))),
     new TextEncoder().encode(CTX + plane.cert_hash_sha256),
   );
-  if (!ok) throw new Error("the host's signature over its certificate hash does not verify");
+  if (!ok) throw new Error(words.browser_bad_signature());
   return true;
 }
 
@@ -234,7 +235,7 @@ function spkiOf(der: Uint8Array): Uint8Array {
   for (let i = 0; i + 91 <= der.length; i++) {
     if (header.every((b, j) => der[i + j] === b)) return der.subarray(i, i + 91);
   }
-  throw new Error("the host certificate carries no P-256 key");
+  throw new Error(words.browser_cert_no_key());
 }
 
 /** What this browser remembers about one host. Nothing here is secret. */
