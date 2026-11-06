@@ -15,6 +15,7 @@ import { Card } from "@/components/ui/card";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Spinner } from "@/components/ui/spinner";
+import { m } from "../paraglide/messages.js";
 import { Body, PageHead } from "./frame.tsx";
 import { Empty, ErrorLine, labelOf, Loading, status } from "./pieces.tsx";
 import type { Actions, HostCard, Screen } from "./types.ts";
@@ -32,10 +33,10 @@ export function Library({ screen, actions }: { screen: LibraryScreen; actions: A
   if (screen.origin === null) {
     return (
       <Body>
-        <PageHead title="Library" />
-        <Empty title="No library yet">
-          <p>Pair a host, and its games show up here.</p>
-          <Button size="sm" onClick={() => actions.navigate("hosts")}>Show hosts</Button>
+        <PageHead title={m.lib_title()} />
+        <Empty title={m.lib_no_host_title()}>
+          <p>{m.lib_no_host_body()}</p>
+          <Button size="sm" onClick={() => actions.navigate("hosts")}>{m.lib_no_host_show_hosts()}</Button>
         </Empty>
       </Body>
     );
@@ -44,9 +45,9 @@ export function Library({ screen, actions }: { screen: LibraryScreen; actions: A
   const q = query.trim().toLowerCase();
   const shown = q ? screen.entries.filter((e) => e.title.toLowerCase().includes(q)) : screen.entries;
   const sub = screen.running
-    ? `Running now: ${screen.running}`
+    ? m.browser_lib_running_now({ title: screen.running })
     : screen.entries.length
-      ? `${screen.entries.length} titles`
+      ? m.browser_lib_title_count({ count: screen.entries.length })
       : undefined;
   return (
     <Body>
@@ -54,7 +55,7 @@ export function Library({ screen, actions }: { screen: LibraryScreen; actions: A
       <PageHead
         title={
           <span className="flex items-center gap-3">
-            {screen.host ?? "Library"}
+            {screen.host ?? m.lib_title()}
             {screen.busy && screen.entries.length > 0 && <Spinner className="size-4" />}
           </span>
         }
@@ -63,10 +64,10 @@ export function Library({ screen, actions }: { screen: LibraryScreen; actions: A
         {screen.resume && (
           <Button size="sm" onClick={() => actions.play(screen.resume)}>
             <Play className="size-4" />
-            Resume {screen.resume.title}
+            {m.lib_resume_title({ title: screen.resume.title })}
           </Button>
         )}
-        {screen.endable && screen.running && <EndGame title={screen.running} onEnd={() => actions.endGame()} />}
+        {screen.endable && screen.running && <EndGame onEnd={() => actions.endGame()} />}
         {!screen.offline && (
           <Button size="icon" variant="ghost" aria-label="Host actions" title="Host actions" onClick={() => actions.openTools(true)}>
             <Server className="size-4" />
@@ -78,8 +79,8 @@ export function Library({ screen, actions }: { screen: LibraryScreen; actions: A
 
       {screen.shelves.length > 1 && <ShelfSwitcher shelves={screen.shelves} current={origin} actions={actions} />}
 
-      <section aria-label="Desktops" className="flex flex-col gap-3">
-        <h2 className="text-xs font-medium tracking-wide text-muted-foreground uppercase">Desktops</h2>
+      <section aria-label={m.lib_section_desktops()} className="flex flex-col gap-3">
+        <h2 className="text-xs font-medium tracking-wide text-muted-foreground uppercase">{m.lib_section_desktops()}</h2>
         {/* A scroller clips everything past its box, rings and shadows included, so the row is
             padded out to the page's gutters and back in again: it bleeds to the page's edge, as
             the macOS shelf does, and nothing a card draws outside itself is cut off. */}
@@ -93,16 +94,16 @@ export function Library({ screen, actions }: { screen: LibraryScreen; actions: A
         </Stagger>
       </section>
 
-      <section aria-label="Games" className="flex flex-col gap-4">
+      <section aria-label={m.lib_section_games()} className="flex flex-col gap-4">
         <div className="flex flex-wrap items-center justify-between gap-3">
-          <h2 className="text-xs font-medium tracking-wide text-muted-foreground uppercase">Games</h2>
+          <h2 className="text-xs font-medium tracking-wide text-muted-foreground uppercase">{m.lib_section_games()}</h2>
           {screen.entries.length > 0 && (
             <label className="relative w-full max-w-xs">
               <Search className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted-foreground" aria-hidden="true" />
               <Input
                 type="search"
-                placeholder="Search titles"
-                aria-label="Search the library"
+                placeholder={m.lib_search_titles()}
+                aria-label={m.browser_lib_search_a11y()}
                 className="pl-9"
                 value={query}
                 onChange={(e) => setQuery(e.currentTarget.value)}
@@ -113,16 +114,16 @@ export function Library({ screen, actions }: { screen: LibraryScreen; actions: A
         {screen.error && <ErrorLine text={screen.error} />}
         {screen.entries.length === 0 ? (
           screen.busy ? (
-            <Loading label="Loading the library" />
+            <Loading label={m.lib_loading()} />
           ) : screen.offline ? (
-            <Empty title={`Not connected to ${screen.host ?? "this host"}`}>
-              <Button size="sm" onClick={() => actions.browse(origin)}>Connect</Button>
+            <Empty title={screen.host ? m.browser_lib_not_connected({ host: screen.host }) : m.browser_lib_not_connected_this_host()}>
+              <Button size="sm" onClick={() => actions.browse(origin)}>{m.browser_lib_connect()}</Button>
             </Empty>
           ) : screen.error ? null : (
-            <Empty>This host's library is empty, or nothing has been added to it yet.</Empty>
+            <Empty>{m.lib_empty()}</Empty>
           )
         ) : shown.length === 0 ? (
-          <Empty>Nothing here matches “{query}”.</Empty>
+          <Empty>{m.lib_no_match_body({ query })}</Empty>
         ) : (
           <Grid entries={shown} screen={screen} actions={actions} />
         )}
@@ -165,14 +166,14 @@ function DesktopTile({ host, onPlay }: { host: HostCard; onPlay: () => void }): 
   const state = status(host);
   return (
     <Card asChild interactive className="w-48! shrink-0 snap-start gap-3 p-4 text-left">
-      <button type="button" onClick={onPlay} aria-label={`Stream the desktop of ${labelOf(host)}`}>
+      <button type="button" onClick={onPlay} aria-label={m.lib_desktop_stream_host({ host: labelOf(host) })}>
         <span className="flex items-center justify-between">
           <Monitor className="size-5 text-primary" aria-hidden="true" />
           <span className={cn("size-2 rounded-full", state.dot)} title={state.text} />
         </span>
         <span className="min-w-0">
           <span className="block truncate text-sm font-semibold">{labelOf(host)}</span>
-          <span className="block text-xs text-muted-foreground">Desktop</span>
+          <span className="block text-xs text-muted-foreground">{m.lib_desktop()}</span>
         </span>
       </button>
     </Card>
@@ -203,7 +204,7 @@ function Grid({ entries, screen, actions }: { entries: LibraryEntry[]; screen: L
     <motion.ul
       ref={grid}
       role="list"
-      aria-label="Library"
+      aria-label={m.lib_title()}
       {...staggerProps(TILE_GAP)}
       className="m-0 grid list-none grid-cols-[repeat(auto-fill,minmax(8.5rem,1fr))] gap-x-5 gap-y-6 p-0"
       onKeyDown={onKey}
@@ -252,7 +253,7 @@ function Tile({ entry, art, running, onPlay }: { entry: LibraryEntry; art: strin
               )}
             />
           )}
-          {running && <Badge variant="success" className="absolute top-2 right-2 shadow-sm">Running</Badge>}
+          {running && <Badge variant="success" className="absolute top-2 right-2 shadow-sm">{m.lib_badge_running()}</Badge>}
         </span>
         <span className="line-clamp-2 text-xs text-muted-foreground group-hover:text-foreground" title={entry.title}>
           {entry.title}
@@ -264,13 +265,13 @@ function Tile({ entry, art, running, onPlay }: { entry: LibraryEntry; art: strin
 
 /** End the running title this device launched. It asks twice, as the dial does: unsaved progress
  *  in the game is lost. */
-function EndGame({ title, onEnd }: { title: string; onEnd: () => void }): JSX.Element {
+function EndGame({ onEnd }: { onEnd: () => void }): JSX.Element {
   const [armed, setArmed] = useState(false);
   return (
     <Button
       size="sm"
       variant={armed ? "destructive" : "secondary"}
-      title="Unsaved progress in the game is lost."
+      title={m.lib_end_game_confirm_body()}
       onClick={() => {
         if (!armed) return setArmed(true);
         setArmed(false);
@@ -279,7 +280,7 @@ function EndGame({ title, onEnd }: { title: string; onEnd: () => void }): JSX.El
       onBlur={() => setArmed(false)}
     >
       <CircleX className="size-4" />
-      {armed ? `End ${title}? Press again` : "End game"}
+      {armed ? m.lib_end_game_armed() : m.lib_end_game()}
     </Button>
   );
 }
