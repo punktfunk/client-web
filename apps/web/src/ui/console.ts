@@ -36,6 +36,7 @@ import {
   tizen,
   tvBack,
 } from "@punktfunk/stream";
+import { m } from "../paraglide/messages.js";
 import { FrameMeter, type Row, type Step, Sweep, table } from "./console-cost.ts";
 import { hostRow, originFor } from "./console-hosts.ts";
 import { coverBytes } from "./cover.ts";
@@ -744,7 +745,7 @@ export class ConsoleUi implements Ui {
       this.gamesSent = sig;
       if (s.error) {
         this.pushLibrary(CONSOLE_PUSH.LIBRARY_PHASE, "phase", {
-          Error: { title: "The library could not be read", body: s.error, can_retry: true },
+          Error: { title: m.lib_load_failed(), body: s.error, can_retry: true },
         });
       } else if (s.entries.length === 0) {
         this.pushLibrary(CONSOLE_PUSH.LIBRARY_PHASE, "phase", s.busy ? "Loading" : "Empty");
