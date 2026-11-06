@@ -340,6 +340,8 @@ export class ConsoleUi implements Ui {
         // Answers `FetchProfiles`, so a connect picks the profile and readies its seat first.
         profiles: true,
         settings: this.startSettings(),
+        // The browser's own list, most preferred first: the console words itself in the first it ships.
+        languages: [...navigator.languages],
       });
       if (!this.started) {
         console.error("punktfunk: the console could not start; the web shell stays up");
