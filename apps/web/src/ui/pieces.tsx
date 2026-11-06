@@ -6,6 +6,7 @@ import type { JSX, ReactNode } from "react";
 import type { BadgeVariant } from "@/components/ui/badge";
 import { Card } from "@/components/ui/card";
 import { Spinner } from "@/components/ui/spinner";
+import { m } from "../paraglide/messages.js";
 import type { HostCard } from "./types.ts";
 
 /** The pages that are a question rather than a list — connect, pair, trust, an error: one card,
@@ -80,11 +81,11 @@ export function ago(at?: number): string {
 /** A host's state as a dot colour and a word. Reachability and pairing are separate facts and
  *  the card shows whichever is the one standing in the way. */
 export function status(h: HostCard): { variant: BadgeVariant; text: string; dot: string } {
-  if (h.waking) return { variant: "outline", text: "Waking…", dot: "bg-warning animate-pulse" };
-  if (h.reach === undefined) return { variant: "outline", text: "Checking…", dot: "bg-muted-foreground/40" };
-  if (h.reach === "unreachable") return { variant: "outline", text: h.wake ? "Offline · can wake" : "Offline", dot: "bg-muted-foreground/40" };
-  if (h.reach === "blocked") return { variant: "warning", text: "Certificate not accepted", dot: "bg-warning" };
+  if (h.waking) return { variant: "outline", text: m.browser_hostcard_status_waking(), dot: "bg-warning animate-pulse" };
+  if (h.reach === undefined) return { variant: "outline", text: m.browser_hostcard_status_checking(), dot: "bg-muted-foreground/40" };
+  if (h.reach === "unreachable") return { variant: "outline", text: h.wake ? m.hostcard_status_offline_wakes() : m.hostcard_status_offline(), dot: "bg-muted-foreground/40" };
+  if (h.reach === "blocked") return { variant: "warning", text: m.browser_hostcard_status_cert(), dot: "bg-warning" };
   return h.fingerprint
-    ? { variant: "success", text: "Online", dot: "bg-success" }
-    : { variant: "warning", text: "Not paired", dot: "bg-warning" };
+    ? { variant: "success", text: m.hostcard_status_online(), dot: "bg-success" }
+    : { variant: "warning", text: m.hostcard_status_not_paired(), dot: "bg-warning" };
 }

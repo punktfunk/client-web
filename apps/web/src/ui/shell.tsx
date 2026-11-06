@@ -20,6 +20,7 @@ import { type JSX, useSyncExternalStore } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import "../styles.css";
 import { Stagger } from "@/components/stagger";
+import { m } from "../paraglide/messages.js";
 import { Frame } from "./frame.tsx";
 import { Home } from "./home.tsx";
 import { Hud } from "./hud.tsx";
@@ -166,18 +167,18 @@ function Announce({ screen }: { screen: Screen }): JSX.Element {
 
 function announce(s: Screen): string {
   switch (s.kind) {
-    case "home": return s.error ? s.error : s.busy ? "Connecting" : `${s.hosts.length} known hosts`;
-    case "accept": return "This host's certificate must be accepted once";
-    case "connecting": return `Connecting to ${s.origin}`;
-    case "pair": return s.error ?? "Enter the PIN this host is showing";
-    case "waiting": return `Waiting for approval of ${s.name} in the host's console`;
-    case "profiles": return s.error ?? `Pick who is playing on ${s.host}`;
+    case "home": return s.error ? s.error : s.busy ? m.browser_announce_connecting_a11y() : m.browser_announce_hosts_a11y({ count: s.hosts.length });
+    case "accept": return m.browser_announce_accept_a11y();
+    case "connecting": return m.browser_announce_connecting_to_a11y({ host: s.origin });
+    case "pair": return s.error ?? m.browser_announce_pair_a11y();
+    case "waiting": return m.browser_announce_waiting_a11y({ name: s.name });
+    case "profiles": return s.error ?? m.browser_announce_profiles_a11y({ host: s.host });
     case "seat": return s.detail ? `${s.title} ${s.detail}` : s.title;
-    case "trust": return "This is not the host that was paired with";
-    case "link": return `A link asks to connect to ${s.name}`;
-    case "library": return s.busy ? "Loading the library" : `${s.entries.length} titles`;
-    case "streaming": return "Streaming";
-    case "settings": return "Settings";
+    case "trust": return m.browser_announce_trust_a11y();
+    case "link": return m.browser_announce_link_a11y({ name: s.name });
+    case "library": return s.busy ? m.browser_announce_library_loading_a11y() : m.browser_announce_titles_a11y({ count: s.entries.length });
+    case "streaming": return m.browser_announce_streaming_a11y();
+    case "settings": return m.browser_announce_settings_a11y();
     case "error": return `${s.head}. ${s.text}`;
     case "console": return "";
   }

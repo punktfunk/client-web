@@ -10,6 +10,7 @@ import { Gamepad2, LibraryBig, type LucideIcon, Monitor, Settings } from "lucide
 import { motion, stagger, type Variants } from "motion/react";
 import type { JSX, ReactNode } from "react";
 import { staggerProps } from "@/components/stagger";
+import { m } from "../paraglide/messages.js";
 import { BrandMark, Wordmark } from "./brand.tsx";
 import type { Actions, Tab } from "./types.ts";
 
@@ -34,10 +35,10 @@ const PRESS = { scale: 0.9 };
 const HOVER = { scale: 1.02 };
 const TAP = { scale: 0.98 };
 
-const TABS: ReadonlyArray<{ tab: Tab; icon: LucideIcon; label: string }> = [
-  { tab: "hosts", icon: Monitor, label: "Hosts" },
-  { tab: "library", icon: LibraryBig, label: "Library" },
-  { tab: "settings", icon: Settings, label: "Settings" },
+const TABS: ReadonlyArray<{ tab: Tab; icon: LucideIcon; label: () => string }> = [
+  { tab: "hosts", icon: Monitor, label: () => m.hosts_tab() },
+  { tab: "library", icon: LibraryBig, label: () => m.hosts_tab_library() },
+  { tab: "settings", icon: Settings, label: () => m.hosts_tab_settings() },
 ];
 
 export function Frame({
@@ -62,12 +63,12 @@ export function Frame({
           <BrandMark className="size-7 shrink-0 drop-shadow-[0_2px_12px_rgba(108,91,243,0.45)]" animate={false} />
           <Wordmark className="hidden h-4 w-auto lg:block" animate={false} />
         </div>
-        <motion.nav aria-label="Main" initial="from" animate="enter" {...staggerProps()} className="flex flex-1 flex-col gap-1">
+        <motion.nav aria-label={m.browser_nav_main_a11y()} initial="from" animate="enter" {...staggerProps()} className="flex flex-1 flex-col gap-1">
           {TABS.map(({ tab: t, icon, label }) => (
             <SidebarItem
               key={t}
               icon={icon}
-              label={label}
+              label={label()}
               sub={t === "library" ? host : undefined}
               active={tab === t}
               onClick={() => actions.navigate(t)}
@@ -75,8 +76,8 @@ export function Frame({
           ))}
           <SidebarItem
             icon={Gamepad2}
-            label="Console mode"
-            title="Console mode — the controller interface"
+            label={m.browser_nav_console()}
+            title={m.browser_nav_console_hint()}
             className="mt-auto"
             onClick={() => actions.consoleMode(true)}
           />
@@ -96,7 +97,7 @@ export function Frame({
       </div>
 
       <motion.nav
-        aria-label="Main"
+        aria-label={m.browser_nav_main_a11y()}
         initial="from"
         animate="enter"
         variants={BAR}
@@ -119,7 +120,7 @@ export function Frame({
             <TabIcon active={tab === t}>
               <Icon className="size-5 shrink-0" />
             </TabIcon>
-            <span className="w-full truncate text-center leading-tight">{label}</span>
+            <span className="w-full truncate text-center leading-tight">{label()}</span>
           </motion.button>
         ))}
       </motion.nav>
