@@ -357,9 +357,9 @@ unsafe extern "C" {
     /// The session runs on another host of this box: dial `port` on the address dialed,
     /// pinning `cert_hash` (64 hex characters, borrowed for the call).
     fn pf_redirect(port: u32, cert_hash: *const u8, len: u32);
-    /// The host's sentence for a launch that did not give the player their game. UTF-8,
-    /// borrowed for the call.
-    fn pf_launch_notice(text: *const u8, len: u32);
+    /// The host's verdict on a launch that did not give the player their game, as JSON
+    /// (`launch_notice`). UTF-8, borrowed for the call.
+    fn pf_launch_notice(json: *const u8, len: u32);
     /// A host pointer bitmap: straight-alpha RGBA, `w * h * 4` bytes, borrowed for the call.
     fn pf_cursor_shape(
         serial: u32,
@@ -714,18 +714,41 @@ fn on_frame(c: &mut Client, ty: u64, body: &[u8]) {
             }
         }
         LaunchOutcome::TYPE => {
-            if let Some(text) = LaunchOutcome::from_body(body)
+            if let Some(said) = LaunchOutcome::from_body(body)
                 .ok()
                 .as_ref()
-                .and_then(LaunchOutcome::notice)
+                .and_then(launch_notice)
             {
                 // SAFETY: the string is borrowed for a call into JavaScript that copies it.
-                unsafe { pf_launch_notice(text.as_ptr(), text.len() as u32) };
+                unsafe { pf_launch_notice(said.as_ptr(), said.len() as u32) };
             }
         }
         // `Pending` repeats while the host's console decides; the page shows its own wait.
         _ => {}
     }
+}
+
+/// The verdict as JSON for the page, which words it: the host's `english`, and when it named a
+/// message its `id` and the values that fill it. `None` when the player got their game.
+fn launch_notice(outcome: &LaunchOutcome) -> Option<String> {
+    if !outcome.kind.needs_telling()
+        || (outcome.message.is_empty() && outcome.message_id.is_empty())
+    {
+        return None;
+    }
+    let params: serde_json::Map<String, serde_json::Value> = outcome
+        .message_params
+        .iter()
+        .map(|(name, value)| (name.clone(), value.clone().into()))
+        .collect();
+    Some(
+        serde_json::json!({
+            "english": outcome.message,
+            "id": outcome.message_id,
+            "params": params,
+        })
+        .to_string(),
+    )
 }
 
 /// The host accepted: build the session the `ServerHello` describes and say we are ready.
