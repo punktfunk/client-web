@@ -40,12 +40,12 @@ import {
   type Settings,
   settings,
   statusOf,
-  TOO_MANY,
   VersionSkew,
   wakeFailed,
   wakingLine,
 } from "@punktfunk/stream";
 import { type Configured, readConfig, type ServerConfig } from "./config.ts";
+import { m } from "./paraglide/messages.js";
 import { ConsoleUi } from "./ui/console.ts";
 import { noop, WebShell } from "./ui/shell.tsx";
 import type { HostCard, HostTools, ProfileCard, Screen, Tab, Ui } from "./ui/types.ts";
@@ -263,7 +263,7 @@ class App {
     // The server turned its list away: say so, and ask again on a later redraw of the hosts.
     if (server.wait) {
       this.configAgainAt = Date.now() + server.wait * 1000;
-      ui.notify(sentence(TOO_MANY), "error");
+      ui.notify(m.browser_too_many(), "error");
     }
     this.applyPrefs();
     this.watchSize();
@@ -705,7 +705,7 @@ class App {
     try {
       const r = await serverFetch()(url, { method: "POST" });
       if (r.status === 403 || r.status === 429) {
-        const why = r.status === 429 ? sentence(TOO_MANY) : `Only a browser paired with ${this.nameOf(origin)} can wake it from this page.`;
+        const why = r.status === 429 ? m.browser_too_many() : `Only a browser paired with ${this.nameOf(origin)} can wake it from this page.`;
         this.ui.notify(why, "error");
         return false;
       }

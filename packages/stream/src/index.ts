@@ -50,7 +50,8 @@ export {
 export { bootstrap, bootstrapUrl, hosts, originOf, reach, reachTarget, type Bootstrap, type KnownHost, type Plane, type Reach } from "./pf-connect.ts";
 export { deviceName, exitApp, packaged, remoteKey, tizen, tizenInfo } from "./platform.ts";
 export { tunnelFetch, type TunnelFetch } from "./tunnel.ts";
-export { onPass, serverFetch, TOO_MANY } from "./pass.ts";
+export { onPass, serverFetch } from "./pass.ts";
+export { type HostWords, setWords, type Words } from "./words.ts";
 export { tvBack } from "./input.ts";
 export { type LinkError, linkFor, type PageLink, parseLink } from "./links.ts";
 export type { VideoPlane, UploadStats } from "./video-surface.ts";

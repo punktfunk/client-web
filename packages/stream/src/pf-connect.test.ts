@@ -12,7 +12,10 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { useEnglish } from "./words.testing.ts";
 import { verify, hostFingerprint, reach, reachWhy, type Plane } from "./pf-connect.ts";
+
+useEnglish();
 
 // A full `Plane`, as the route publishes one; the two attestation fields are the ones under
 // test. Narrowed to `Required` so the test can read them without a null check on every line.
@@ -37,7 +40,7 @@ test("a real host's attestation verifies", async () => {
 test("a host that is not the one paired with is refused", async () => {
   await assert.rejects(
     () => verify(VECTOR, "0".repeat(64)),
-    /not the host that was paired with/,
+    /not the host that was paired with/i,
   );
 });
 
@@ -47,7 +50,7 @@ test("the signature must be over this hash, by this key", async () => {
   // A different hash: the certificate is still ours, the signature no longer names it.
   await assert.rejects(
     () => verify({ ...VECTOR, cert_hash_sha256: "ab".repeat(32) }, fp),
-    /does not verify/,
+    /does not verify/i,
   );
 
   // A bent signature. `atob`-clean, structurally valid, wrong.
@@ -60,7 +63,7 @@ test("an unattested host cannot be dialled by a paired browser", async () => {
   const { cert_hash_sig: _sig, host_cert_der: _der, ...unattested } = VECTOR;
   await assert.rejects(
     () => verify(unattested, fp),
-    /published no attestation/,
+    /published no attestation/i,
   );
 });
 

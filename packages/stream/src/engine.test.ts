@@ -6,6 +6,9 @@
 
 import { test, type TestContext } from "node:test";
 import assert from "node:assert/strict";
+import { useEnglish } from "./words.testing.ts";
+
+useEnglish();
 
 // The engine schedules its frame loop on construction; nothing here runs it.
 globalThis.requestAnimationFrame = () => 0;
@@ -272,7 +275,7 @@ test("a codec this browser can't decode gives way to another on offer, once each
   const live = engine.current as import("./engine.ts").EngineState;
   assert.equal(
     live.kind === "streaming" && live.stats.launchNotice,
-    "This browser can't decode HEVC, so the stream uses H.264, ignoring the Video codec setting.",
+    "This browser can't decode HEVC, so the stream uses H.264, ignoring the Video codec setting",
   );
 
   // H.264 fails too: nothing is left, and HEVC is not offered again.
@@ -296,7 +299,7 @@ test("only a 401 at sign-in reads as a forgotten pairing", async () => {
       (engine as unknown as { checkHost(o: string, fp: string, d: unknown): void }).checkHost(ORIGIN, "cd".repeat(32), device);
       await new Promise((r) => setTimeout(r, 20));
       assert.equal(engine.current.kind, kind, `status ${status}`);
-      if (status === 429) assert.match((engine.current as { message: string }).message, /too many requests/);
+      if (status === 429) assert.match((engine.current as { message: string }).message, /too many requests/i);
       if (status === 502) {
         const host = (engine.current as { host: { info(): Promise<unknown> } }).host;
         await assert.rejects(host.info(), (e: Error) => /couldn't sign in/.test(e.message) && !/pair/.test(e.message));

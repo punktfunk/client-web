@@ -182,8 +182,9 @@ export interface PunktfunkModule {
   /** The host's `Redirect`: dial `port` on the same address, pinning `certHash`, and say `Hello`
    *  there. */
   __pfOnRedirect?: (port: number, certHash: string) => void;
-  /** The host's sentence for a launch that did not give the player their game. */
-  __pfOnLaunchNotice?: (text: string) => void;
+  /** The host's verdict on a launch that did not give the player their game: JSON, see
+   *  `launchNotice`. */
+  __pfOnLaunchNotice?: (verdict: string) => void;
   /** Datagrams have landed in the ring: pump the session now rather than at the next frame. */
   __pfOnData?: () => void;
   /** A host pointer bitmap: straight-alpha RGBA, copied out of wasm memory. */

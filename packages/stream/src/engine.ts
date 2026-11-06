@@ -31,7 +31,8 @@ import { type TunnelFetch, tunnelFetch } from "./tunnel.ts";
 import { type Feed, wasmFeed } from "./carrier/feed.ts";
 import { WtCarrier } from "./carrier/wt.ts";
 import { bridgeUrl, WsCarrier } from "./carrier/ws.ts";
-import { passFor, TOO_MANY } from "./pass.ts";
+import { passFor, TooMany } from "./pass.ts";
+import { launchNotice, words } from "./words.ts";
 
 export type { AudioSnapshot, AudioState } from "./audio.ts";
 export type { MicState } from "./mic.ts";
@@ -49,11 +50,6 @@ const CLOSE = { QUIT: 0x51, PAIR_DENIED: 0x64, ACCESS_EXPIRED: 0x69, HOST_POWER:
 const PLACEMENT_REFUSED = new Set([0x6c, 0x6d, 0x6e, 0x6f]);
 /** A carrier that never opened: no host was heard at all. */
 const NEVER_OPENED = -2;
-/** Why a dial through the page server's bridge never opened. The browser hides the server's
- *  answer to a refused upgrade, so this names only where it failed. */
-const BRIDGE_UNOPENED =
-  "this page's server couldn't open a connection to the host. Try again in a minute, and if it keeps happening, check that WebSocket connections reach the server";
-
 /** WebTransport, or a WebSocket through the page server's bridge. */
 type CarrierKind = "wt" | "ws";
 /** The carrier that last opened for each origin, for the page's lifetime: a reconnect or a door's
@@ -358,8 +354,8 @@ export class Engine {
     mod.__pfOnClosed = (code, reason) => this.onClosed(code, reason);
     mod.__pfOnRefused = (code, reason) => this.onClosed(code, reason);
     mod.__pfOnRedirect = (port, certHash) => this.onRedirect(port, certHash);
-    mod.__pfOnLaunchNotice = (text) => {
-      this.launchNotice = { text, at: performance.now() };
+    mod.__pfOnLaunchNotice = (verdict) => {
+      this.launchNotice = { text: launchNotice(verdict), at: performance.now() };
     };
     mod.__pfOnRumble = (pad, low, high, lt, rt, ms) => playRumble(navigator.getGamepads(), pad, low, high, lt, rt, ms);
     mod.__pfOnCursorShape = (serial, w, h, hx, hy, rgba) => this.cursor.shape(serial, w, h, hx, hy, rgba);
@@ -373,11 +369,11 @@ export class Engine {
    */
   static async create(opts: EngineOptions): Promise<Engine> {
     if (!decodeSupported()) {
-      throw new Error("this browser can't decode video. Open this page in a current Chrome, Edge, Safari or Firefox");
+      throw new Error(words.browser_cannot_decode());
     }
     // WebTransport and the device key exist only there; plain http on a LAN address is not one.
     if (!isSecureContext) {
-      throw new Error("this page isn't on an https address, so the browser won't stream from it. Open it over https");
+      throw new Error(words.browser_needs_https());
     }
     const [mod, codecs, channels, gpu] = await Promise.all([loadModule(), decodableCodecs(), playableChannels(), webgpuUsable()]);
     return new Engine(mod, opts, codecs, channels, gpu);
@@ -454,7 +450,7 @@ export class Engine {
         return this.set({
           kind: "error",
           origin,
-          message: "browser streaming is off on this host. Turn it on in the host's console, under Host → Settings, then restart the host",
+          message: words.browser_plane_off(),
         });
       }
       this.plane = b.plane;
@@ -483,8 +479,7 @@ export class Engine {
       return this.set({
         kind: "error",
         origin,
-        message:
-          "this host still has its older identity, which a browser can't pair with. Moving it to the new one means unpairing its other devices, restarting it and pairing them again",
+        message: words.browser_legacy_identity(),
       });
     }
 
@@ -492,7 +487,7 @@ export class Engine {
     const stored = pf.hosts.fingerprint(origin);
     const expect = opts.expectFingerprint?.toLowerCase();
     if (stored && expect && stored.toLowerCase() !== expect) {
-      return this.set({ kind: "untrusted", origin, reason: "the link names a different host than the one paired here" });
+      return this.set({ kind: "untrusted", origin, reason: words.browser_link_other_host() });
     }
     const known = stored ?? expect;
     if (known) {
@@ -738,7 +733,7 @@ export class Engine {
     this.lastFrames = 0;
     this.lastSecond = performance.now();
     this.launchNotice = this.sdrNotice
-      ? { text: "This browser can't show HDR video, so the stream is in SDR.", at: performance.now() }
+      ? { text: words.browser_notice_no_hdr(), at: performance.now() }
       : null;
     this.sdrNotice = false;
     this.access = { seq: 0, grants: 0, deadline: null };
@@ -801,7 +796,7 @@ export class Engine {
         return { role: ROLES[Number(line.slice(0, tab))] ?? "primary", text: line.slice(tab + 1) };
       });
     // For a player who wonders why this stream is laggier than the network suggests.
-    if (this.carrierKind === "ws") lines.push({ role: "muted", text: "Carrier: WebSocket via page server" });
+    if (this.carrierKind === "ws") lines.push({ role: "muted", text: words.browser_overlay_carrier_ws() });
     return lines;
   }
 
@@ -1060,7 +1055,7 @@ export class Engine {
     this.set({
       kind: "error",
       origin,
-      message: "this browser couldn't open its device key. Allow this site to store data, then try again",
+      message: words.browser_device_key(),
     });
   }
 
@@ -1127,7 +1122,7 @@ export class Engine {
     if (!carrier || !opening) {
       if (fallback) return fallback();
       carrierHint.delete(origin);
-      const said = kind === "ws" ? BRIDGE_UNOPENED : "the browser refused the WebTransport session";
+      const said = kind === "ws" ? words.browser_bridge_unopened() : words.browser_wt_refused();
       return this.set({ kind: "error", origin, message: said });
     }
     if (fallback) this.silence = setTimeout(() => this.mod.__pfCarrier === carrier && fallback(), WT_SILENCE_MS);
@@ -1185,7 +1180,7 @@ export class Engine {
     if (this.host !== host || this.origin !== origin) return;
     if (e instanceof DeviceRefused && e.status === 401) return this.set({ kind: "forgotten", origin });
     if (e instanceof VersionSkew) return this.set({ kind: "error", origin, message: e.message, skew: true });
-    if (e instanceof Error && e.message === TOO_MANY) return this.set({ kind: "error", origin, message: TOO_MANY });
+    if (e instanceof TooMany) return this.set({ kind: "error", origin, message: e.message });
     this.set({ kind: "ready", origin, host });
   }
 
@@ -1211,8 +1206,8 @@ export class Engine {
         origin,
         message:
           this.carrierKind === "ws"
-            ? BRIDGE_UNOPENED
-            : `couldn't reach the host on UDP ${this.seatPlane?.port ?? this.plane?.port}, its browser streaming port. Check that nothing between this device and the host blocks it`,
+            ? words.browser_bridge_unopened()
+            : words.browser_udp_unreachable({ port: this.seatPlane?.port ?? this.plane?.port ?? "?" }),
       });
     }
     switch (this.state.kind) {
@@ -1254,9 +1249,9 @@ export class Engine {
     }
     const message =
       code === CLOSE.HOST_POWER
-        ? "the host is powering down"
+        ? words.reject_host_power()
         : code === CLOSE.ACCESS_EXPIRED
-          ? "this device's access to the host has expired"
+          ? words.reject_access_expired()
           : said || (code < 0 ? "the connection was lost" : `the host closed the session (code ${code})`);
     this.stopSession();
     this.set({ kind: "error", origin, message });
@@ -1326,7 +1321,7 @@ export class Engine {
         this.knockSince = 0;
         this.stopSession();
         this.mod._pf_wt_close?.();
-        this.set({ kind: "pair-refused", origin, reason: "nobody approved the request on the host in time" });
+        this.set({ kind: "pair-refused", origin, reason: words.reject_approval_timeout() });
       }
       return;
     }
@@ -1341,7 +1336,7 @@ export class Engine {
     // The host sent something this page can't read: nothing after it will be either.
     if (phase === SESSION.FAILED) {
       this.stopSession();
-      this.set({ kind: "error", origin, message: "this page couldn't read what the host sent", skew: true });
+      this.set({ kind: "error", origin, message: words.browser_reply_unreadable(), skew: true });
       this.mod._pf_wt_close?.();
       return;
     }
@@ -1392,8 +1387,11 @@ export class Engine {
     const now = performance.now();
     // A codec fallback names the codec that took over, which only `Welcome` says.
     if (this.fellBackFrom && v?.codec) {
-      const pinned = this.refused & CODEC_BIT[this.tunable.codec] ? ", ignoring the Video codec setting" : "";
-      const text = `This browser can't decode ${CODEC_NAME[this.fellBackFrom]}, so the stream uses ${CODEC_NAME[v.codec]}${pinned}.`;
+      const from = CODEC_NAME[this.fellBackFrom] ?? "";
+      const to = CODEC_NAME[v.codec] ?? "";
+      const text = this.refused & CODEC_BIT[this.tunable.codec]
+        ? words.browser_codec_fallback_pinned({ from, to })
+        : words.browser_codec_fallback({ from, to });
       this.launchNotice = { text, at: now };
       this.fellBackFrom = 0;
     }

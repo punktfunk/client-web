@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { gameEndNotice, gameEndOf, gameGone } from "./game-end.ts";
+import { useEnglish } from "./words.testing.ts";
+
+useEnglish();
 
 test("a status maps to what the player is told, in the native clients' words", () => {
   assert.equal(gameEndOf(200).kind, "ended");
