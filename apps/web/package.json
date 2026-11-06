@@ -5,11 +5,18 @@
   "type": "module",
   "description": "The punktfunk web client — the flagship consumer of @punktfunk/stream. React + @unom/ui + Tailwind, the same stack as the host's management console.",
   "scripts": {
+    "l10n": "node ../../scripts/l10n-messages.mjs && paraglide-js compile --project ./project.inlang --outdir ./src/paraglide --strategy preferredLanguage baseLocale",
+    "predev": "npm run l10n",
     "dev": "vite",
+    "prebuild": "npm run l10n",
     "build": "vite build",
+    "precheck": "npm run l10n",
     "check": "tsc --noEmit",
+    "pretest": "npm run l10n",
     "test": "node --experimental-transform-types --disable-warning=ExperimentalWarning --test 'src/**/*.test.ts'",
+    "prestorybook": "npm run l10n",
     "storybook": "storybook dev -p 6006",
+    "prebuild-storybook": "npm run l10n",
     "build-storybook": "storybook build",
     "screenshots": "node tools/screenshots.mjs"
   },
@@ -29,6 +36,8 @@
     "zod": "^4.6.5"
   },
   "devDependencies": {
+    "@inlang/paraglide-js": "^2.29.3",
+    "@inlang/plugin-message-format": "^4.6.0",
     "@storybook/react-vite": "^10.6.0",
     "@tailwindcss/vite": "^4.3.3",
     "@types/react": "^19.3.0",

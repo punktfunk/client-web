@@ -24,6 +24,10 @@ jobs:
       # `@punktfunk/host` comes from the Gitea npm registry (`.npmrc` names the scope). Reads
       # are anonymous there, so no secret is needed to install.
       - run: npm ci
+      # The page's messages come from the pinned monorepo's checkout, which cargo finds
+      # (`scripts/l10n-messages.mjs`, run by the app's `check`, `test` and `build`).
+      - run: rustup toolchain install
+        working-directory: packages/stream
       - run: npm run check
       - run: npm test
       # The screens as Storybook renders them, without the wasm: the stories never start the

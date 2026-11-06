@@ -2,6 +2,9 @@
   "extends": "../../tsconfig.base.json",
   "compilerOptions": {
     "noEmit": true,
+    // Paraglide's compiled messages are JavaScript with JSDoc types, which this reads and does not check.
+    "allowJs": true,
+    "checkJs": false,
     "jsx": "react-jsx",
     // `vite/client` declares the CSS imports, which TypeScript 7 checks like any other import.
     "types": ["@webgpu/types", "node", "vite/client"],
