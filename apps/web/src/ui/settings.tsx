@@ -16,6 +16,7 @@ import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Slider } from "@/components/ui/slider";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { m } from "../paraglide/messages.js";
 import { Body, PageHead } from "./frame.tsx";
 import type { Actions, Screen } from "./types.ts";
 
@@ -30,26 +31,33 @@ const RATES = [30, 60, 90, 120, 144, 165, 240];
 /** Where the slider starts when Automatic is turned off. */
 const FIXED_START_KBPS = 20_000;
 
-const TABS = ["General", "Display", "Input", "Audio", "Controllers", "About"] as const;
-type TabName = (typeof TABS)[number];
+const TABS = {
+  general: () => m.prefs_category_general(),
+  display: () => m.prefs_category_display(),
+  input: () => m.prefs_category_input(),
+  audio: () => m.prefs_category_audio(),
+  controllers: () => m.prefs_category_controllers(),
+  about: () => m.prefs_category_about(),
+} as const;
+type TabName = keyof typeof TABS;
 
 /** The tab last open, for the next time settings open this visit. */
-let lastTab: TabName = "General";
+let lastTab: TabName = "general";
 
 /** What the page binds while streaming, as `pf_client_core::shortcuts` lists it for the console:
  *  `input.ts` holds the bindings. The Samsung set adds the remote's Back, and has no Esc row
  *  because Esc still reaches the host there. */
-const CONTROLS: ReadonlyArray<readonly [keys: string, text: string]> = [
-  ["Ctrl+Alt+Shift+Q", "Release the mouse, or capture it again"],
-  ["Esc", "Release the mouse, where the page captured it"],
-  ["Ctrl+Alt+Shift+D", "Disconnect"],
-  ["Ctrl+Alt+Shift+S", "Cycle the statistics overlay"],
-  ["Ctrl+Alt+Shift+O", "Open the quick actions menu"],
-  ["Ctrl+Alt+Shift+V", "Mute or unmute the microphone"],
-  ["Ctrl+Alt+Shift+M", "Switch the mouse mode"],
-  ["F11 or Alt+Enter", "Toggle fullscreen"],
-  ["Select + A", "Open the quick actions menu (controller)"],
-  ["L1 + R1 + Start + Select", "Release input; hold to disconnect (controller)"],
+const CONTROLS: ReadonlyArray<readonly [keys: string, text: () => string]> = [
+  ["Ctrl+Alt+Shift+Q", () => m.controls_release_mouse()],
+  ["Esc", () => m.controls_release_mouse_page()],
+  ["Ctrl+Alt+Shift+D", () => m.controls_disconnect()],
+  ["Ctrl+Alt+Shift+S", () => m.controls_cycle_stats()],
+  ["Ctrl+Alt+Shift+O", () => m.controls_open_menu()],
+  ["Ctrl+Alt+Shift+V", () => m.controls_toggle_mic()],
+  ["Ctrl+Alt+Shift+M", () => m.controls_switch_mouse_mode()],
+  [m.controls_either({ first: "F11", second: "Alt+Enter" }), () => m.controls_toggle_fullscreen()],
+  ["Select + A", () => m.browser_controls_open_menu_pad()],
+  ["L1 + R1 + Start + Select", () => m.browser_controls_release_pad()],
 ];
 
 /** Set by `vite.config.ts` from `git describe`. */
@@ -58,7 +66,7 @@ declare const __PF_VERSION__: string;
 export function SettingsPage({ screen, actions }: { screen: SettingsScreen; actions: Actions }): JSX.Element {
   return (
     <Body className="max-w-4xl">
-      <PageHead title="Settings" sub="These apply to every host. Stream settings take effect on the next stream." />
+      <PageHead title={m.prefs_title()} sub={m.browser_prefs_page_hint()} />
       <SettingsTabs screen={screen} actions={actions} />
     </Body>
   );
@@ -71,12 +79,12 @@ export function SettingsDialog({ screen, actions }: { screen: SettingsScreen; ac
     <Dialog open onOpenChange={(open) => { if (!open) actions.openSettings(false); }}>
       <DialogContent className="max-w-3xl">
         <DialogHeader>
-          <DialogTitle>Settings</DialogTitle>
-          <DialogDescription>Mouse, controller and statistics settings apply now; the rest take effect on the next stream.</DialogDescription>
+          <DialogTitle>{m.prefs_title()}</DialogTitle>
+          <DialogDescription>{m.browser_prefs_dialog_hint()}</DialogDescription>
         </DialogHeader>
         <SettingsTabs screen={screen} actions={actions} />
         <DialogFooter>
-          <Button autoFocus onClick={() => actions.openSettings(false)}>Done</Button>
+          <Button autoFocus onClick={() => actions.openSettings(false)}>{m.common_done()}</Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>
@@ -107,39 +115,44 @@ function SettingsTabs({ screen, actions }: { screen: SettingsScreen; actions: Ac
       className="flex flex-col gap-5"
     >
       <TabsList className="w-full justify-start overflow-x-auto">
-        {TABS.map((t) => <TabsTrigger key={t} value={t}>{t}</TabsTrigger>)}
+        {(Object.keys(TABS) as TabName[]).map((t) => <TabsTrigger key={t} value={t}>{TABS[t]()}</TabsTrigger>)}
       </TabsList>
 
-      <Panel value="General">
-        <Group title="Session">
+      <Panel value="general">
+        <Group title={m.prefs_group_session()}>
           <Toggle
-            label="Start streams fullscreen"
-            hint="Goes fullscreen when a stream starts from a click, and back to the window when it ends."
+            label={m.player_fullscreen_on_stream()}
+            hint={m.player_fullscreen_on_stream_hint()}
             on={v.fullscreen}
             onChange={(on) => set({ fullscreen: on })}
           />
         </Group>
-        <Group title="Statistics">
-          <Row label="Statistics overlay" hint="Ctrl+Alt+Shift+S cycles it during a stream.">
+        <Group title={m.prefs_group_statistics()}>
+          <Row label={m.player_stats_verbosity()} hint={m.player_stats_verbosity_cycle_hint({ keys: "Ctrl+Alt+Shift+S" })}>
             <Segmented
-              label="Statistics overlay"
+              label={m.player_stats_verbosity()}
               value={v.statsTier}
-              options={[["off", "Off"], ["compact", "Compact"], ["normal", "Normal"], ["detailed", "Detailed"]]}
+              options={[
+                ["off", m.player_stats_verbosity_off()],
+                ["compact", m.player_stats_verbosity_compact()],
+                ["normal", m.player_stats_verbosity_normal()],
+                ["detailed", m.player_stats_verbosity_detailed()],
+              ]}
               onChange={(statsTier) => set({ statsTier })}
             />
           </Row>
         </Group>
         {!screen.streaming && (
-          <Group title="Interface">
-            <Row label="Console mode" hint="The controller interface every punktfunk client shares, for a TV or a gamepad.">
-              <Button size="sm" variant="secondary" onClick={() => actions.consoleMode(true)}>Switch to console mode</Button>
+          <Group title={m.prefs_group_interface()}>
+            <Row label={m.browser_console_mode()} hint={m.browser_console_mode_hint()}>
+              <Button size="sm" variant="secondary" onClick={() => actions.consoleMode(true)}>{m.browser_console_mode_switch()}</Button>
             </Row>
           </Group>
         )}
         <Group>
           <Toggle
-            label="Show advanced"
-            hint="Adds the settings most players never need to change."
+            label={m.player_show_advanced()}
+            hint={m.player_show_advanced_hint()}
             on={v.showAdvanced}
             onChange={(on) => set({ showAdvanced: on })}
           />
@@ -148,39 +161,39 @@ function SettingsTabs({ screen, actions }: { screen: SettingsScreen; actions: Ac
           ["advancedStats", "hudPlacement", "statsScalePct", "exitHint"],
           <>
             <Toggle
-              label="Advanced statistics"
-              hint="Off shows the figures Moonlight's overlay also shows. On shows capture to glass as p50/p95 and every stage between."
+              label={m.player_advanced_stats()}
+              hint={m.player_advanced_stats_hint()}
               on={v.advancedStats}
               onChange={(on) => set({ advancedStats: on })}
             >
               <a href="https://docs.punktfunk.unom.io/docs/stats" target="_blank" rel="noreferrer" className="text-xs text-muted-foreground underline">
-                What each number means
+                {m.player_stats_docs_link()}
               </a>
             </Toggle>
-            <Row label="Statistics position" hint="The corner the statistics overlay sits in.">
+            <Row label={m.player_hud_placement()} hint={m.player_hud_placement_hint()}>
               <Segmented
-                label="Statistics position"
+                label={m.player_hud_placement()}
                 value={v.hudPlacement}
                 options={[
-                  ["topLeading", "Top left"],
-                  ["topTrailing", "Top right"],
-                  ["bottomLeading", "Bottom left"],
-                  ["bottomTrailing", "Bottom right"],
+                  ["topLeading", m.player_hud_placement_top_leading()],
+                  ["topTrailing", m.player_hud_placement_top_trailing()],
+                  ["bottomLeading", m.player_hud_placement_bottom_leading()],
+                  ["bottomTrailing", m.player_hud_placement_bottom_trailing()],
                 ]}
                 onChange={(hudPlacement) => set({ hudPlacement })}
               />
             </Row>
-            <Row label="Statistics size" hint="The overlay's size, on top of the page's own." htmlFor="pf-stats-size">
+            <Row label={m.player_stats_scale_pct()} hint={m.browser_stats_scale_pct_hint()} htmlFor="pf-stats-size">
               <Select value={String(v.statsScalePct)} onValueChange={(value) => set({ statsScalePct: Number(value) })}>
                 <SelectTrigger id="pf-stats-size"><SelectValue /></SelectTrigger>
                 <SelectContent>
-                  {STATS_SCALES.map((p) => <SelectItem key={p} value={String(p)}>{p} %</SelectItem>)}
+                  {STATS_SCALES.map((p) => <SelectItem key={p} value={String(p)}>{m.common_percent({ value: p })}</SelectItem>)}
                 </SelectContent>
               </Select>
             </Row>
             <Toggle
-              label="Exit hint"
-              hint="Shows how to leave for a few seconds when a stream starts."
+              label={m.player_exit_hint()}
+              hint={m.player_exit_hint_hint()}
               on={v.exitHint}
               onChange={(on) => set({ exitHint: on })}
             />
@@ -188,47 +201,47 @@ function SettingsTabs({ screen, actions }: { screen: SettingsScreen; actions: Ac
         )}
       </Panel>
 
-      <Panel value="Display">
-        <Group title="Resolution">
+      <Panel value="display">
+        <Group title={m.prefs_group_resolution()}>
           <Resolution v={v} set={set} />
           {v.width === 0 && (
             <Toggle
-              label="Follow window resizes"
-              hint="Renegotiates the size when the window changes mid-stream. The host rebuilds its capture to answer, which interrupts the picture."
+              label={m.browser_resize_stream()}
+              hint={m.browser_resize_stream_hint()}
               on={v.resizeStream}
               onChange={(on) => set({ resizeStream: on })}
             />
           )}
-          <Row label="Refresh rate" htmlFor="pf-fps">
+          <Row label={m.player_refresh_hz()} htmlFor="pf-fps">
             <Select value={String(v.fps)} onValueChange={(value) => set({ fps: Number(value) })}>
               <SelectTrigger id="pf-fps"><SelectValue /></SelectTrigger>
               <SelectContent>
-                {RATES.map((f) => <SelectItem key={f} value={String(f)}>{f} Hz</SelectItem>)}
+                {RATES.map((f) => <SelectItem key={f} value={String(f)}>{m.common_hz({ value: f })}</SelectItem>)}
               </SelectContent>
             </Select>
           </Row>
         </Group>
-        <Group title="Picture">
+        <Group title={m.prefs_group_picture()}>
           <Toggle
-            label="Automatic bitrate"
-            hint="The host picks the rate this connection carries and follows it as that changes."
+            label={m.player_bitrate_kbps_auto_switch()}
+            hint={m.player_bitrate_kbps_auto_switch_hint()}
             on={v.bitrateKbps === 0}
             onChange={(on) => set({ bitrateKbps: on ? 0 : FIXED_START_KBPS })}
           />
           {v.bitrateKbps > 0 && (
             <Slider
-              label="Bitrate"
+              label={m.player_bitrate_kbps()}
               min={2}
               max={200}
               step={1}
               value={Math.round(v.bitrateKbps / 1000)}
-              formatValue={(n) => `${n} Mbps`}
+              formatValue={(n) => m.common_mbits({ value: n })}
               onValueChange={(n) => set({ bitrateKbps: n * 1000 })}
             />
           )}
           <Toggle
-            label="10-bit HDR"
-            hint="Used when this browser and display can show it; otherwise the stream stays SDR."
+            label={m.player_hdr_enabled()}
+            hint={m.player_hdr_enabled_hint()}
             on={v.hdr}
             onChange={(on) => set({ hdr: on })}
           />
@@ -236,19 +249,19 @@ function SettingsTabs({ screen, actions }: { screen: SettingsScreen; actions: Ac
         {advanced(
           ["codec", "videoBackend"],
           <>
-            <Row label="Video codec" hint="Asked for first. The host falls back to one both sides have.">
+            <Row label={m.player_codec()} hint={m.player_codec_hint()}>
               <Segmented
-                label="Video codec"
+                label={m.player_codec()}
                 value={v.codec}
-                options={[["auto", "Automatic"], ["hevc", "HEVC"], ["av1", "AV1"], ["h264", "H.264"]]}
+                options={[["auto", m.player_codec_auto()], ["hevc", "HEVC"], ["av1", "AV1"], ["h264", "H.264"]]}
                 onChange={(codec) => set({ codec })}
               />
             </Row>
-            <Row label="Video plane" hint="Automatic uses WebGPU where the browser has it. Once a stream has played, a change waits for the page to reload.">
+            <Row label={m.browser_video_backend()} hint={m.browser_video_backend_hint()}>
               <Segmented
-                label="Video plane"
+                label={m.browser_video_backend()}
                 value={v.videoBackend}
-                options={[["auto", "Automatic"], ["webgpu", "WebGPU"], ["webgl2", "WebGL2"]]}
+                options={[["auto", m.browser_video_backend_auto()], ["webgpu", "WebGPU"], ["webgl2", "WebGL2"]]}
                 onChange={(videoBackend) => set({ videoBackend })}
               />
             </Row>
@@ -256,79 +269,79 @@ function SettingsTabs({ screen, actions }: { screen: SettingsScreen; actions: Ac
         )}
       </Panel>
 
-      <Panel value="Input">
-        <Group title="Keyboard & mouse">
+      <Panel value="input">
+        <Group title={m.prefs_group_keyboard_mouse()}>
           <Row
-            label="Mouse input"
+            label={m.player_mouse_mode()}
             hint={
               v.pointer === "absolute"
-                ? "The host's pointer goes where yours is. For desktops."
-                : "A click locks the pointer and sends motion. For games with mouselook; Esc releases."
+                ? m.player_mouse_mode_desktop_hint()
+                : m.browser_player_mouse_mode_capture_hint({ keys: "Esc" })
             }
           >
             <Segmented
-              label="Mouse input"
+              label={m.player_mouse_mode()}
               value={v.pointer}
-              options={[["absolute", "Desktop"], ["capture", "Capture (games)"]]}
+              options={[["absolute", m.player_mouse_mode_desktop()], ["capture", m.player_mouse_mode_capture()]]}
               onChange={(pointer) => set({ pointer })}
             />
           </Row>
-          <Toggle label="Invert scroll direction" on={v.invertScroll} onChange={(on) => set({ invertScroll: on })} />
+          <Toggle label={m.player_invert_scroll()} on={v.invertScroll} onChange={(on) => set({ invertScroll: on })} />
           <Toggle
-            label="Send keyboard, mouse and controllers"
-            hint="Off only watches the stream."
+            label={m.browser_player_capture_input()}
+            hint={m.browser_player_capture_input_hint()}
             on={v.captureInput}
             onChange={(on) => set({ captureInput: on })}
           />
         </Group>
       </Panel>
 
-      <Panel value="Audio">
-        <Group title="Playback">
-          <Toggle label="Play the host's audio" on={v.audio} onChange={(on) => set({ audio: on })} />
+      <Panel value="audio">
+        <Group title={m.browser_prefs_group_playback()}>
+          <Toggle label={m.browser_player_audio()} on={v.audio} onChange={(on) => set({ audio: on })} />
         </Group>
       </Panel>
 
-      <Panel value="Controllers">
-        <Group title="Sticks">
+      <Panel value="controllers">
+        <Group title={m.browser_prefs_group_sticks()}>
           <Slider
-            label="Stick deadzone"
+            label={m.browser_player_deadzone()}
             min={0}
             max={40}
             step={1}
             value={Math.round(v.deadzone * 100)}
-            formatValue={(n) => `${n}%`}
+            formatValue={(n) => m.common_percent({ value: n })}
             onValueChange={(n) => set({ deadzone: n / 100 })}
           />
         </Group>
       </Panel>
 
-      <Panel value="About">
-        <Group title="Stream controls">
-          {(tizen() ? [["Back", "Open the quick actions menu"] as const, ...CONTROLS.filter(([k]) => k !== "Esc")] : CONTROLS).map(
+      <Panel value="about">
+        <Group title={m.about_stream_controls()}>
+          {(tizen() ? [["Back", () => m.controls_open_menu()] as const, ...CONTROLS.filter(([k]) => k !== "Esc")] : CONTROLS).map(
             ([keys, text]) => (
-              <Row key={keys} label={text}>
+              <Row key={keys} label={text()}>
                 <kbd className="rounded bg-muted px-1.5 py-0.5 font-mono text-xs">{keys}</kbd>
               </Row>
             ),
           )}
         </Group>
         <Group title="punktfunk web">
-          <Row label="Version">
+          <Row label={m.about_version()}>
             <span className="font-mono text-sm text-muted-foreground">{__PF_VERSION__}</span>
           </Row>
-          <Row label="Documentation">
+          <Row label={m.about_docs()}>
             <a className="text-sm text-primary underline-offset-4 hover:underline" href="https://docs.punktfunk.unom.io/docs/browser-client" target="_blank" rel="noreferrer">
-              The browser client guide
+              {m.browser_about_guide()}
             </a>
           </Row>
-          <Row label="Source code">
+          <Row label={m.about_source()}>
             <a className="text-sm text-primary underline-offset-4 hover:underline" href="https://github.com/punktfunk/client-web" target="_blank" rel="noreferrer">
               github.com/punktfunk/client-web
             </a>
           </Row>
-          <Row label="Reset settings" hint="Every setting on every tab back to its default.">
-            <Button size="sm" variant="secondary" onClick={() => set(DEFAULTS)}>Reset</Button>
+          <Row label={m.browser_prefs_reset()} hint={m.browser_prefs_reset_hint()}>
+            <Button size="sm" variant="secondary" onClick={() => set(DEFAULTS)}>{m.common_reset()}</Button>
           </Row>
         </Group>
       </Panel>
@@ -353,9 +366,9 @@ function Resolution({ v, set }: { v: Settings; set: SetFn }): JSX.Element {
   };
   return (
     <>
-      <Row label="Aspect ratio" hint="Which shapes the Resolution list offers.">
+      <Row label={m.player_resolution_aspect()} hint={m.player_resolution_aspect_hint()}>
         <Segmented
-          label="Aspect ratio"
+          label={m.player_resolution_aspect()}
           value={String(family)}
           options={ASPECTS.map((a, i) => [String(i), a.label] as const)}
           onChange={(i) => {
@@ -365,7 +378,7 @@ function Resolution({ v, set }: { v: Settings; set: SetFn }): JSX.Element {
           }}
         />
       </Row>
-      <Row label="Resolution" hint="The host makes a display exactly this size — no scaling." htmlFor="pf-size">
+      <Row label={m.player_resolution()} hint={m.player_resolution_hint()} htmlFor="pf-size">
         <Select
           value={custom ? CUSTOM : `${v.width}x${v.height}`}
           onValueChange={(value) => {
@@ -381,19 +394,19 @@ function Resolution({ v, set }: { v: Settings; set: SetFn }): JSX.Element {
         >
           <SelectTrigger id="pf-size"><SelectValue /></SelectTrigger>
           <SelectContent>
-            <SelectItem value="0x0">Follow the window</SelectItem>
+            <SelectItem value="0x0">{m.browser_resolution_window()}</SelectItem>
             {sizes.map(([w, h]) => <SelectItem key={`${w}x${h}`} value={`${w}x${h}`}>{w} × {h}</SelectItem>)}
-            <SelectItem value={CUSTOM}>{custom ? `Custom (${v.width} × ${v.height})` : "Custom…"}</SelectItem>
+            <SelectItem value={CUSTOM}>{custom ? m.player_resolution_custom_size({ width: v.width, height: v.height }) : m.player_resolution_custom()}</SelectItem>
           </SelectContent>
         </Select>
       </Row>
       {custom && (
-        <Row label="Custom size" hint="Width × height in pixels. Applied when a field loses focus.">
+        <Row label={m.player_resolution_custom_row()} hint={m.browser_custom_size_hint()}>
           <div className="flex items-center gap-2">
             {/* Keyed on the stored side, so a size the rule clamped shows what was kept. */}
-            <SizeField key={`w${v.width}`} label="Width" value={v.width} onCommit={(w) => typed(w, v.height)} />
+            <SizeField key={`w${v.width}`} label={m.player_resolution_width()} value={v.width} onCommit={(w) => typed(w, v.height)} />
             <span aria-hidden="true">×</span>
-            <SizeField key={`h${v.height}`} label="Height" value={v.height} onCommit={(h) => typed(v.width, h)} />
+            <SizeField key={`h${v.height}`} label={m.player_resolution_height()} value={v.height} onCommit={(h) => typed(v.width, h)} />
           </div>
         </Row>
       )}
@@ -437,12 +450,12 @@ function Advanced({
   onShow: () => void;
   children: ReactNode;
 }): JSX.Element | null {
-  if (show) return <Group title="Advanced">{children}</Group>;
+  if (show) return <Group title={m.prefs_advanced()}>{children}</Group>;
   if (changed === 0) return null;
   return (
     <Group>
-      <Row label={changed === 1 ? "1 advanced setting changed" : `${changed} advanced settings changed`}>
-        <Button size="sm" variant="secondary" onClick={onShow}>Show</Button>
+      <Row label={m.prefs_advanced_changed({ count: changed })}>
+        <Button size="sm" variant="secondary" onClick={onShow}>{m.browser_prefs_show_advanced()}</Button>
       </Row>
     </Group>
   );
@@ -560,7 +573,7 @@ function Toggle({
       <Segmented
         label={label}
         value={on ? "on" : "off"}
-        options={[["off", "Off"], ["on", "On"]]}
+        options={[["off", m.common_off()], ["on", m.common_on()]]}
         onChange={(v) => onChange(v === "on")}
       />
     </Row>
