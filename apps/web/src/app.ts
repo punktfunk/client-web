@@ -9,6 +9,7 @@
 // hosts, trust, pairing and the session lives in the library, which is what lets the same engine
 // sit under a TV app without a line of this file.
 
+import "./words.ts";
 import {
   captureLog,
   Engine,
@@ -46,6 +47,7 @@ import {
 } from "@punktfunk/stream";
 import { type Configured, readConfig, type ServerConfig } from "./config.ts";
 import { m } from "./paraglide/messages.js";
+import { apiText } from "./words.ts";
 import { ConsoleUi } from "./ui/console.ts";
 import { noop, WebShell } from "./ui/shell.tsx";
 import type { HostCard, HostTools, ProfileCard, Screen, Tab, Ui } from "./ui/types.ts";
@@ -344,8 +346,8 @@ class App {
       case "unreachable":
         return this.show({
           kind: "error",
-          head: "No answer",
-          text: `Nothing responded at ${bare(s.origin)}. Check the address, and that the host is running.`,
+          head: m.browser_no_answer_title(),
+          text: m.error_host_timeout(),
           retry: true,
         });
       case "untrusted":
@@ -374,7 +376,7 @@ class App {
           kind: "pair",
           origin: s.origin,
           mode: "first",
-          error: s.reason ? sentence(s.reason) : "That PIN was refused.",
+          error: s.reason ? sentence(s.reason) : m.pair_wrong_pin(),
         });
       case "forgotten":
         return this.show({ kind: "pair", origin: s.origin, mode: "again" });
@@ -434,13 +436,11 @@ class App {
         return this.show({
           kind: "error",
           head: s.skew
-            ? "This host speaks a different version"
+            ? m.browser_skew_title()
             : this.dropped
               ? "The stream stopped"
-              : "Something went wrong",
-          text: s.skew
-            ? `${sentence(s.message)} Update the host, or this page, so the two agree.`
-            : sentence(s.message),
+              : m.browser_error_title(),
+          text: s.skew ? `${sentence(s.message)} ${m.browser_skew_hint()}` : sentence(s.message),
           retry: !s.skew,
         });
       }
@@ -628,10 +628,10 @@ class App {
     if (parsed === null) return;
     history.replaceState(null, "", location.pathname + location.hash);
     if (typeof parsed === "string") {
-      return this.show({ kind: "error", head: "That link can't be used", text: LINK_ERRORS[parsed] });
+      return this.show({ kind: "error", head: m.link_refused_title(), text: LINK_ERRORS[parsed]() });
     }
     const found = this.resolveLink(parsed);
-    if (typeof found === "string") return this.show({ kind: "error", head: "That link can't be used", text: found });
+    if (typeof found === "string") return this.show({ kind: "error", head: m.link_refused_title(), text: found });
     const { target, name, address } = found;
     this.link = { target, ...(parsed.fp ? { fp: parsed.fp } : {}), ...(parsed.launch ? { launch: parsed.launch } : {}) };
     this.show({ kind: "link", name, address, ...(parsed.launch ? { launch: parsed.launch } : {}) });
@@ -651,10 +651,10 @@ class App {
     }
     const byOrigin = all.find((h) => h.origin === origin || h.origin === link.host.replace(/\/+$/, ""));
     const byName = all.filter((h) => h.name?.toLowerCase() === link.host.toLowerCase());
-    if (!byOrigin && byName.length > 1) return `More than one host here is called “${link.host}”.`;
+    if (!byOrigin && byName.length > 1) return m.link_ambiguous_host({ name: link.host });
     const hit = byOrigin ?? byName[0];
     if (hit) return { target: this.targetOf(hit.origin), name: hit.name ?? bare(hit.origin), address: bare(hit.origin) };
-    if (!origin) return `“${link.host}” is not an address or a host this page knows.`;
+    if (!origin) return m.link_unknown_host({ name: link.host });
     return { target: this.targetOf(link.host), name: link.name ?? bare(origin), address: bare(origin) };
   }
 
@@ -684,10 +684,10 @@ class App {
     const fingerprint = this.engine.knownHosts().find((h) => h.origin === origin)?.fingerprint;
     try {
       await navigator.clipboard.writeText(linkFor(location.href, origin, fingerprint));
-      this.ui.notify(`Link to ${this.nameOf(origin)} copied.`);
+      this.ui.notify(m.hostcard_link_copied());
     } catch (e) {
       console.warn("punktfunk: copy link", e);
-      this.ui.notify("Couldn't copy the link — the browser kept the clipboard.", "error");
+      this.ui.notify(m.hostcard_link_copy_failed(), "error");
     }
   }
 
@@ -705,7 +705,7 @@ class App {
     try {
       const r = await serverFetch()(url, { method: "POST" });
       if (r.status === 403 || r.status === 429) {
-        const why = r.status === 429 ? m.browser_too_many() : `Only a browser paired with ${this.nameOf(origin)} can wake it from this page.`;
+        const why = r.status === 429 ? m.browser_too_many() : m.browser_wake_unpaired({ host: this.nameOf(origin) });
         this.ui.notify(why, "error");
         return false;
       }
@@ -717,11 +717,11 @@ class App {
         this.reachCache.set(origin, { reach: now, at: Date.now() });
         up = now === "ok";
       }
-      if (!up) this.ui.notify(`${this.nameOf(origin)} didn't answer within a minute of waking. It may still be starting.`, "error");
+      if (!up) this.ui.notify(m.browser_wake_timeout({ host: this.nameOf(origin) }), "error");
       return true;
     } catch (e) {
       console.warn("punktfunk: wake", e);
-      this.ui.notify(`Couldn't wake ${this.nameOf(origin)} — this page's server didn't send the wake packet.`, "error");
+      this.ui.notify(m.browser_wake_failed({ host: this.nameOf(origin) }), "error");
       return false;
     } finally {
       this.waking.delete(origin);
@@ -763,8 +763,8 @@ class App {
       if (e instanceof VersionSkew) {
         return this.show({
           kind: "error",
-          head: "This host speaks a different version",
-          text: `${sentence(e.message)} Update the host, or this page, so the two agree.`,
+          head: m.browser_skew_title(),
+          text: `${sentence(e.message)} ${m.browser_skew_hint()}`,
         });
       }
       // The stream still works without a library, so this is a line on the page rather than a
@@ -846,7 +846,7 @@ class App {
       ...(mine ? this.resumable() : {}),
       ...(mine && connected && this.running && this.runningEndable ? { endable: true } : {}),
       ...(mine && this.endNotice ? { notice: this.endNotice } : {}),
-      ...(mine && this.libraryError ? { error: `${sentence(this.libraryError)} You can still stream the desktop.` } : {}),
+      ...(mine && this.libraryError ? { error: m.browser_lib_load_failed_desktop({ why: sentence(this.libraryError) }) } : {}),
     });
     void this.probe(shelves.map((h) => h.origin));
   }
@@ -880,7 +880,7 @@ class App {
           enabled: a.available && a.permitted,
           ...(a.available && a.permitted
             ? {}
-            : { reason: a.available ? "This device's access does not include it" : (a.unavailable_reason ?? "Not on this host") }),
+            : { reason: a.available ? "This device's access does not include it" : (apiText(a["unavailable_code"] as string | undefined, a["unavailable_params"] as Record<string, string> | undefined, a.unavailable_reason) ?? "Not on this host") }),
         })),
       });
     } catch (e) {
@@ -1139,7 +1139,7 @@ class App {
       cards: gate.rows.map((p) => cardOf(p, this.pictures)),
       ...(saved ? { saved: saved.id } : {}),
       ...(decision?.gone ? { gone: decision.gone } : {}),
-      ...(listed === undefined ? { error: "Couldn't load the profiles." } : {}),
+      ...(listed === undefined ? { error: m.profile_load_failed() } : {}),
     };
     this.gateShow(gate, picker);
     void this.readPictures(gate, picker);
@@ -1213,7 +1213,7 @@ class App {
   }
 
   private gateFailed(gate: Gate, line: string): void {
-    this.gateShow(gate, { kind: "error", head: "Couldn't start the stream", text: sentence(line) });
+    this.gateShow(gate, { kind: "error", head: m.browser_gate_failed_title(), text: sentence(line) });
   }
 
   private cancelGate(): void {
@@ -1296,12 +1296,12 @@ function readShelf(): string | null {
 }
 
 /** Why a link was refused, as a sentence. */
-const LINK_ERRORS: Record<Exclude<ReturnType<typeof parseLink>, PageLink | null>, string> = {
-  "missing-host": "It does not say which host to connect to.",
-  "too-long": "One of its parts is longer than a real link's.",
-  "control-char": "It carries characters no real link does.",
-  "bad-fingerprint": "Its host fingerprint is not one.",
-  "bad-launch": "Its game id is not a valid one.",
+const LINK_ERRORS: Record<Exclude<ReturnType<typeof parseLink>, PageLink | null>, () => string> = {
+  "missing-host": () => m.link_error_missing_host_ref(),
+  "too-long": () => m.link_error_too_long(),
+  "control-char": () => m.link_error_malformed(),
+  "bad-fingerprint": () => m.link_error_bad_fingerprint(),
+  "bad-launch": () => m.link_error_bad_launch_id(),
 };
 
 /** The engine speaks in lowercase fragments, as logs do; a screen speaks in sentences. */
@@ -1416,7 +1416,7 @@ const EXIT_HINT_MS = 6000;
 /** How to leave with the input in hand: the pad chord with a controller connected, the dial's
  *  End stream on a touchscreen, the key otherwise. */
 function exitHintText(): string {
-  if (navigator.getGamepads?.().some((g) => g?.mapping === "standard")) return "Hold L1 + R1 + Start + Select to leave";
-  if (matchMedia("(pointer: coarse)").matches) return "Menu, then End stream, to leave";
-  return "Ctrl+Alt+Shift+D to leave";
+  if (navigator.getGamepads?.().some((g) => g?.mapping === "standard")) return m.notice_exit_hold({ keys: "L1 + R1 + Start + Select" });
+  if (matchMedia("(pointer: coarse)").matches) return m.browser_exit_menu();
+  return m.notice_exit_keys({ keys: "Ctrl+Alt+Shift+D" });
 }
