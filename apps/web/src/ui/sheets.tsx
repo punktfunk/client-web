@@ -204,7 +204,7 @@ export function ErrorCard({ screen, actions }: Props<"error">): JSX.Element {
       <Sub>{screen.text}</Sub>
       <Row>
         <Button autoFocus variant="secondary" onClick={() => actions.back()}>{m.common_back()}</Button>
-        {screen.retry && <Button onClick={() => actions.retry()}>{m.common_try_again()}</Button>}
+        {screen.retry && <Button onClick={() => actions.retry()}>{m.common_retry()}</Button>}
       </Row>
     </Sheet>
   );

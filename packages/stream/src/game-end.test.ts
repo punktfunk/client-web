@@ -11,7 +11,7 @@ test("a status maps to what the player is told, in the native clients' words", (
   assert.equal(gameEndOf(401).kind, "unsupported");
   assert.equal(gameEndOf(404).kind, "unsupported");
   assert.equal(gameEndOf(403).kind, "expired");
-  assert.equal(gameEndNotice(gameEndOf(409), "Hades"), "Hades isn't running any more.");
+  assert.equal(gameEndNotice(gameEndOf(409), "Hades"), "Hades isn't running anymore.");
   assert.equal(gameEndNotice(gameEndOf(500), "Hades"), "Couldn't end Hades \u2014 the host refused it (500)");
 });
 
