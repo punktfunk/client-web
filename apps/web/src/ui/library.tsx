@@ -80,7 +80,7 @@ export function Library({ screen, actions }: { screen: LibraryScreen; actions: A
       {screen.shelves.length > 1 && <ShelfSwitcher shelves={screen.shelves} current={origin} actions={actions} />}
 
       <section aria-label={m.lib_section_desktops()} className="flex flex-col gap-3">
-        <h2 className="text-xs font-medium tracking-wide text-muted-foreground uppercase">{m.lib_section_desktops()}</h2>
+        <h2 className="text-xs font-medium text-muted-foreground">{m.lib_section_desktops()}</h2>
         {/* A scroller clips everything past its box, rings and shadows included, so the row is
             padded out to the page's gutters and back in again: it bleeds to the page's edge, as
             the macOS shelf does, and nothing a card draws outside itself is cut off. */}
@@ -96,7 +96,7 @@ export function Library({ screen, actions }: { screen: LibraryScreen; actions: A
 
       <section aria-label={m.lib_section_games()} className="flex flex-col gap-4">
         <div className="flex flex-wrap items-center justify-between gap-3">
-          <h2 className="text-xs font-medium tracking-wide text-muted-foreground uppercase">{m.lib_section_games()}</h2>
+          <h2 className="text-xs font-medium text-muted-foreground">{m.lib_section_games()}</h2>
           {screen.entries.length > 0 && (
             <label className="relative w-full max-w-xs">
               <Search className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted-foreground" aria-hidden="true" />

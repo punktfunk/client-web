@@ -326,7 +326,7 @@ function SettingsTabs({ screen, actions }: { screen: SettingsScreen; actions: Ac
             ),
           )}
         </Group>
-        <Group title="punktfunk web">
+        <Group title="Punktfunk web">
           <Row label={m.about_version()}>
             <span className="font-mono text-sm text-muted-foreground">{__PF_VERSION__}</span>
           </Row>
@@ -477,7 +477,7 @@ function Panel({ value, children }: { value: TabName; children: ReactNode }): JS
 function Group({ title, children }: { title?: string; children: ReactNode }): JSX.Element {
   return (
     <section className="flex flex-col gap-2">
-      {title && <h2 className="px-1 text-xs font-medium tracking-wide text-muted-foreground uppercase">{title}</h2>}
+      {title && <h2 className="px-1 text-xs font-medium text-muted-foreground">{title}</h2>}
       <Card className="flex flex-col gap-4 p-5">
         <Stagger gap={ROW_GAP} className="contents [&>*+*]:border-t [&>*+*]:border-border [&>*+*]:pt-4">
           {rows(children).map((child, i) => (
