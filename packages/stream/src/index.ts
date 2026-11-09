@@ -11,10 +11,13 @@ export {
   type EngineState,
   type HostTarget,
   type HudLine,
+  pageShortcuts,
   type SessionStats,
+  SHORTCUT_ACTIONS,
   type StreamOptions,
   type TunableOptions,
 } from "./engine.ts";
+export { type Action, type Binding, chord, type Conflict, type Group, MODIFIERS, type Press, type Row, Shortcuts, type Trigger } from "./shortcuts.ts";
 export { DEFAULTS, HUD_CORNERS, type HudCorner, settings, STATS_SCALES, type Settings, type StatsTier } from "./settings.ts";
 export { ASPECTS, aspectOf, customSize, nearest } from "./resolutions.ts";
 export type { AudioSnapshot, AudioState } from "./audio.ts";
@@ -52,6 +55,6 @@ export { deviceName, exitApp, packaged, remoteKey, tizen, tizenInfo } from "./pl
 export { tunnelFetch, type TunnelFetch } from "./tunnel.ts";
 export { onPass, serverFetch } from "./pass.ts";
 export { type HostWords, setWords, type Words } from "./words.ts";
-export { tvBack } from "./input.ts";
+export { padButtons, shortcutKey, tvBack } from "./input.ts";
 export { type LinkError, linkFor, type PageLink, parseLink } from "./links.ts";
 export type { VideoPlane, UploadStats } from "./video-surface.ts";

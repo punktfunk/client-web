@@ -9,6 +9,7 @@
 // picker again is not still swallowing its own keystrokes.
 
 import type { PunktfunkModule } from "./emscripten.ts";
+import { type Action, type Device, Engine, keyName, MODIFIER_VKS, type Out, type Shortcuts } from "./shortcuts.ts";
 
 /** `InputKind`, by number. Kept beside the wire it mirrors. */
 const KIND = {
@@ -92,6 +93,24 @@ const BUTTON_BITS: ReadonlyArray<readonly [bit: number, button: number]> = [
 /** Both Meta keys' virtual-key codes. */
 const META: ReadonlySet<number> = new Set([0x5b, 0x5c]);
 
+/** Left and right Shift, Ctrl and Alt, as the one modifier a shortcut names. */
+const FOLD: Readonly<Record<number, number>> = { 0xa0: 0x10, 0xa1: 0x10, 0xa2: 0x11, 0xa3: 0x11, 0xa4: 0x12, 0xa5: 0x12 };
+
+/** The stored name of the key at `code`, for a recorded shortcut; undefined for a key the wire lacks. */
+export function shortcutKey(code: string): string | undefined {
+  const vk = VK[code];
+  return vk === undefined ? undefined : keyName(FOLD[vk] ?? vk);
+}
+
+/** A standard-mapping pad's pressed buttons as core's `gamepad::BTN_*` bits. */
+export function padButtons(g: Gamepad): number {
+  let buttons = 0;
+  g.buttons.forEach((b, i) => {
+    if (b.pressed && STANDARD_BUTTONS[i]) buttons |= STANDARD_BUTTONS[i]!;
+  });
+  return buttons;
+}
+
 /** One wheel notch on the wire. */
 const WHEEL_NOTCH = 120;
 
@@ -108,39 +127,13 @@ export interface InputOptions {
   deadzone: number;
   /** Scroll against the wheel's own direction. */
   invertScroll?: boolean;
-  /** A chord this page handles itself, never sent: see [`Chord`]. */
-  onChord?: (chord: Chord) => void;
+  /** The bindings the keyboard and each pad run on, read when the pipe is made. Pass only the
+   *  actions `onShortcut` performs. */
+  shortcuts?: Shortcuts;
+  /** A shortcut fired, on a pad or the keyboard; its keys never reach the host. The remote's
+   *  Back fires `ring`. */
+  onShortcut?: (action: Action, device: Device) => void;
 }
-
-/**
- * The shortcuts every punktfunk client shares. On the keyboard: Ctrl+Alt+Shift with S (stats),
- * O (quick menu), Q (release input), D (end the stream), M (mouse model), V (microphone), and F11
- * or Alt+Enter
- * (fullscreen). On a pad: Back+A (quick menu), and LB+RB+Start+Back, which releases input and
- * leaves fullscreen when pressed and ends the stream when held.
- */
-export type Chord =
-  | "stats"
-  | "menu"
-  | "release"
-  | "end"
-  | "mouse"
-  | "mic"
-  | "fullscreen"
-  | "escape"
-  | "escape-hold";
-
-const KEY_CHORDS: Record<string, Chord> = {
-  KeyS: "stats",
-  KeyV: "mic",
-  KeyO: "menu",
-  KeyQ: "release",
-  KeyD: "end",
-  KeyM: "mouse",
-};
-
-/** How long the pad's escape chord must be held to end the stream, as on the native clients. */
-const ESCAPE_HOLD_MS = 1500;
 
 /**
  * A TV remote's Back. Samsung's runtime sends it as `code: "Escape"` with `key: "XF86Back"` and
@@ -151,16 +144,12 @@ export function tvBack(e: KeyboardEvent): boolean {
   return e.key === "XF86Back" || e.keyCode === 10009;
 }
 
-/** Standard-mapping indices: A, LB, RB, Back, Start. */
-const PAD = { A: 0, LB: 4, RB: 5, BACK: 8, START: 9 } as const;
-
 /**
  * Every listener the session needs, on one canvas. `attach` starts them, `detach` removes
  * every one; `poll` reads the gamepads and is called once per frame by the engine's loop.
  */
 export class InputPipe {
   private readonly off: Array<() => void> = [];
-  private pads = new Set<number>();
   /** Fractional wheel travel carried to the next event, so slow scrolls still arrive. */
   private wheel = { x: 0, y: 0 };
   private touches = new Map<number, number>();
@@ -170,15 +159,20 @@ export class InputPipe {
    *  release lets go of them. */
   private underMeta = new Set<number>();
   private held = 0;
-  /** Per pad: when the escape chord went down (`0` up), whether its hold fired, and whether
-   *  the menu chord is down — each chord fires on its edge, not every frame it is held. */
-  private chords = new Map<number, { escapeSince: number; held: boolean; menu: boolean }>();
+  /** The keyboard's shortcuts. Its ids are VKs with the modifiers folded (`FOLD`). */
+  private readonly kb: Engine;
+  /** The side of a folded modifier the host holds, by the engine's id. */
+  private sides = new Map<number, number>();
+  /** Per pad: its shortcuts, the buttons physically down, and the buttons the host holds. */
+  private padState = new Map<number, { engine: Engine; physical: number; host: number }>();
 
   constructor(
     private readonly mod: PunktfunkModule,
     private readonly canvas: HTMLCanvasElement,
     private opts: InputOptions,
-  ) {}
+  ) {
+    this.kb = new Engine(opts.shortcuts?.bindings ?? [], "key");
+  }
 
   /** Is the pointer locked to the canvas right now? Asking the document rather than tracking a
    *  flag: the browser releases the lock on its own (Escape, losing the tab) and never asks. */
@@ -266,32 +260,63 @@ export class InputPipe {
 
   detach(): void {
     for (const f of this.off.splice(0)) f();
-    for (const pad of [...this.pads]) this.leave(pad);
+    for (const pad of [...this.padState.keys()]) this.leave(pad);
     if (document.pointerLockElement === this.canvas) document.exitPointerLock();
     this.touches.clear();
   }
 
-  /** Once per frame: the pads. Buttons and sticks are read whole; Rust sends what changed. */
+  /**
+   * Once per frame: the pads. Buttons go through the pad's shortcuts, which decide what the host
+   * holds; that and the sticks are sent whole, and Rust sends what changed. A bit that flips back
+   * within one frame is sent between, so a tap's release is never folded away.
+   */
   poll(): void {
+    const now = performance.now();
     for (const g of navigator.getGamepads()) {
-      if (!g || !this.pads.has(g.index)) continue;
-      if (g.mapping === "standard") this.padChords(g);
-      let buttons = 0;
-      g.buttons.forEach((b, i) => {
-        if (b.pressed && STANDARD_BUTTONS[i]) buttons |= STANDARD_BUTTONS[i]!;
-      });
+      const p = g && this.padState.get(g.index);
+      if (!g || !p) continue;
+      const buttons = padButtons(g);
+      const outs: Out[] = [];
+      for (let bit = 1, changed = buttons ^ p.physical; changed; bit <<= 1) {
+        if (!(changed & bit)) continue;
+        changed &= ~bit;
+        outs.push(...p.engine.step(bit, (buttons & bit) !== 0, now));
+      }
+      p.physical = buttons;
+      outs.push(...p.engine.tick(now));
       const stick = (v: number | undefined) => {
         const x = v ?? 0;
         return Math.abs(x) < this.opts.deadzone ? 0 : Math.round(x * STICK);
       };
       const trigger = (i: number) => Math.round((g.buttons[i]?.value ?? 0) * 255);
       // Browser sticks are +y down; the wire is +y up.
-      this.mod._pf_gamepad(
-        g.index, buttons,
-        stick(g.axes[0]), -stick(g.axes[1]),
-        stick(g.axes[2]), -stick(g.axes[3]),
-        trigger(6), trigger(7),
-      );
+      const send = () =>
+        this.mod._pf_gamepad(
+          g.index, p.host,
+          stick(g.axes[0]), -stick(g.axes[1]),
+          stick(g.axes[2]), -stick(g.axes[3]),
+          trigger(6), trigger(7),
+        );
+      let touched = 0;
+      for (const o of outs) {
+        if ("fire" in o) {
+          // The lift reaches the host before the action runs.
+          if (touched) send();
+          touched = 0;
+          this.fire(o, "pad");
+          continue;
+        }
+        const [mask, down] = "forward" in o ? o.forward : [o.lift.reduce((a, b) => a | b, 0), false];
+        const next = down ? p.host | mask : p.host & ~mask;
+        const flip = next ^ p.host;
+        if (touched & flip) {
+          send();
+          touched = 0;
+        }
+        touched |= flip;
+        p.host = next;
+      }
+      send();
     }
   }
 
@@ -303,56 +328,80 @@ export class InputPipe {
     const local =
       !!t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable || !!t.closest?.("[data-pf-keys=local]"));
     const vk = VK[e.code];
-    // A key the host holds is let go wherever its release lands: in the menu, a field, or as a chord.
-    if (!down && vk !== undefined && this.keys.has(vk)) {
-      if (!local) e.preventDefault();
-      return this.up(vk);
+    // A release reaches the shortcuts wherever it lands: in the menu, a field, or after a chord.
+    if (local) {
+      if (!down && vk !== undefined) this.feed(vk, false, false);
+      return;
     }
-    if (local) return;
-    const chord =
-      e.ctrlKey && e.altKey && e.shiftKey
-        ? KEY_CHORDS[e.code]
-        : e.code === "F11" || (e.code === "Enter" && e.altKey && !e.ctrlKey && !e.shiftKey)
-          ? "fullscreen"
-          : tvBack(e)
-            ? "menu"
-            : undefined;
-    if (chord) {
+    if (tvBack(e)) {
       e.preventDefault();
-      if (down && !e.repeat) this.opts.onChord?.(chord);
+      if (down && !e.repeat) this.opts.onShortcut?.("ring", "key");
       return;
     }
     if (vk === undefined) return;
     // Before the repeat check: a held Tab's own repeat would walk focus off the canvas.
     e.preventDefault();
-    if (!down) return this.up(vk);
     // Held keys repeat on the host; the browser's own repeat would double them.
-    if (e.repeat) return;
-    this.keys.add(vk);
-    if (e.metaKey && !META.has(vk)) this.underMeta.add(vk);
-    this.mod._pf_input(KIND.KEY_DOWN, vk, 0, 0, 0);
+    if (down && e.repeat) return;
+    this.feed(vk, down, e.metaKey);
   }
 
-  /** The host lets go of `vk`. A Meta release also lets go of the keys pressed under it that
-   *  are still down: their own keyups never come on macOS. */
+  /** One key through the keyboard's shortcuts; what they forward reaches the host. */
+  private feed(vk: number, down: boolean, meta: boolean): void {
+    const id = FOLD[vk] ?? vk;
+    if (down && id !== vk && !this.sides.has(id)) this.sides.set(id, vk);
+    for (const o of this.kb.step(id, down, performance.now())) {
+      if ("fire" in o) this.fire(o, "key");
+      else if ("lift" in o) for (const k of o.lift) this.up(this.side(k));
+      else if (!o.forward[1]) this.up(this.side(o.forward[0]));
+      else {
+        const real = this.sides.get(o.forward[0]) ?? o.forward[0];
+        this.keys.add(real);
+        if (meta && !META.has(real)) this.underMeta.add(real);
+        this.mod._pf_input(KIND.KEY_DOWN, real, 0, 0, 0);
+      }
+    }
+  }
+
+  /** The VK the host holds for the engine's `id`; a modifier's side is forgotten with it. */
+  private side(id: number): number {
+    const vk = this.sides.get(id) ?? id;
+    this.sides.delete(id);
+    return vk;
+  }
+
+  /** The host lets go of `vk`, if it holds it. A Meta release also lets go of the keys pressed
+   *  under it that are still down: their own keyups never come on macOS. */
   private up(vk: number): void {
-    this.keys.delete(vk);
+    if (!this.keys.delete(vk)) return;
     this.underMeta.delete(vk);
     this.mod._pf_input(KIND.KEY_UP, vk, 0, 0, 0);
     if (!META.has(vk)) return;
     const under = [...this.underMeta];
     this.underMeta.clear();
-    for (const k of under) if (this.keys.has(k)) this.up(k);
+    for (const k of under) this.feed(k, false, false);
   }
 
-  /** Let go of every key, button and pad the host holds. The next poll sends a pad that is still
-   *  in use again. */
+  /** A fired shortcut. `once` and `tap` run it; a key-like action's `down` and `up` have nothing
+   *  to run here, since the page binds none. */
+  private fire({ fire: [action, phase] }: { fire: [Action, string] }, device: Device): void {
+    if (phase === "once" || phase === "tap") this.opts.onShortcut?.(action, device);
+  }
+
+  /** Let go of every key, button and pad the host holds. The next poll presses a pad's buttons
+   *  that are still down again. */
   private release(): void {
+    for (const o of this.kb.flush()) if ("lift" in o) for (const k of o.lift) this.up(this.side(k));
     for (const vk of this.keys) this.mod._pf_input(KIND.KEY_UP, vk, 0, 0, 0);
     this.keys.clear();
     this.underMeta.clear();
+    this.sides.clear();
     this.press(0);
-    for (const pad of this.pads) this.mod._pf_gamepad(pad, 0, 0, 0, 0, 0, 0, 0);
+    for (const [pad, p] of this.padState) {
+      p.engine.flush();
+      p.physical = p.host = 0;
+      this.mod._pf_gamepad(pad, 0, 0, 0, 0, 0, 0, 0);
+    }
   }
 
   /** Send what changed in `MouseEvent.buttons`. A second button pressed or released while one is
@@ -468,36 +517,17 @@ export class InputPipe {
   }
 
   // --- gamepads --------------------------------------------------------------------------
-  private padChords(g: Gamepad): void {
-    const on = (i: number) => g.buttons[i]?.pressed ?? false;
-    const st = this.chords.get(g.index) ?? { escapeSince: 0, held: false, menu: false };
-    const escape = on(PAD.LB) && on(PAD.RB) && on(PAD.START) && on(PAD.BACK);
-    if (escape && !st.escapeSince) {
-      st.escapeSince = performance.now();
-      st.held = false;
-      this.opts.onChord?.("escape");
-    } else if (escape && !st.held && performance.now() - st.escapeSince >= ESCAPE_HOLD_MS) {
-      st.held = true;
-      this.opts.onChord?.("escape-hold");
-    } else if (!escape) {
-      st.escapeSince = 0;
-    }
-    const menu = on(PAD.BACK) && on(PAD.A);
-    if (menu && !st.menu) this.opts.onChord?.("menu");
-    st.menu = menu;
-    this.chords.set(g.index, st);
-  }
-
   /** Only a standard-mapping pad is forwarded: its button indices are the only ones this reads,
    *  and any other layout would press the wrong buttons on the host. */
   private arrive(g: Gamepad): void {
-    if (this.pads.has(g.index) || g.mapping !== "standard") return;
-    this.pads.add(g.index);
+    if (this.padState.has(g.index) || g.mapping !== "standard") return;
+    this.padState.set(g.index, { engine: new Engine(this.opts.shortcuts?.bindings ?? [], "pad"), physical: 0, host: 0 });
     this.mod._pf_gamepad_arrival(g.index, padKind(g.id));
   }
 
+  /** The host drops a removed pad whole, so nothing its shortcuts held needs lifting. */
   private leave(index: number): void {
-    if (!this.pads.delete(index)) return;
+    if (!this.padState.delete(index)) return;
     this.mod._pf_gamepad_remove(index);
   }
 

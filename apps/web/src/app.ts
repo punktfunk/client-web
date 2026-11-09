@@ -28,7 +28,9 @@ import {
   packaged,
   type PageLink,
   pageLog,
+  pageShortcuts,
   parseLink,
+  type Press,
   pickerDecision,
   pickOf,
   profileNote,
@@ -40,6 +42,7 @@ import {
   serverFetch,
   type Settings,
   settings,
+  type Shortcuts,
   statusOf,
   VersionSkew,
   wakeFailed,
@@ -419,7 +422,9 @@ class App {
       }
       case "starting":
         return this.show({ kind: "connecting", origin: s.origin, phase: "starting" });
-      case "streaming":
+      case "streaming": {
+        const live = pageShortcuts(this.prefs.shortcuts);
+        const menuHint = this.menuOpen ? menuHintText(live) : undefined;
         return this.show({
           kind: "streaming",
           stats: { origin: s.origin, ...s.stats },
@@ -427,10 +432,12 @@ class App {
           menu: this.menuOpen,
           corner: this.prefs.hudPlacement,
           scale: this.prefs.statsScalePct / 100,
-          ...(this.hintSince ? { exitHint: exitHintText() } : {}),
+          ...(this.hintSince ? { exitHint: exitHintText(live) } : {}),
+          ...(menuHint ? { menuHint } : {}),
           ...(this.streamGame ? { endGame: this.streamGame.title } : {}),
           ...(this.streamNotice ? { notice: this.streamNotice } : {}),
         });
+      }
       case "error": {
         this.windowed();
         return this.show({
@@ -1011,6 +1018,7 @@ class App {
       codec: this.prefs.codec,
       hdr: this.prefs.hdr,
       invertScroll: this.prefs.invertScroll,
+      shortcuts: this.prefs.shortcuts,
     };
     this.engine.configure(changed ? Object.fromEntries(Object.entries(all).filter(([k]) => k in changed)) : all);
   }
@@ -1413,10 +1421,25 @@ try {
 /** How long the exit hint stays up; the page's keyframes fade it out over the last tenth. */
 const EXIT_HINT_MS = 6000;
 
-/** How to leave with the input in hand: the pad chord with a controller connected, the dial's
- *  End stream on a touchscreen, the key otherwise. */
-function exitHintText(): string {
-  if (navigator.getGamepads?.().some((g) => g?.mapping === "standard")) return m.notice_exit_hold({ keys: "L1 + R1 + Start + Select" });
-  if (matchMedia("(pointer: coarse)").matches) return m.browser_exit_menu();
-  return m.notice_exit_keys({ keys: "Ctrl+Alt+Shift+D" });
+/** The quick menu's last line, from its live bindings: the remote's Back and the pad on a TV,
+ *  the keys and the pad elsewhere. None when one of those is unbound. */
+function menuHintText(s: Shortcuts): string | undefined {
+  const line = (p: Press | undefined) => p && (p.hold ? m.controls_hold({ keys: p.keys }) : p.keys);
+  const pad = line(s.hint("ring", "pad"));
+  const keys = line(s.hint("ring", "key"));
+  if (!pad) return undefined;
+  if (packaged()) return m.browser_ring_menu_hint_tv({ remote: "Back", pad });
+  return keys && m.browser_ring_menu_hint({ keys, pad });
+}
+
+/** How to leave with the input in hand: End stream's pad trigger with a controller connected,
+ *  the menu on a touchscreen, its key otherwise, the menu when nothing is bound. */
+function exitHintText(s: Shortcuts): string {
+  const pad = s.hint("end_stream", "pad");
+  if (pad && navigator.getGamepads?.().some((g) => g?.mapping === "standard")) {
+    return pad.hold ? m.notice_exit_hold({ keys: pad.keys }) : m.notice_exit_keys({ keys: pad.keys });
+  }
+  const key = s.hint("end_stream", "key");
+  if (!key || matchMedia("(pointer: coarse)").matches) return m.browser_exit_menu();
+  return m.notice_exit_keys({ keys: key.keys });
 }
