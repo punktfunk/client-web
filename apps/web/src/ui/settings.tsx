@@ -4,10 +4,30 @@
 // control on the right, and a choice of four or fewer as buttons side by side. Each tab's
 // advanced rows show under Show advanced; hidden, a tab says how many of them are changed.
 
-import { ASPECTS, aspectOf, customSize, DEFAULTS, nearest, type Settings, STATS_SCALES, tizen } from "@punktfunk/stream";
+import {
+  type Action,
+  ASPECTS,
+  aspectOf,
+  type Binding,
+  chord,
+  customSize,
+  DEFAULTS,
+  MODIFIERS,
+  nearest,
+  padButtons,
+  pageShortcuts,
+  type Press,
+  type Settings,
+  SHORTCUT_ACTIONS,
+  shortcutKey,
+  Shortcuts,
+  STATS_SCALES,
+  tizen,
+  type Trigger,
+} from "@punktfunk/stream";
 import { cn } from "@unom/ui/lib/utils";
 import { motion } from "motion/react";
-import { Children, Fragment, isValidElement, type JSX, type ReactNode, useState } from "react";
+import { Children, Fragment, isValidElement, type JSX, type ReactNode, useEffect, useState } from "react";
 import { ROW, ROW_GAP, Stagger } from "@/components/stagger";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -44,20 +64,51 @@ type TabName = keyof typeof TABS;
 /** The tab last open, for the next time settings open this visit. */
 let lastTab: TabName = "general";
 
-/** What the page binds while streaming, as `pf_client_core::shortcuts` lists it for the console:
- *  `input.ts` holds the bindings. The Samsung set adds the remote's Back, and has no Esc row
- *  because Esc still reaches the host there. */
-const CONTROLS: ReadonlyArray<readonly [keys: string, text: () => string]> = [
-  ["Ctrl+Alt+Shift+Q", () => m.controls_release_mouse()],
-  ["Esc", () => m.controls_release_mouse_page()],
-  ["Ctrl+Alt+Shift+D", () => m.controls_disconnect()],
-  ["Ctrl+Alt+Shift+S", () => m.controls_cycle_stats()],
-  ["Ctrl+Alt+Shift+O", () => m.controls_open_menu()],
-  ["Ctrl+Alt+Shift+V", () => m.controls_toggle_mic()],
-  ["Ctrl+Alt+Shift+M", () => m.controls_switch_mouse_mode()],
-  [m.controls_either({ first: "F11", second: "Alt+Enter" }), () => m.controls_toggle_fullscreen()],
-  ["Select + A", () => m.browser_controls_open_menu_pad()],
-  ["L1 + R1 + Start + Select", () => m.browser_controls_release_pad()],
+// ponytail: English until the punktfunk pin carries the `shortcuts_*` and new `ring_*` messages
+// (PR #2348); then each of these is the `m.` call of the same name.
+const say = {
+  player_shortcuts: () => "Shortcuts",
+  shortcuts_lead: () => "Press these while a stream is running. Choose one to change it.",
+  shortcuts_does: () => "Does",
+  shortcuts_press: () => "Press",
+  shortcuts_fires_on: () => "Fires on",
+  shortcuts_fires_press: () => "Press",
+  shortcuts_fires_hold: () => "Hold",
+  shortcuts_record: () => "Record",
+  shortcuts_record_prompt: () => "Press the buttons or keys now",
+  shortcuts_choose: () => "Choose",
+  shortcuts_add: () => "Add shortcut",
+  shortcuts_reset: () => "Reset to defaults",
+  shortcuts_remove: () => "Remove",
+  shortcuts_replace: () => "Replace",
+  shortcuts_one_button_hold: () => "One button only works as a hold. A short press still reaches the game.",
+  shortcuts_subset: (p: { first: string; second: string }) => `${p.first} would fire before ${p.second} can complete`,
+  shortcuts_identical_replace: (p: { keys: string; action: string }) => `${p.keys} already does ${p.action}. Replace it?`,
+  shortcuts_not_on_device: () => "Not on this device",
+  shortcuts_needs_modifier: () => "Add Ctrl, Alt or Shift",
+  ring_open_ring: () => "Quick actions",
+  ring_release_input: () => "Release input",
+  ring_mouse_mode: () => "Mouse mode",
+  ring_fullscreen: () => "Fullscreen",
+};
+
+/** What each of `SHORTCUT_ACTIONS` is called, as the quick menu names it. */
+const ACTION_LABEL: Readonly<Record<Action, () => string>> = {
+  ring: say.ring_open_ring,
+  end_stream: () => m.ring_end_stream(),
+  disconnect_linger: () => m.ring_disconnect_linger(),
+  stats: () => m.ring_stats(),
+  mic: () => m.ring_mic(),
+  fullscreen: say.ring_fullscreen,
+  release_input: say.ring_release_input,
+  mouse_mode: say.ring_mouse_mode,
+};
+
+/** The buttons the Choose grid offers: a standard pad's, in the pad art's order. */
+const GRID: ReadonlyArray<readonly [name: string, bit: number]> = [
+  ["A", 0x1000], ["B", 0x2000], ["X", 0x4000], ["Y", 0x8000], ["L1", 0x0100], ["R1", 0x0200],
+  ["L3", 0x0040], ["R3", 0x0080], ["Select", 0x0020], ["Start", 0x0010], ["Guide", 0x0400],
+  ["Up", 0x0001], ["Down", 0x0002], ["Left", 0x0004], ["Right", 0x0008],
 ];
 
 /** Set by `vite.config.ts` from `git describe`. */
@@ -100,6 +151,7 @@ function SettingsTabs({ screen, actions }: { screen: SettingsScreen; actions: Ac
   const [tab, setTab] = useState<TabName>(lastTab);
   const v = screen.values;
   const set: SetFn = (patch) => actions.setSettings(patch);
+  const statsKeys = pageShortcuts(v.shortcuts).hint("stats", "key")?.keys;
   const advanced = (keys: ReadonlyArray<keyof Settings>, rows: ReactNode) => (
     <Advanced show={v.showAdvanced} changed={changed(v, keys)} onShow={() => set({ showAdvanced: true })}>
       {rows}
@@ -128,7 +180,7 @@ function SettingsTabs({ screen, actions }: { screen: SettingsScreen; actions: Ac
           />
         </Group>
         <Group title={m.prefs_group_statistics()}>
-          <Row label={m.player_stats_verbosity()} hint={m.player_stats_verbosity_cycle_hint({ keys: "Ctrl+Alt+Shift+S" })}>
+          <Row label={m.player_stats_verbosity()} hint={statsKeys && m.player_stats_verbosity_cycle_hint({ keys: statsKeys })}>
             <Segmented
               label={m.player_stats_verbosity()}
               value={v.statsTier}
@@ -294,6 +346,7 @@ function SettingsTabs({ screen, actions }: { screen: SettingsScreen; actions: Ac
             onChange={(on) => set({ captureInput: on })}
           />
         </Group>
+        <ShortcutsSection blob={v.shortcuts} set={set} />
       </Panel>
 
       <Panel value="audio">
@@ -317,15 +370,6 @@ function SettingsTabs({ screen, actions }: { screen: SettingsScreen; actions: Ac
       </Panel>
 
       <Panel value="about">
-        <Group title={m.about_stream_controls()}>
-          {(tizen() ? [["Back", () => m.controls_open_menu()] as const, ...CONTROLS.filter(([k]) => k !== "Esc")] : CONTROLS).map(
-            ([keys, text]) => (
-              <Row key={keys} label={text()}>
-                <kbd className="rounded bg-muted px-1.5 py-0.5 font-mono text-xs">{keys}</kbd>
-              </Row>
-            ),
-          )}
-        </Group>
         <Group title="Punktfunk web">
           <Row label={m.about_version()}>
             <span className="font-mono text-sm text-muted-foreground">{__PF_VERSION__}</span>
@@ -435,6 +479,231 @@ function SizeField({ label, value, onCommit }: { label: string; value: number; o
       onKeyDown={(e) => { if (e.key === "Enter") commit(); }}
     />
   );
+}
+
+const GROUP_TITLE: Readonly<Record<"remote" | "keyboard" | "pad", () => string>> = {
+  remote: () => m.controls_group_remote(),
+  keyboard: () => m.controls_group_keyboard(),
+  pad: () => m.controls_group_pad_full({ select: "Select", back: "Back", view: "View" }),
+};
+const FIXED_TEXT = { controls_open_menu: () => m.controls_open_menu(), controls_release_mouse_page: () => m.controls_release_mouse_page() };
+
+const actionLabel = (a: Action): string => ACTION_LABEL[a]?.() ?? a;
+const pressText = (p: Press): string =>
+  p.hold ? m.controls_hold({ keys: p.keys }) : p.or ? m.controls_either({ first: p.keys, second: p.or }) : p.keys;
+const Kbd = ({ children }: { children: ReactNode }) => <kbd className="rounded bg-muted px-1.5 py-0.5 font-mono text-xs">{children}</kbd>;
+
+/** The stream controls, editable: a binding row opens its editor in place, Add shortcut an empty
+ *  one, and Reset to defaults stores the empty blob. A stream keeps the bindings it started with. */
+function ShortcutsSection({ blob, set }: { blob: string; set: SetFn }): JSX.Element {
+  const [editing, setEditing] = useState<number | null>(null);
+  const all = pageShortcuts(blob);
+  const save = (next: Binding[]) => {
+    set({ shortcuts: JSON.stringify(new Shortcuts(next)) });
+    setEditing(null);
+  };
+  const editor = (index: number) => (
+    <ShortcutEditor key={`edit${index}`} all={all} index={index} onSave={save} onClose={() => setEditing(null)} />
+  );
+  return (
+    <>
+      <Group title={say.player_shortcuts()}>
+        <Row label={say.shortcuts_lead()}>
+          <div className="flex flex-wrap gap-2">
+            <Button size="sm" variant="secondary" onClick={() => setEditing(-1)}>{say.shortcuts_add()}</Button>
+            <Button size="sm" variant="outline" disabled={!blob} onClick={() => { set({ shortcuts: "" }); setEditing(null); }}>
+              {say.shortcuts_reset()}
+            </Button>
+          </div>
+        </Row>
+        {editing === -1 && editor(-1)}
+      </Group>
+      {all.rows(tizen() ? "tizen" : "web").filter((g) => g.items.length).map((g) => (
+        <Group key={g.kind} title={GROUP_TITLE[g.kind]()}>
+          {g.items.map((r) => {
+            if (r.binding !== undefined && r.binding === editing) return editor(r.binding);
+            const known = !r.action || SHORTCUT_ACTIONS.includes(r.action);
+            const label = r.text ? FIXED_TEXT[r.text]() : actionLabel(r.action ?? "");
+            const binding = r.binding;
+            return (
+              <Row key={binding ?? r.press.keys} label={label} hint={known ? undefined : say.shortcuts_not_on_device()}>
+                {binding === undefined ? (
+                  <Kbd>{pressText(r.press)}</Kbd>
+                ) : (
+                  <Button size="sm" variant="ghost" onClick={() => setEditing(binding)}>
+                    <Kbd>{pressText(r.press)}</Kbd>
+                  </Button>
+                )}
+              </Row>
+            );
+          })}
+        </Group>
+      ))}
+    </>
+  );
+}
+
+/** One shortcut: what it does, what to press, and whether a press or a hold fires it. Done checks
+ *  it against the others: the same trigger offers Replace, a press that cuts a chord short is refused. */
+function ShortcutEditor({
+  all,
+  index,
+  onSave,
+  onClose,
+}: {
+  all: Shortcuts;
+  index: number;
+  onSave: (next: Binding[]) => void;
+  onClose: () => void;
+}): JSX.Element {
+  const old = all.bindings[index];
+  const [action, setAction] = useState<Action>(old?.action ?? "ring");
+  const [trigger, setTrigger] = useState<Trigger | undefined>(old?.trigger);
+  const [mode, setMode] = useState<"record" | "grid" | null>(null);
+  const [problem, setProblem] = useState<{ text: string; replace?: number } | null>(null);
+  // One button is only ever a hold.
+  const take = (t: Trigger | undefined) => {
+    setTrigger(t?.on === "pad" && t.buttons.length === 1 ? { ...t, hold: true } : t);
+    setProblem(null);
+  };
+  useRecorder(mode === "record", (t) => {
+    take(t);
+    setMode(null);
+  });
+  const others = new Shortcuts(all.bindings.filter((_, i) => i !== index));
+  const pad = trigger?.on === "pad" ? trigger : undefined;
+  const done = (replace?: number) => {
+    if (!trigger) return;
+    const candidate = { trigger, action };
+    const next = [...others.bindings];
+    const c = replace === undefined ? others.validate(candidate) : null;
+    if (replace !== undefined) next.splice(replace, 1, candidate);
+    else if (!c) next.splice(index < 0 ? next.length : index, 0, candidate);
+    if (!c) return onSave(next);
+    const other = c.kind === "identical" || c.kind === "press_subset" ? others.bindings[c.index]! : undefined;
+    if (c.kind === "identical") {
+      const keys = pressText({ keys: chord(trigger), hold: pad?.hold ?? false });
+      return setProblem({ text: say.shortcuts_identical_replace({ keys, action: actionLabel(other!.action) }), replace: c.index });
+    }
+    if (c.kind === "press_subset") {
+      const [first, second] = pad && other?.trigger.on === "pad" && pad.buttons.length < other.trigger.buttons.length ? [trigger, other.trigger] : [other!.trigger, trigger];
+      return setProblem({ text: say.shortcuts_subset({ first: chord(first), second: chord(second) }) });
+    }
+    setProblem({
+      text: c.kind === "single_press" ? say.shortcuts_one_button_hold() : c.kind === "no_modifier" ? say.shortcuts_needs_modifier() : m.ring_shortcut_no_key(),
+    });
+  };
+  const fires: ReadonlyArray<readonly ["press" | "hold", string]> = [
+    ...(pad?.buttons.length === 1 ? [] : [["press", say.shortcuts_fires_press()] as const]),
+    ...(pad ? [["hold", say.shortcuts_fires_hold()] as const] : []),
+  ];
+  return (
+    <div className="flex flex-col gap-4 rounded-md bg-muted/40 p-3">
+      <Row label={say.shortcuts_does()} htmlFor="pf-shortcut-does">
+        <Select value={action} onValueChange={(a) => { setAction(a); setProblem(null); }}>
+          <SelectTrigger id="pf-shortcut-does"><SelectValue /></SelectTrigger>
+          <SelectContent>
+            {[...SHORTCUT_ACTIONS, ...(SHORTCUT_ACTIONS.includes(action) ? [] : [action])].map((a) => (
+              <SelectItem key={a} value={a}>{actionLabel(a)}</SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </Row>
+      <Row label={say.shortcuts_press()} hint={mode === "record" ? say.shortcuts_record_prompt() : undefined}>
+        <div className="flex flex-wrap items-center gap-2">
+          {trigger && <Kbd>{chord(trigger)}</Kbd>}
+          <Button size="sm" variant={mode === "record" ? "default" : "secondary"} aria-pressed={mode === "record"} onClick={() => setMode(mode === "record" ? null : "record")}>
+            {say.shortcuts_record()}
+          </Button>
+          <Button size="sm" variant={mode === "grid" ? "default" : "secondary"} aria-pressed={mode === "grid"} onClick={() => setMode(mode === "grid" ? null : "grid")}>
+            {say.shortcuts_choose()}
+          </Button>
+        </div>
+      </Row>
+      {mode === "grid" && (
+        <div role="group" aria-label={say.shortcuts_choose()} className="flex flex-wrap gap-1">
+          {GRID.map(([name, bit]) => {
+            const on = pad?.buttons.includes(bit) ?? false;
+            const buttons = on ? (pad?.buttons ?? []).filter((b) => b !== bit) : [...(pad?.buttons ?? []), bit];
+            return (
+              <Button key={name} size="sm" variant={on ? "default" : "outline"} aria-pressed={on} onClick={() => take(buttons.length ? { on: "pad", buttons, hold: pad?.hold ?? false } : undefined)}>
+                {name}
+              </Button>
+            );
+          })}
+        </div>
+      )}
+      {trigger && (
+        <Row label={say.shortcuts_fires_on()} hint={pad?.buttons.length === 1 ? say.shortcuts_one_button_hold() : undefined}>
+          <Segmented
+            label={say.shortcuts_fires_on()}
+            value={pad?.hold ? "hold" : "press"}
+            options={trigger.on === "key" ? [["press", say.shortcuts_fires_press()]] : fires}
+            onChange={(f) => pad && take({ ...pad, hold: f === "hold" })}
+          />
+        </Row>
+      )}
+      {problem && <p role="alert" className="text-xs text-destructive">{problem.text}</p>}
+      <div className="flex flex-wrap gap-2">
+        {problem?.replace !== undefined ? (
+          <Button size="sm" onClick={() => done(problem.replace)}>{say.shortcuts_replace()}</Button>
+        ) : (
+          <Button size="sm" disabled={!trigger} onClick={() => done()}>{m.common_done()}</Button>
+        )}
+        <Button size="sm" variant="outline" onClick={onClose}>{m.common_cancel()}</Button>
+        {old && (
+          <Button size="sm" variant="ghost" className="ml-auto text-destructive" onClick={() => onSave(others.bindings)}>
+            {say.shortcuts_remove()}
+          </Button>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * While `on`: the keys or pad buttons pressed together, taken when the first of them lifts. A key
+ * press here never reaches the dialog or the host. Pad buttons already down when it starts (the
+ * press that chose Record) count only once they have lifted.
+ */
+function useRecorder(on: boolean, take: (t: Trigger) => void): void {
+  useEffect(() => {
+    if (!on) return;
+    const keys: string[] = [];
+    const bits: number[] = [];
+    const pads = () => navigator.getGamepads?.().reduce((all, g) => all | (g?.mapping === "standard" ? padButtons(g) : 0), 0) ?? 0;
+    let ignore = pads();
+    let frame = 0;
+    const key = (e: KeyboardEvent) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const k = shortcutKey(e.code);
+      if (e.type === "keydown") {
+        if (k && !keys.includes(k)) keys.push(k);
+      } else if (keys.length) {
+        const mods: string[] = MODIFIERS.filter((m) => keys.includes(m));
+        const last = keys.filter((k) => !mods.includes(k)).at(-1) ?? keys.at(-1)!;
+        take({ on: "key", modifiers: mods.filter((m) => m !== last), key: last });
+      }
+    };
+    const poll = () => {
+      const now = pads();
+      ignore &= now;
+      const live = now & ~ignore;
+      if (bits.some((b) => !(live & b))) return take({ on: "pad", buttons: bits, hold: false });
+      for (let b = 1; b <= live; b <<= 1) if (live & b && !bits.includes(b)) bits.push(b);
+      frame = requestAnimationFrame(poll);
+    };
+    window.addEventListener("keydown", key, true);
+    window.addEventListener("keyup", key, true);
+    frame = requestAnimationFrame(poll);
+    return () => {
+      window.removeEventListener("keydown", key, true);
+      window.removeEventListener("keyup", key, true);
+      cancelAnimationFrame(frame);
+    };
+    // `take` only sets state; the one from the render that started recording is enough.
+  }, [on]);
 }
 
 /** A tab's advanced rows: their own card under Show advanced, otherwise one button naming how

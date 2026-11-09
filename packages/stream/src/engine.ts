@@ -19,14 +19,15 @@ import type { PunktfunkModule } from "./emscripten.ts";
 import { DeviceRefused, Host, type LibraryEntry, VersionSkew } from "./host.ts";
 import * as pf from "./pf-connect.ts";
 import { type Decodable, decodableCodecs, decodeSupported, hdrDisplay, planeBackend, VideoPipe, webgpuUsable } from "./video.ts";
-import { type Chord, InputPipe, playRumble } from "./input.ts";
+import { InputPipe, playRumble } from "./input.ts";
+import { type Action, type Device, resolve, Shortcuts } from "./shortcuts.ts";
 import { AudioPipe, type AudioSnapshot, opusHead, playableChannels } from "./audio.ts";
 import { MicPipe, type MicState } from "./mic.ts";
 import { STATS_TIERS, type StatsTier } from "./settings.ts";
 import type { ConsoleEvent } from "./console-bridge.ts";
 import { HostCursor } from "./cursor.ts";
 import type { HostTarget } from "./pf-connect.ts";
-import { deviceName } from "./platform.ts";
+import { deviceName, tizen } from "./platform.ts";
 import { type TunnelFetch, tunnelFetch } from "./tunnel.ts";
 import { type Feed, wasmFeed } from "./carrier/feed.ts";
 import { WtCarrier } from "./carrier/wt.ts";
@@ -181,6 +182,20 @@ export interface TunableOptions {
   hdr: boolean;
   /** Scroll the other way from what the wheel says. */
   invertScroll: boolean;
+  /** The `shortcuts` blob; empty is this client's defaults. A stream keeps the bindings it
+   *  started with. */
+  shortcuts: string;
+}
+
+/** What a shortcut can do on this page, in the quick menu's order: the editor offers these, and
+ *  a binding to anything else reaches the host as plain buttons. */
+export const SHORTCUT_ACTIONS: readonly Action[] = [
+  "ring", "end_stream", "disconnect_linger", "stats", "mic", "fullscreen", "release_input", "mouse_mode",
+];
+
+/** The bindings `blob` holds for this page: the browser's, or the Samsung set's. */
+export function pageShortcuts(blob: string): Shortcuts {
+  return resolve(blob, tizen() ? "tizen" : "web", false, "");
 }
 
 const TUNABLE_DEFAULTS: TunableOptions = {
@@ -194,6 +209,7 @@ const TUNABLE_DEFAULTS: TunableOptions = {
   codec: "auto",
   hdr: true,
   invertScroll: false,
+  shortcuts: "",
 };
 
 /** `CODEC_*` bits, as `Hello::preferred_codec` names one. */
@@ -844,27 +860,28 @@ export class Engine {
     }
   }
 
-  private chord(chord: Chord): void {
-    switch (chord) {
+  /** One of `SHORTCUT_ACTIONS`. A pad's Release input also leaves fullscreen: a pad has no Esc. */
+  private shortcut(action: Action, device: Device): void {
+    switch (action) {
       case "stats":
         return this.cycleStats();
-      case "menu":
+      case "ring":
         for (const l of this.menuListeners) l();
         return;
-      case "release":
-        return this.capturePointer(false);
-      case "mouse":
+      case "release_input":
+        this.capturePointer(false);
+        if (device === "pad") this.fullscreen(false);
+        return;
+      case "mouse_mode":
         return this.configure({ pointer: this.tunable.pointer === "capture" ? "absolute" : "capture" });
       case "mic":
         return this.toggleMic();
       case "fullscreen":
         return this.fullscreen();
-      case "escape":
-        this.capturePointer(false);
-        return this.fullscreen(false);
-      case "end":
-      case "escape-hold":
+      case "end_stream":
         return this.leave(true);
+      case "disconnect_linger":
+        return this.leave(false);
     }
   }
 
@@ -1358,7 +1375,8 @@ export class Engine {
         pointer: this.tunable.pointer,
         deadzone: this.tunable.deadzone,
         invertScroll: this.tunable.invertScroll,
-        onChord: (chord) => this.chord(chord),
+        shortcuts: new Shortcuts(pageShortcuts(this.tunable.shortcuts).bindings.filter((b) => SHORTCUT_ACTIONS.includes(b.action))),
+        onShortcut: (action, device) => this.shortcut(action, device),
       });
       this.input.attach();
     }

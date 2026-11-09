@@ -250,11 +250,7 @@ function QuickMenu({ screen, actions }: { screen: Extract<Screen, { kind: "strea
       <Button role="menuitem" variant="ghost" className={item} onClick={() => actions.toggleCapture()}>
         {screen.stats.pointerCaptured ? m.browser_ring_release_mouse() : m.browser_ring_capture_mouse()}
       </Button>
-      <p className="px-3 pt-1 pb-0.5 text-xs text-muted-foreground">
-        {tv
-          ? m.browser_ring_menu_hint_tv({ remote: "Back", pad: "Back+A" })
-          : m.browser_ring_menu_hint({ keys: "Ctrl+Alt+Shift+O", pad: "Back+A" })}
-      </p>
+      {screen.menuHint && <p className="px-3 pt-1 pb-0.5 text-xs text-muted-foreground">{screen.menuHint}</p>}
     </Card>
   );
 }

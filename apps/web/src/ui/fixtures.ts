@@ -96,7 +96,14 @@ export const SCREENS = {
   "streaming": { kind: "streaming", stats, diagnostics: false, menu: false, ...overlay },
   "streaming-hint": { kind: "streaming", stats, diagnostics: false, menu: false, ...overlay, exitHint: "Ctrl+Alt+Shift+D to leave" },
   "streaming-diagnostics": { kind: "streaming", stats, diagnostics: true, menu: false, ...overlay },
-  "streaming-menu": { kind: "streaming", stats, diagnostics: false, menu: true, ...overlay },
+  "streaming-menu": {
+    kind: "streaming",
+    stats,
+    diagnostics: false,
+    menu: true,
+    ...overlay,
+    menuHint: "Ctrl+Alt+Shift+O, or Select + A on a controller",
+  },
   "streaming-captured": {
     kind: "streaming",
     stats: { ...stats, pointerCaptured: true },

@@ -1,4 +1,4 @@
-// The pad chords: each fires on its edge, and the escape chord's hold fires once, at 1.5 s.
+// The page's shortcuts on a pad and the keyboard, through the engine `shortcuts.test.ts` pins.
 // Rumble plays on the pad the host names, through the actuator the browser offers.
 //
 // `InputPipe` uses constructor parameter properties, so `npm test` runs node with
@@ -6,56 +6,73 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { type Chord, InputPipe, playRumble } from "./input.ts";
+import { InputPipe, playRumble } from "./input.ts";
+import { defaults } from "./shortcuts.ts";
 
 /** A standard-mapping pad with these button indices held. */
 const pad = (...held: number[]): Gamepad =>
   ({
     index: 0,
+    id: "",
     mapping: "standard",
     buttons: Array.from({ length: 17 }, (_, i) => ({ pressed: held.includes(i), value: held.includes(i) ? 1 : 0 })),
     axes: [0, 0, 0, 0],
   }) as unknown as Gamepad;
 
-const ESCAPE = [4, 5, 8, 9];
-const MENU = [8, 0];
+/** Standard indices: A, LB, RB, Back, Start. */
+const A = 0, LB = 4, RB = 5, SELECT = 8, START = 9;
+const WEB = defaults("web", false, "");
 
-test("the pad chords fire on their edges, and the escape hold once", () => {
-  const fired: Chord[] = [];
-  const pipe = new InputPipe({} as never, {} as HTMLCanvasElement, {
+test("Select + A opens the menu; the exit chord releases input, or held ends the stream", () => {
+  const fired: string[] = [];
+  const sent: number[] = [];
+  const mod = { _pf_gamepad: (_pad: number, buttons: number) => sent.push(buttons), _pf_gamepad_arrival: () => {} };
+  const pipe = new InputPipe(mod as never, {} as HTMLCanvasElement, {
     streamWidth: 1920,
     streamHeight: 1080,
     pointer: "absolute",
     deadzone: 0.05,
-    onChord: (c) => fired.push(c),
+    shortcuts: WEB,
+    onShortcut: (action, device) => fired.push(`${action}:${device}`),
   });
   let now = 1000;
+  let g = pad();
   const realNow = performance.now;
   performance.now = () => now;
-  const poll = (g: Gamepad) => (pipe as unknown as { padChords(g: Gamepad): void }).padChords(g);
+  Object.defineProperty(navigator, "getGamepads", { value: () => [g], configurable: true });
+  (pipe as unknown as { arrive(g: Gamepad): void }).arrive(g);
+  const frame = (ms: number, ...held: number[]) => {
+    g = pad(...held);
+    pipe.poll();
+    now += ms;
+  };
   try {
-    poll(pad(...ESCAPE));
-    now += 500;
-    poll(pad(...ESCAPE));
-    assert.deepEqual(fired, ["escape"], "a press releases input once, however long it is held");
-    now += 1000;
-    poll(pad(...ESCAPE));
-    now += 1000;
-    poll(pad(...ESCAPE));
-    assert.deepEqual(fired, ["escape", "escape-hold"], "held 1.5 s, it ends the stream once");
+    frame(16, SELECT);
+    frame(16, SELECT, A);
+    assert.deepEqual(fired, ["ring:pad"]);
+    assert.equal(sent[0], 0x20, "Select alone is the game's");
+    assert.ok(sent.at(-1) === 0 && !sent.some((b) => b & 0x1000), "Select lifted when A completes the chord; A never sent");
+    frame(16);
 
-    poll(pad());
-    poll(pad(...ESCAPE));
-    assert.deepEqual(fired.at(-1), "escape", "released and pressed again, it starts over");
+    fired.length = sent.length = 0;
+    frame(16, LB);
+    frame(16, LB, RB);
+    frame(16, LB, RB, START);
+    frame(300, LB, RB, START, SELECT);
+    assert.deepEqual(fired, [], "the hold is armed");
+    frame(16);
+    assert.deepEqual(fired, ["release_input:pad"], "released before 1 s: the press stage");
+    assert.ok(!sent.some((b) => b & 0x20) && sent.at(-1) === 0, "Select never sent, the rest lifted");
 
     fired.length = 0;
-    poll(pad(...MENU));
-    poll(pad(...MENU));
-    poll(pad());
-    poll(pad(...MENU));
-    assert.deepEqual(fired, ["menu", "menu"]);
+    frame(16, LB, RB, START, SELECT);
+    frame(1000, LB, RB, START, SELECT);
+    frame(16, LB, RB, START, SELECT);
+    frame(16);
+    assert.deepEqual(fired, ["end_stream:pad"], "held 1 s: End stream, and nothing at release");
   } finally {
     performance.now = realNow;
+    delete (navigator as { getGamepads?: unknown }).getGamepads;
   }
 });
 
@@ -163,15 +180,24 @@ test("a wheel turned down scrolls down: the wire is up-positive, the browser dow
   ]);
 });
 
-/** A pipe whose sends are recorded as `kind:code`, and a key event aimed at `target`. */
+/** A pipe on the page's default shortcuts whose sends are recorded as `kind:code`, what fired,
+ *  and a key event aimed at `target`. */
 const keyPipe = () => {
   const sent: string[] = [];
+  const fired: string[] = [];
   const mod = {
     _pf_input: (kind: number, code: number) => sent.push(`${kind}:${code}`),
     _pf_gamepad: (pad: number, ...rest: number[]) => sent.push(`pad${pad}:${rest.join(",")}`),
     _pf_gamepad_arrival: () => {},
   };
-  const pipe = new InputPipe(mod as never, {} as HTMLCanvasElement, { streamWidth: 1920, streamHeight: 1080, pointer: "absolute", deadzone: 0.05 });
+  const pipe = new InputPipe(mod as never, {} as HTMLCanvasElement, {
+    streamWidth: 1920,
+    streamHeight: 1080,
+    pointer: "absolute",
+    deadzone: 0.05,
+    shortcuts: WEB,
+    onShortcut: (action) => fired.push(action),
+  });
   const key = (code: string, down: boolean, target: unknown, mods: Partial<KeyboardEvent> = {}) => {
     let prevented = false;
     (pipe as unknown as { key(e: unknown, down: boolean): void }).key(
@@ -180,25 +206,39 @@ const keyPipe = () => {
     );
     return prevented;
   };
-  return { sent, pipe, key };
+  return { sent, fired, pipe, key };
 };
 
 const PICTURE = { tagName: "CANVAS", closest: () => null };
 const IN_MENU = { tagName: "BUTTON", closest: () => ({}) };
 const CHORD = { ctrlKey: true, altKey: true, shiftKey: true };
 
-test("a key the host holds is let go wherever its release lands", () => {
-  const { sent, key } = keyPipe();
-  // Ctrl+Alt+Shift+O opens the menu, which takes focus before the modifiers come up.
+test("a key chord fires on its key and lifts the modifiers; the rest of it stays with the menu", () => {
+  const { sent, fired, key } = keyPipe();
+  // Ctrl+Alt+Shift+O opens the menu, which takes focus before the keys come up.
   key("ControlLeft", true, PICTURE, { ctrlKey: true });
   key("AltLeft", true, PICTURE, { ctrlKey: true, altKey: true });
   key("ShiftLeft", true, PICTURE, CHORD);
   key("KeyO", true, PICTURE, CHORD);
+  assert.deepEqual(fired, ["ring"]);
+  assert.deepEqual(sent, ["0:162", "0:164", "0:160", "1:162", "1:164", "1:160"], "O never sent, each side lifted");
   assert.equal(key("KeyO", false, IN_MENU, CHORD), false, "never sent, so the menu keeps it");
   assert.equal(key("ShiftLeft", false, IN_MENU, { ctrlKey: true, altKey: true }), false, "the menu's event keeps its default");
   key("AltLeft", false, IN_MENU, { ctrlKey: true });
   key("ControlLeft", false, IN_MENU);
-  assert.deepEqual(sent, ["0:162", "0:164", "0:160", "1:160", "1:164", "1:162"]);
+  assert.equal(sent.length, 6, "the chord's releases are dropped");
+
+  // Right Ctrl and Alt, then F11 alone, then Alt+Enter: each fires, nothing of it repeats.
+  sent.length = fired.length = 0;
+  key("F11", true, PICTURE);
+  key("F11", true, PICTURE, { repeat: true });
+  key("F11", false, PICTURE);
+  key("AltRight", true, PICTURE, { altKey: true });
+  key("Enter", true, PICTURE, { altKey: true });
+  key("Enter", false, PICTURE, { altKey: true });
+  key("AltRight", false, PICTURE);
+  assert.deepEqual(fired, ["fullscreen", "fullscreen"]);
+  assert.deepEqual(sent, ["0:165", "1:165"]);
 
   sent.length = 0;
   key("KeyW", true, IN_MENU);

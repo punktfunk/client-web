@@ -141,7 +141,7 @@ type ScreenBody =
   /** `menu`: the quick menu is open over the picture. `endGame`: the title this device launched
    *  that the stream plays, which End game ends. `notice`: what the host said when it refused.
    *  `corner` and `scale` place and size the statistics; `exitHint` says how to leave, for the
-   *  first seconds of a stream. */
+   *  first seconds of a stream. `menuHint` is the menu's own line: how to open it again. */
   | {
       kind: "streaming";
       stats: SessionStats;
@@ -150,6 +150,7 @@ type ScreenBody =
       corner: HudCorner;
       scale: number;
       exitHint?: string;
+      menuHint?: string;
       endGame?: string;
       notice?: string;
     }

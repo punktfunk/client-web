@@ -66,6 +66,8 @@ export interface Settings {
   exitHint: boolean;
   /** Settings list their advanced rows. Hiding a row keeps its value. */
   showAdvanced: boolean;
+  /** The in-stream shortcuts blob (`Shortcuts`); empty is this client's defaults. */
+  shortcuts: string;
 }
 
 export const DEFAULTS: Settings = {
@@ -89,6 +91,7 @@ export const DEFAULTS: Settings = {
   statsScalePct: 100,
   exitHint: true,
   showAdvanced: false,
+  shortcuts: "",
 };
 
 const KEY = "pf.settings";
@@ -158,5 +161,6 @@ function sane(s: Settings): Settings {
     statsScalePct: (STATS_SCALES as readonly number[]).includes(s.statsScalePct) ? s.statsScalePct : DEFAULTS.statsScalePct,
     exitHint: s.exitHint !== false,
     showAdvanced: s.showAdvanced === true,
+    shortcuts: typeof s.shortcuts === "string" ? s.shortcuts : DEFAULTS.shortcuts,
   };
 }
