@@ -152,6 +152,10 @@ export class InputPipe {
   private readonly off: Array<() => void> = [];
   /** Fractional wheel travel carried to the next event, so slow scrolls still arrive. */
   private wheel = { x: 0, y: 0 };
+  /** Fractional locked-pointer travel carried to the next event. The wire takes whole counts,
+   *  and a display scale or page zoom makes `movementX` a fraction of one: a 1 kHz mouse
+   *  moving slowly sends nothing but such events. */
+  private motion = { x: 0, y: 0 };
   private touches = new Map<number, number>();
   /** Keys and mouse buttons (`MouseEvent.buttons`) the host holds down, for a lost focus to let go of. */
   private keys = new Set<number>();
@@ -210,15 +214,12 @@ export class InputPipe {
 
   /**
    * Lock the pointer to the canvas with the mouse's own counts, before the OS's acceleration:
-   * the host applies its pointer curve once, as for a local mouse. macOS keeps its curve: its
-   * raw counts move the pointer a third as far as macOS does, and no host curve makes up the
-   * rest. A browser that cannot drop the acceleration rejects with `NotSupportedError` and
-   * gets a plain lock. Any other refusal (no gesture, an exit too recent) is not an error
-   * worth propagating.
+   * the host applies its pointer curve once, as for a local mouse. A browser that cannot drop
+   * the acceleration rejects with `NotSupportedError` and gets a plain lock. Any other refusal
+   * (no gesture, an exit too recent) is not an error worth propagating.
    */
   private lock(): void {
     const plain = () => Promise.resolve(this.canvas.requestPointerLock()).catch(() => {});
-    if (/^Mac/.test(navigator.platform)) return void plain();
     void Promise.resolve(this.canvas.requestPointerLock({ unadjustedMovement: true })).catch((e: unknown) =>
       (e as DOMException | undefined)?.name === "NotSupportedError" ? plain() : undefined,
     );
@@ -442,8 +443,14 @@ export class InputPipe {
     // hover, with no click needed.
     if (phase === "move") {
       if (this.captured) {
-        if (e.movementX || e.movementY) {
-          this.mod._pf_input(KIND.MOUSE_MOVE, 0, e.movementX, e.movementY, 0);
+        this.motion.x += e.movementX;
+        this.motion.y += e.movementY;
+        const dx = Math.trunc(this.motion.x);
+        const dy = Math.trunc(this.motion.y);
+        if (dx || dy) {
+          this.motion.x -= dx;
+          this.motion.y -= dy;
+          this.mod._pf_input(KIND.MOUSE_MOVE, 0, dx, dy, 0);
         }
       } else {
         const [x, y] = this.stream(e);
