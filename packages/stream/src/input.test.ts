@@ -141,8 +141,8 @@ test("a second mouse button held with the first is pressed and released", () => 
   }
 });
 
-test("the lock asks for the mouse's own counts, and falls back to a plain lock only when unsupported", async () => {
-  const lockWith = async (refusal: string | undefined) => {
+test("the lock asks for the mouse's own counts off macOS, and falls back to a plain lock only when unsupported", async () => {
+  const lockWith = async (refusal: string | undefined, platform = "Win32") => {
     const asked: unknown[] = [];
     const canvas = {
       requestPointerLock(options?: PointerLockOptions) {
@@ -153,17 +153,21 @@ test("the lock asks for the mouse's own counts, and falls back to a plain lock o
     const pipe = new InputPipe({} as never, canvas, { streamWidth: 1920, streamHeight: 1080, pointer: "capture", deadzone: 0.05 });
     const doc = (globalThis as { document?: unknown }).document;
     (globalThis as { document?: unknown }).document = { pointerLockElement: null };
+    Object.defineProperty(navigator, "platform", { value: platform, configurable: true });
     try {
       pipe.capture(true);
       await new Promise((r) => setTimeout(r, 0));
     } finally {
       (globalThis as { document?: unknown }).document = doc;
+      delete (navigator as { platform?: unknown }).platform;
     }
     return asked;
   };
   assert.deepEqual(await lockWith(undefined), [{ unadjustedMovement: true }]);
+  assert.deepEqual(await lockWith(undefined, "Linux x86_64"), [{ unadjustedMovement: true }]);
   assert.deepEqual(await lockWith("NotSupportedError"), [{ unadjustedMovement: true }, undefined]);
   assert.deepEqual(await lockWith("SecurityError"), [{ unadjustedMovement: true }], "no gesture, no second try");
+  assert.deepEqual(await lockWith(undefined, "MacIntel"), [undefined], "macOS keeps its own pointer curve");
 });
 
 test("a wheel turned down scrolls down: the wire is up-positive, the browser down-positive", () => {

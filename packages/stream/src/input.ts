@@ -210,12 +210,15 @@ export class InputPipe {
 
   /**
    * Lock the pointer to the canvas with the mouse's own counts, before the OS's acceleration:
-   * the host applies its pointer curve once, as for a local mouse. A browser that cannot drop
-   * the acceleration rejects with `NotSupportedError` and gets a plain lock. Any other refusal
-   * (no gesture, an exit too recent) is not an error worth propagating.
+   * the host applies its pointer curve once, as for a local mouse. macOS keeps its curve: its
+   * raw counts move the pointer a third as far as macOS does, and no host curve makes up the
+   * rest. A browser that cannot drop the acceleration rejects with `NotSupportedError` and
+   * gets a plain lock. Any other refusal (no gesture, an exit too recent) is not an error
+   * worth propagating.
    */
   private lock(): void {
     const plain = () => Promise.resolve(this.canvas.requestPointerLock()).catch(() => {});
+    if (/^Mac/.test(navigator.platform)) return void plain();
     void Promise.resolve(this.canvas.requestPointerLock({ unadjustedMovement: true })).catch((e: unknown) =>
       (e as DOMException | undefined)?.name === "NotSupportedError" ? plain() : undefined,
     );
