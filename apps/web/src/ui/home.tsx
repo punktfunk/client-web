@@ -126,6 +126,8 @@ function HostTile({ host, actions }: { host: HostCard; actions: Actions }): JSX.
             defaultValue={label}
             aria-label={m.browser_hostcard_rename_a11y({ address: bare(host.origin) })}
             onKeyDown={(e) => {
+              // An IME's Enter and Escape pick or drop a candidate; they are not the player's.
+              if (e.nativeEvent.isComposing || e.keyCode === 229) return;
               if (e.key === "Enter") commit(e.currentTarget.value);
               if (e.key === "Escape") setEditing(false);
             }}

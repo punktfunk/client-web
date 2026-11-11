@@ -130,8 +130,8 @@ export function Pair({ screen, actions }: Props<"pair">): JSX.Element {
         disabled={!!screen.busy}
         className="h-auto! rounded-lg bg-muted/40 py-5 text-center font-mono text-4xl font-semibold tracking-[0.3em] tabular-nums placeholder:text-muted-foreground/30 md:text-4xl"
         value={pin}
-        onChange={(e) => setPin(e.currentTarget.value.replace(/\D/g, ""))}
-        onKeyDown={(e) => { if (e.key === "Enter") submit(); }}
+        onChange={(e) => setPin(e.currentTarget.value.normalize("NFKC").replace(/\D/g, ""))}
+        onKeyDown={(e) => { if (e.nativeEvent.isComposing || e.keyCode === 229) return; if (e.key === "Enter") submit(); }}
       />
       {screen.error && <ErrorLine text={screen.error} />}
       <Row>
