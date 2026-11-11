@@ -140,6 +140,15 @@ test("a door's redirect dials the seat's plane once, with the credential bound t
   assert.equal(engine.current.kind, "error", "a second redirect ends the connect");
 });
 
+test("a request for access offers every codec this browser decodes", () => {
+  const { engine, mod } = engineIn("needs-pairing");
+  const offers: number[] = [];
+  mod._pf_session_codecs = (mask: number) => offers.push(mask);
+  Object.assign(engine, { codecs: { mask: 0x07, tenBit: false }, refused: 0x02 });
+  engine.requestAccess({ width: 5120, height: 1440 });
+  assert.deepEqual(offers, [0x07], "the knock's Hello is the stream's, not H.264 alone");
+});
+
 test("a request for access a door redirects streams on the seat", () => {
   const { engine, mod, calls } = engineIn("needs-pairing");
   engine.requestAccess({ width: 1280, height: 720 });

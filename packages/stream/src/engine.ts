@@ -567,27 +567,25 @@ export class Engine {
    * where `pair` is, and the same reconnect applies. Approval streams `opts` on this connection;
    * a denial or a request nobody answers ends in `pair-refused` with the host's reason. An
    * approval whose stream the host can't place ends in `paired`: the device is in, and the next
-   * connect picks the profile and readies its seat first.
+   * connect picks the profile and readies its seat first. The request offers every codec this
+   * browser decodes, as `startStream` does, since its `Hello` is the stream's.
    */
   requestAccess(opts: StreamOptions): void {
     const origin = this.origin;
-    if (!origin) return;
-    switch (this.state.kind) {
-      case "needs-pairing":
-        this.pendingKnock = opts;
-        this.set({ kind: "awaiting-approval", origin, name: this.deviceName });
-        this.dial();
-        return;
-      case "forgotten":
-      case "pair-refused":
-        this.pendingKnock = opts;
-        pf.hosts.unpair(origin);
-        this.mod._pf_wt_close?.();
-        void this.connect(this.target ?? origin, { expectFingerprint: this.expect });
-        return;
-      default:
-        return;
+    const kind = this.state.kind;
+    if (!origin || (kind !== "needs-pairing" && kind !== "forgotten" && kind !== "pair-refused")) return;
+    this.refused = 0;
+    this.fellBackFrom = 0;
+    this.offer(false);
+    this.pendingKnock = opts;
+    if (kind === "needs-pairing") {
+      this.set({ kind: "awaiting-approval", origin, name: this.deviceName });
+      this.dial();
+      return;
     }
+    pf.hosts.unpair(origin);
+    this.mod._pf_wt_close?.();
+    void this.connect(this.target ?? origin, { expectFingerprint: this.expect });
   }
 
   /** Withdraw a request for access. The host drops it with the connection, so an approval that
