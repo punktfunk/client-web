@@ -122,4 +122,6 @@ export type ConsoleEvent =
   | { editing: boolean }
   | { edit_text: { label: string; text: string; digits: boolean } | null }
   | { announce: string }
-  | { settings: Record<string, unknown> };
+  | { settings: Record<string, unknown> }
+  /** Chars no face drew since the last report, each once: the page may hand faces back. */
+  | { missing: string };

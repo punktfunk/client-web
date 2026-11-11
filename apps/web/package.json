@@ -18,7 +18,8 @@
     "storybook": "storybook dev -p 6006",
     "prebuild-storybook": "npm run l10n",
     "build-storybook": "storybook build",
-    "screenshots": "node tools/screenshots.mjs"
+    "screenshots": "node tools/screenshots.mjs",
+    "cjk-e2e": "node tools/cjk-e2e.mjs"
   },
   "dependencies": {
     "@fontsource-variable/geist": "^5.3.0",
@@ -36,6 +37,10 @@
     "zod": "^4.6.5"
   },
   "devDependencies": {
+    "@fontsource/noto-sans-jp": "^5.3.1",
+    "@fontsource/noto-sans-kr": "^5.3.1",
+    "@fontsource/noto-sans-sc": "^5.3.1",
+    "@fontsource/noto-sans-tc": "^5.3.1",
     "@inlang/paraglide-js": "^2.29.3",
     "@inlang/plugin-message-format": "^4.6.0",
     "@storybook/react-vite": "^10.6.0",
