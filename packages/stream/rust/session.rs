@@ -261,6 +261,8 @@ pub extern "C" fn pf_session_reconfigure(width: u32, height: u32, fps: u32) {
                 refresh_hz: fps,
             },
             exclude_codecs: 0,
+            // The page shows the mode it asks for; it renders at no scale above it.
+            view: None,
         });
     });
 }
@@ -488,6 +490,7 @@ pub unsafe extern "C" fn pf_session_hello(
             access_only: false,
             // One canvas, one screen.
             screens: Vec::new(),
+            view: None,
         });
         c.fps = fps;
         c.bitrate_kbps = bitrate_kbps;

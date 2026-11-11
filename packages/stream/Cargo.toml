@@ -15,7 +15,8 @@ name = "punktfunk-client-web"
 path = "rust/main.rs"
 
 # The punktfunk crates follow the host's release tags, all three together: the client speaks that
-# release's wire. This is main at b58dc3cfe, ahead of v0.46.0.
+# release's wire. This is punktfunk#2397's branch at 0481817e5, on main at e472265f3: the kit's
+# `add_fallback_fonts`. Move it to main once that merges.
 [dependencies]
 anyhow = "1"
 # The device fingerprint: SHA-256 of the WebCrypto key's SPKI, which is what the host stores.
@@ -23,7 +24,7 @@ anyhow = "1"
 sha2 = "0.11"
 # `transport::Transport`, the wire codecs and the SPAKE2 ceremony. `pake`, not `quic`: the
 # browser plane is WebTransport, so the ceremony is wanted and the quinn runtime under it is not.
-punktfunk-core = { git = "https://git.unom.io/unom/punktfunk", rev = "b58dc3cfe152c48c584c8e2f77dc05d08f6aeb12", default-features = false, features = ["pake"] }
+punktfunk-core = { git = "https://git.unom.io/unom/punktfunk", rev = "0481817e595b0f9a1a5e6eba3256e6da297cf9e9", default-features = false, features = ["pake"] }
 
 # wasm only. Off it this is a bin that prints how to build it, so `cargo test` on a developer's
 # desktop stays green and does not resolve skia-safe for a target that wants a second Skia
@@ -32,12 +33,12 @@ punktfunk-core = { git = "https://git.unom.io/unom/punktfunk", rev = "b58dc3cfe1
 # The shell itself. `default-features = false`: `vulkan-overlay` is the desktop session binary's,
 # and it would put `vulkan` on skia-safe and change the prebuilt key away from
 # `ganesh-gl-jpegd-jpege-pdf-textlayout`, the one build.sh downloads for this target.
-pf-console-ui = { git = "https://git.unom.io/unom/punktfunk", rev = "b58dc3cfe152c48c584c8e2f77dc05d08f6aeb12", default-features = false }
+pf-console-ui = { git = "https://git.unom.io/unom/punktfunk", rev = "0481817e595b0f9a1a5e6eba3256e6da297cf9e9", default-features = false }
 # The bridge's JSON both ways: the model the page pushes, what the shell raises.
 serde = "1"
 serde_json = "1"
 # The portable half — `trust::Settings` for the snapshot store the shell loads from.
-pf-client-core = { git = "https://git.unom.io/unom/punktfunk", rev = "b58dc3cfe152c48c584c8e2f77dc05d08f6aeb12", default-features = false }
+pf-client-core = { git = "https://git.unom.io/unom/punktfunk", rev = "0481817e595b0f9a1a5e6eba3256e6da297cf9e9", default-features = false }
 # The SAME line pf-console-ui's wasm block carries, features included: two feature sets in one
 # build resolve two prebuilt keys, and the second one puts a source build of Skia on the critical
 # path. Only `host.rs` names it, to build the context and wrap the canvas.
