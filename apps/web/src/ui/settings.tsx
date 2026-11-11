@@ -474,9 +474,9 @@ function SizeField({ label, value, onCommit }: { label: string; value: number; o
       type="text"
       inputMode="numeric"
       value={text}
-      onChange={(e) => setText(e.target.value.replace(/\D/g, ""))}
+      onChange={(e) => setText(e.target.value.normalize("NFKC").replace(/\D/g, ""))}
       onBlur={commit}
-      onKeyDown={(e) => { if (e.key === "Enter") commit(); }}
+      onKeyDown={(e) => { if (e.nativeEvent.isComposing || e.keyCode === 229) return; if (e.key === "Enter") commit(); }}
     />
   );
 }
