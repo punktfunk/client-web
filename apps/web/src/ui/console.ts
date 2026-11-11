@@ -37,6 +37,8 @@ import {
   tvBack,
 } from "@punktfunk/stream";
 import { m } from "../paraglide/messages.js";
+import { getLocale } from "../paraglide/runtime.js";
+import { CjkFonts, familyFor } from "./cjk-font.ts";
 import { FrameMeter, type Row, type Step, Sweep, table } from "./console-cost.ts";
 import { hostRow, originFor } from "./console-hosts.ts";
 import { coverBytes } from "./cover.ts";
@@ -72,6 +74,9 @@ const COST_WINDOW_MS = 60_000;
 
 /** Set by `vite.config.ts` from `PF_BENCH=1`. */
 declare const __PF_BENCH__: boolean;
+
+/** Set by `vite.config.ts`: where the CJK font slices sit, relative to the page. */
+declare const __PF_CJK_FONTS__: string;
 
 /**
  * A measuring page: built as one, or opened with `?bench`. It prices the console on the first
@@ -200,6 +205,8 @@ export class ConsoleUi implements Ui {
   private observer: PerformanceObserver | null = null;
   /** The drawing buffer's share of the canvas, each way: a sweep's step may draw smaller. */
   private scale = 1;
+  /** Faces for the chars the console reports it drew as boxes; made on the first report. */
+  private fonts: CjkFonts | null = null;
 
   constructor(
     private readonly engine: Engine,
@@ -819,6 +826,16 @@ export class ConsoleUi implements Ui {
     if ("cmd" in e) return this.command(e.cmd);
     if ("announce" in e) {
       this.live.textContent = e.announce;
+      return;
+    }
+    if ("missing" in e) {
+      // The UI language picks the Han shapes, then the browser's list.
+      this.fonts ??= new CjkFonts(
+        new URL(__PF_CJK_FONTS__, document.baseURI),
+        familyFor([getLocale(), ...navigator.languages]),
+        (face) => this.engine.console.font(face),
+      );
+      this.fonts.want(e.missing);
       return;
     }
     if ("edit_text" in e) return this.editField(e.edit_text);

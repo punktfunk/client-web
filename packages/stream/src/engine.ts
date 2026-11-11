@@ -1003,6 +1003,16 @@ export class Engine {
         this.mod._free(p);
       }
     },
+    /** One face for chars the console reported `missing`: TrueType, OpenType or WOFF. */
+    font: (bytes: Uint8Array): void => {
+      const p = this.mod._malloc(bytes.length);
+      try {
+        this.mod.HEAPU8.set(bytes, p);
+        this.mod._pf_console_font(p, bytes.length);
+      } finally {
+        this.mod._free(p);
+      }
+    },
     /** What the console raised: a bridge event or `{cmd}`, parsed. One listener. */
     onEvent: (fn: (event: ConsoleEvent) => void): void => {
       this.mod.__pfOnConsole = (json) => {

@@ -458,6 +458,25 @@ pub unsafe extern "C" fn pf_console_avatar(
     with_app((), |app| app.handles.console.set_avatar(url, bytes));
 }
 
+/// One face for chars the console reported missing: TrueType, OpenType or WOFF. The next frame
+/// draws with it. One that does not load is logged and dropped.
+///
+/// # Safety
+/// `bytes` points to `len` readable bytes for the call.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pf_console_font(bytes: *const u8, len: u32) {
+    if bytes.is_null() || len == 0 {
+        return;
+    }
+    // SAFETY: the caller guarantees `len` readable bytes at `bytes`; the kit copies them.
+    let face = unsafe { std::slice::from_raw_parts(bytes, len as usize) };
+    with_app((), |app| {
+        if let Err(e) = app.console.add_fallback_fonts(&[face]) {
+            println!("punktfunk-web: console font not added: {e:#}");
+        }
+    });
+}
+
 /// The page's key table, by index. Order is the wire between `console.ts` and here; append only.
 const KEYS: [Key; 13] = [
     Key::Left,
@@ -532,7 +551,8 @@ impl App {
         }
     }
 
-    /// What the shell raised since the last call, as the JSON `pf_console_event` carries.
+    /// What the shell raised since the last call, as the JSON `pf_console_event` carries: its
+    /// events, its commands, and `{"missing": "…"}` for the chars no face drew.
     fn drain(&mut self) -> Vec<String> {
         let mut out = Vec::new();
         self.published
@@ -544,6 +564,10 @@ impl App {
                 Ok(c) => out.push(format!("{{\"cmd\":{c}}}")),
                 Err(e) => println!("punktfunk-web: console command not sent: {e}"),
             }
+        }
+        let missing = self.console.take_missing_chars();
+        if !missing.is_empty() {
+            out.push(serde_json::json!({ "missing": missing }).to_string());
         }
         out
     }

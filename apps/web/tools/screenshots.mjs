@@ -16,9 +16,9 @@
 
 import { existsSync } from "node:fs";
 import { mkdir, readFile } from "node:fs/promises";
-import { createServer } from "node:http";
-import { extname, join, normalize, resolve } from "node:path";
+import { join, resolve } from "node:path";
 import { chromium } from "playwright";
+import { staticServer } from "./static-server.mjs";
 
 const ROOT = resolve(process.env.STORYBOOK_STATIC ?? "storybook-static");
 const OUT = resolve(process.env.OUT ?? "screenshots");
@@ -29,39 +29,6 @@ const VIEWPORTS = (process.env.VIEWPORTS ?? "1440x900,390x844").split(",").map((
   return { width, height };
 });
 const ONLY = (process.env.ONLY ?? "").split(",").map((s) => s.trim()).filter(Boolean);
-
-const MIME = {
-  ".html": "text/html",
-  ".js": "text/javascript",
-  ".mjs": "text/javascript",
-  ".css": "text/css",
-  ".json": "application/json",
-  ".svg": "image/svg+xml",
-  ".png": "image/png",
-  ".woff": "font/woff",
-  ".woff2": "font/woff2",
-  ".ttf": "font/ttf",
-  ".map": "application/json",
-  ".wasm": "application/wasm",
-};
-
-/** The build, served as the static site it is; the path is contained to `rootDir`. */
-function staticServer(rootDir) {
-  return createServer(async (req, res) => {
-    try {
-      const url = new URL(req.url, "http://localhost");
-      let path = decodeURIComponent(url.pathname);
-      if (path.endsWith("/")) path += "index.html";
-      const filePath = normalize(join(rootDir, path));
-      if (!filePath.startsWith(rootDir)) return res.writeHead(403).end();
-      const body = await readFile(filePath);
-      res.writeHead(200, { "content-type": MIME[extname(filePath)] ?? "application/octet-stream" });
-      res.end(body);
-    } catch {
-      res.writeHead(404).end();
-    }
-  });
-}
 
 /** Every story of the screens, from the build's own index. */
 async function listStories(rootDir) {

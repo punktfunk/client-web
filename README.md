@@ -162,6 +162,12 @@ The app lands in `apps/web/dist/`, a static directory with relative asset paths,
 any path. The library lands in `packages/stream/dist/`, which is what `npm pack` ships. The
 settings sheet names the build it came from (`git describe`).
 
+`dist/fonts/` holds Noto Sans CJK for the console: Japanese, Korean, Simplified and Traditional
+Chinese, Regular, in the unicode-range slices `@fontsource` cuts (441 WOFF files, 12 MB). Nothing
+loads them up front. When the console draws a character Geist lacks, the page fetches the slice
+that holds it from its own origin, keeps it in Cache Storage and hands it to the console. A page
+that never shows Chinese, Japanese or Korean fetches none.
+
 Four tools, each for what it is for, in this order:
 
 1. **`tsc`** emits one file, `packages/stream/build/pf-glue.js` — an *input* to the wasm link,
@@ -252,6 +258,7 @@ visitor to each host. `Dockerfile` and `deploy/` package it.
 | `src/ui/{home,sheets,library,hud,settings}.tsx` | The screens, one file per shape. `pieces.tsx` is what they share. |
 | `src/components/stagger.tsx` | The console's on-mount cadence, kept in step with its file of the same name: every page is a cascade its cards arrive in one after another, and nothing from `@unom/ui` moves until a `<Stagger root>` above it says so. |
 | `src/ui/console.ts` | The gamepad interface: `pf-console-ui` on a canvas, through `engine.console`. `?ui=console`. |
+| `src/ui/cjk-font.ts` | The console's CJK faces: the slice that holds each character it reports it drew as a box, fetched once. |
 | `src/ui/{fixtures.ts,screens.stories.tsx}` | Every `Screen` as a fixture, and the stories both harnesses render from it. |
 | `src/components/ui/*` | `@unom/ui` adapted to this app's tokens once — the management console's arrangement, and its corrections. |
 | `tools/screenshots.mjs` | Every screen as a PNG, from the Storybook build, at a desktop and a phone width. CI attaches them to each run. |
@@ -328,6 +335,7 @@ npm run screenshots -w punktfunk-web     # after build-storybook: every screen a
 cd packages/stream && cargo test         # the credential ceremony against the host's own SPAKE2 role B
 cargo clippy --target wasm32-unknown-emscripten -- -D warnings   # the Rust that only compiles for wasm
 ./scripts/pack-gate.sh                   # after a build: the packed library in an empty Vite project
+npm run cjk-e2e -w punktfunk-web         # after a build: a Japanese host name fetches its font slices, a Latin one none
 ```
 
 CI runs all of these plus the real build, and attaches every screen's PNG to the run. `pf-connect.test.ts` checks the attestation verifier
@@ -377,3 +385,7 @@ This project uses AI for writing code.
 
 Dual-licensed under [MIT](LICENSE-MIT) or [Apache 2.0](LICENSE-APACHE), matching upstream
 Punktfunk, at your option — `SPDX-License-Identifier: MIT OR Apache-2.0`.
+
+The built app carries Noto Sans CJK under the
+[SIL Open Font License 1.1](https://openfontlicense.org); the licence ships beside the fonts as
+`fonts/cjk-<version>/LICENSE`.
