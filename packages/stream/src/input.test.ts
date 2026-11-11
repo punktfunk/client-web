@@ -117,6 +117,29 @@ test("a pad without an actuator, or no pad at all, is left alone", () => {
   assert.doesNotThrow(() => playRumble([], 3, 0xffff, 0, 0, 0, 400));
 });
 
+test("locked motion smaller than a count adds up instead of vanishing", () => {
+  const sent: [number, number][] = [];
+  const mod = { _pf_input: (_kind: number, _code: number, x: number, y: number) => sent.push([x, y]) };
+  const canvas = { focus() {} } as HTMLCanvasElement;
+  const pipe = new InputPipe(mod as never, canvas, { streamWidth: 1920, streamHeight: 1080, pointer: "capture", deadzone: 0.05 });
+  const doc = (globalThis as { document?: unknown }).document;
+  (globalThis as { document?: unknown }).document = { pointerLockElement: canvas };
+  const move = (movementX: number, movementY: number) =>
+    (pipe as unknown as { pointer(e: unknown, phase: string): void }).pointer(
+      { pointerType: "mouse", buttons: 0, movementX, movementY, preventDefault() {} },
+      "move",
+    );
+  try {
+    // One count at a time on a display scaled 200 %: half a pixel an event.
+    for (let i = 0; i < 8; i++) move(0.5, -0.5);
+    const total = sent.reduce(([x, y], [dx, dy]) => [x + dx, y + dy], [0, 0]);
+    assert.deepEqual(total, [4, -4]);
+    assert.ok(sent.every(([dx, dy]) => Number.isInteger(dx) && Number.isInteger(dy)));
+  } finally {
+    (globalThis as { document?: unknown }).document = doc;
+  }
+});
+
 test("a second mouse button held with the first is pressed and released", () => {
   const sent: string[] = [];
   const mod = { _pf_input: (kind: number, code: number) => sent.push(`${kind}:${code}`) };

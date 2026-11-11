@@ -152,6 +152,10 @@ export class InputPipe {
   private readonly off: Array<() => void> = [];
   /** Fractional wheel travel carried to the next event, so slow scrolls still arrive. */
   private wheel = { x: 0, y: 0 };
+  /** Fractional locked-pointer travel carried to the next event. The wire takes whole counts,
+   *  and a display scale or page zoom makes `movementX` a fraction of one: a 1 kHz mouse
+   *  moving slowly sends nothing but such events. */
+  private motion = { x: 0, y: 0 };
   private touches = new Map<number, number>();
   /** Keys and mouse buttons (`MouseEvent.buttons`) the host holds down, for a lost focus to let go of. */
   private keys = new Set<number>();
@@ -439,8 +443,14 @@ export class InputPipe {
     // hover, with no click needed.
     if (phase === "move") {
       if (this.captured) {
-        if (e.movementX || e.movementY) {
-          this.mod._pf_input(KIND.MOUSE_MOVE, 0, e.movementX, e.movementY, 0);
+        this.motion.x += e.movementX;
+        this.motion.y += e.movementY;
+        const dx = Math.trunc(this.motion.x);
+        const dy = Math.trunc(this.motion.y);
+        if (dx || dy) {
+          this.motion.x -= dx;
+          this.motion.y -= dy;
+          this.mod._pf_input(KIND.MOUSE_MOVE, 0, dx, dy, 0);
         }
       } else {
         const [x, y] = this.stream(e);
