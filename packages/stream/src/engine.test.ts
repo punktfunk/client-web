@@ -140,6 +140,20 @@ test("a door's redirect dials the seat's plane once, with the credential bound t
   assert.equal(engine.current.kind, "error", "a second redirect ends the connect");
 });
 
+test("a request for access a door redirects streams on the seat", () => {
+  const { engine, mod, calls } = engineIn("needs-pairing");
+  engine.requestAccess({ width: 1280, height: 720 });
+  (mod.__pfOnCtlReady as () => void)();
+  assert.equal(engine.current.kind, "awaiting-approval");
+
+  const before = calls.length;
+  (mod.__pfOnRedirect as (port: number, certHash: string) => void)(9784, "ab".repeat(32));
+  assert.equal(engine.current.kind, "starting", "admitted: the stream is on its way");
+  assert.ok(calls.slice(before).includes("_pf_wt_close"), "the door's connection is closed first");
+  (mod.__pfOnDeviceReady as () => void)();
+  assert.equal(dialled.at(-1), "https://192.168.1.21:9784/pf2", "then the seat's own port");
+});
+
 test("a connect left before its host answers says nothing afterwards", async () => {
   const { engine } = engineIn("ready");
   let answer = (_: Response) => {};

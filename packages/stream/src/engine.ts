@@ -709,15 +709,23 @@ export class Engine {
   /**
    * The host is a door and this profile plays on a seat of the box: dial the seat's browser
    * plane once, pinning the hash the door vouched for over this pinned connection, and say
-   * `Hello` there. The device credential binds to that plane's certificate, as to any.
+   * `Hello` there. The device credential binds to that plane's certificate, as to any. A door
+   * redirects only a device it admitted, so a request for access it answers this way is
+   * approved: the host is pinned as an approval pins it, and the stream starts.
    */
   private onRedirect(port: number, certHash: string): void {
     const origin = this.origin;
     const opts = this.streamed;
-    if (!origin || !opts || this.state.kind !== "starting") return;
+    const kind = this.state.kind;
+    if (!origin || !opts || (kind !== "starting" && kind !== "awaiting-approval")) return;
     if (this.seatPlane || certHash.length !== 64) {
       this.stopSession();
       return this.set({ kind: "error", origin, message: "the host sent this stream elsewhere twice" });
+    }
+    if (kind === "awaiting-approval") {
+      this.knockSince = 0;
+      void this.pinApproved(origin);
+      this.set({ kind: "starting", origin });
     }
     // The door closes this connection next; closing it first keeps that close from ending the
     // dial while the credential rebinds.
