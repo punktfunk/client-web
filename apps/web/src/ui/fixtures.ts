@@ -68,7 +68,7 @@ export const SCREENS = {
   "pair": { kind: "pair", origin: "https://192.168.1.25:47990", mode: "first" },
   "pair-again": { kind: "pair", origin: "https://192.168.1.25:47990", mode: "again" },
   "pair-refused": { kind: "pair", origin: "https://192.168.1.25:47990", mode: "first", error: "That PIN was refused." },
-  "waiting": { kind: "waiting", origin: "https://192.168.1.25:47990", name: "Safari on Mac" },
+  "waiting": { kind: "waiting", origin: "https://192.168.1.25:47990", name: "Safari on Mac", code: "4F2A 91C3 07BE D512" },
   "profiles": {
     kind: "profiles",
     origin: "https://192.168.1.25:47990",

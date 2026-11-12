@@ -673,6 +673,10 @@ export class ConsoleUi implements Ui {
       case "streaming":
         if (was?.kind !== "streaming") c.phase(1);
         return;
+      case "waiting":
+        // The device key loads with the first connect, after the console is up.
+        if (s.code) c.push(CONSOLE_PUSH.DEVICE_CODE, s.code);
+        return;
       case "error":
         this.dialled = false;
         this.dropPending();

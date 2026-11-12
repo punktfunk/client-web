@@ -51,8 +51,10 @@ const DENIED = 0x64;
 function engineIn(kind: "needs-pairing" | "ready", bridge?: string, origin = ORIGIN) {
   const calls: string[] = [];
   const base: Record<string, unknown> = {
-    HEAPU8: new Uint8Array(0),
+    // What `_pf_device_fingerprint_hex` leaves at the one address `_malloc` hands out.
+    HEAPU8: new TextEncoder().encode("4f2a91c307bed512".padEnd(64, "0")),
     stringToNewUTF8: () => 0,
+    _malloc: () => 0,
     _free: () => {},
   };
   const mod = new Proxy(base, {
@@ -90,7 +92,8 @@ const close = (mod: Record<string, unknown>, code: number) =>
 test("a denied request says why, and does not read as a forgotten pairing", () => {
   const { engine, mod, calls } = engineIn("needs-pairing");
   engine.requestAccess({ width: 1280, height: 720 });
-  assert.deepEqual(engine.current, { kind: "awaiting-approval", origin: ORIGIN, name: "Safari on Mac" });
+  // The code the host's console shows beside the request: the fingerprint `4f 2a 91 c3 07 be d5 12 …`.
+  assert.deepEqual(engine.current, { kind: "awaiting-approval", origin: ORIGIN, name: "Safari on Mac", code: "4F2A 91C3 07BE D512" });
   assert.equal(dialled.at(-1), "https://192.168.1.21:9778/pf2", "asking dials the plane");
 
   refuse(mod, DENIED, "the request was denied on the host");

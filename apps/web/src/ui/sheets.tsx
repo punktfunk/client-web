@@ -115,7 +115,7 @@ export function Pair({ screen, actions }: Props<"pair">): JSX.Element {
   return (
     <Sheet title={again ? m.browser_pair_title_again() : m.pair_title({ host: bare(screen.origin) })}>
       <Sub>{again ? m.browser_pair_again_body() : m.pair_intro_pin_only()}</Sub>
-      <Sub>{m.pair_no_pin_hint()}</Sub>
+      {!screen.pinOnly && <Sub>{m.pair_no_pin_hint()}</Sub>}
       {/* The console's PIN readout, as a field: it is copied off another screen digit by
           digit, and a mistyped one costs a whole pairing window. `h-auto!` because the input's
           own `h-input-height` is a token tailwind-merge cannot see as a height. */}
@@ -136,9 +136,11 @@ export function Pair({ screen, actions }: Props<"pair">): JSX.Element {
       {screen.error && <ErrorLine text={screen.error} />}
       <Row>
         <Button variant="secondary" onClick={() => actions.back()}>{m.common_back()}</Button>
-        <Button variant="secondary" disabled={!!screen.busy} onClick={() => actions.requestAccess()}>
-          {m.pair_request_access()}
-        </Button>
+        {!screen.pinOnly && (
+          <Button variant="secondary" disabled={!!screen.busy} onClick={() => actions.requestAccess()}>
+            {m.pair_request_access()}
+          </Button>
+        )}
         <Button disabled={!!screen.busy} onClick={submit}>
           {screen.busy ? m.pair_pairing() : m.pair_action()}
         </Button>
@@ -151,6 +153,7 @@ export function Waiting({ screen, actions }: Props<"waiting">): JSX.Element {
   return (
     <Sheet title={m.pair_waiting_for_approval()}>
       <Sub>{m.dial_approve_no_pin({ host: bare(screen.origin) })}</Sub>
+      {screen.code && <Sub>{m.pair_device_code({ code: screen.code })}</Sub>}
       <Spinner className="mx-auto my-8 block size-12" />
       <Row>
         <Button autoFocus variant="secondary" onClick={() => actions.cancelRequest()}>{m.common_cancel()}</Button>
