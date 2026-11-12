@@ -136,8 +136,9 @@ export type EngineState =
   /** The control stream is open and this browser has no pairing with the host. */
   | { kind: "needs-pairing"; origin: string }
   /** The host holds this browser's request for access until someone approves it in the host's
-   *  console, where it shows as `name`. Approval streams on this same connection. */
-  | { kind: "awaiting-approval"; origin: string; name: string }
+   *  console, where it shows as `name` beside `code`, this device's code. Approval streams on
+   *  this same connection. */
+  | { kind: "awaiting-approval"; origin: string; name: string; code?: string }
   | { kind: "pairing"; origin: string }
   /** The ceremony succeeded. The host closes after it, as it does for native clients; the
    *  consumer reconnects to stream. */
@@ -564,11 +565,12 @@ export class Engine {
 
   /**
    * Ask for access without a PIN: someone approves this browser in the host's console. Valid
-   * where `pair` is, and the same reconnect applies. Approval streams `opts` on this connection;
-   * a denial or a request nobody answers ends in `pair-refused` with the host's reason. An
-   * approval whose stream the host can't place ends in `paired`: the device is in, and the next
-   * connect picks the profile and readies its seat first. The request offers every codec this
-   * browser decodes, as `startStream` does, since its `Hello` is the stream's.
+   * where `pair` is, and the same reconnect applies, checked against the host this connect
+   * verified: a request proves only this device, never the host. Approval streams `opts` on
+   * this connection; a denial or a request nobody answers ends in `pair-refused` with the host's
+   * reason. An approval whose stream the host can't place ends in `paired`: the device is in, and
+   * the next connect picks the profile and readies its seat first. The request offers every codec
+   * this browser decodes, as `startStream` does, since its `Hello` is the stream's.
    */
   requestAccess(opts: StreamOptions): void {
     const origin = this.origin;
@@ -579,13 +581,27 @@ export class Engine {
     this.offer(false);
     this.pendingKnock = opts;
     if (kind === "needs-pairing") {
-      this.set({ kind: "awaiting-approval", origin, name: this.deviceName });
+      this.set(this.awaiting(origin));
       this.dial();
       return;
     }
+    const known = pf.hosts.fingerprint(origin) ?? this.expect;
     pf.hosts.unpair(origin);
     this.mod._pf_wt_close?.();
-    void this.connect(this.target ?? origin, { expectFingerprint: this.expect });
+    void this.connect(this.target ?? origin, { expectFingerprint: known });
+  }
+
+  /** `awaiting-approval`, with this device's code once its key is loaded: the first 16 hex
+   *  digits of the fingerprint the host knows it by, upper case, in fours. */
+  private awaiting(origin: string): EngineState {
+    const p = this.mod._malloc(64);
+    try {
+      const hex = this.mod._pf_device_fingerprint_hex(p) ? UTF8.decode(this.mod.HEAPU8.subarray(p, p + 16)) : "";
+      const code = hex.toUpperCase().match(/.{4}/g)?.join(" ");
+      return { kind: "awaiting-approval", origin, name: this.deviceName, ...(code ? { code } : {}) };
+    } finally {
+      this.mod._free(p);
+    }
   }
 
   /** Withdraw a request for access. The host drops it with the connection, so an approval that
@@ -1181,7 +1197,7 @@ export class Engine {
     if (knock) {
       this.streamed = knock;
       this.knockSince = performance.now();
-      this.set({ kind: "awaiting-approval", origin, name: this.deviceName });
+      this.set(this.awaiting(origin));
       return this.hello(knock);
     }
     const pin = this.pendingPin;

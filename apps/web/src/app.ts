@@ -358,16 +358,17 @@ class App {
       case "connecting":
         return this.show({ kind: "connecting", origin: s.origin, phase: "connecting" });
       case "needs-pairing":
-        return this.show({ kind: "pair", origin: s.origin, mode: "first" });
+        return this.show({ kind: "pair", origin: s.origin, mode: "first", ...this.pinOnly(s.origin) });
       case "pairing":
-        return this.show({ kind: "pair", origin: s.origin, mode: "first", busy: true });
+        return this.show({ kind: "pair", origin: s.origin, mode: "first", busy: true, ...this.pinOnly(s.origin) });
       case "awaiting-approval":
-        return this.show({ kind: "waiting", origin: s.origin, name: s.name });
+        return this.show({ kind: "waiting", origin: s.origin, name: s.name, ...(s.code ? { code: s.code } : {}) });
       case "paired": {
         // A request for access was for the desktop stream; one the host had no seat for yet goes
         // on through the profile gate once the connect is ready. The console drives its own.
         if (this.web && this.screen.kind === "waiting") this.resumeOnReady ??= {};
-        this.show({ kind: "pair", origin: s.origin, mode: "first", busy: true });
+        const pinOnly = this.screen.kind === "pair" && this.screen.pinOnly;
+        this.show({ kind: "pair", origin: s.origin, mode: "first", busy: true, ...(pinOnly ? { pinOnly } : {}) });
         // The host closes after the ceremony, as it does for native clients; streaming is a
         // fresh connection.
         const origin = s.origin;
@@ -380,9 +381,10 @@ class App {
           origin: s.origin,
           mode: "first",
           error: s.reason ? sentence(s.reason) : m.pair_wrong_pin(),
+          ...this.pinOnly(s.origin),
         });
       case "forgotten":
-        return this.show({ kind: "pair", origin: s.origin, mode: "again" });
+        return this.show({ kind: "pair", origin: s.origin, mode: "again", ...this.pinOnly(s.origin) });
       case "ready": {
         if (this.gate) return this.show(this.gate.screen);
         if (this.switchOnReady === s.origin) {
@@ -561,6 +563,17 @@ class App {
   /** The hosts with a pairing here: the shelves. */
   private paired(): HostCard[] {
     return this.cards().filter((h) => h.fingerprint);
+  }
+
+  /** A host added by its address pairs by PIN: nothing names the fingerprint it must show, and a
+   *  request proves only this device. One the page's server lists, a link pinned or this browser
+   *  paired with has one. */
+  private pinOnly(origin: string): { pinOnly?: boolean } {
+    const known =
+      this.configured.has(origin) ||
+      this.pin?.origin === origin ||
+      !!this.engine.knownHosts().find((h) => h.origin === origin)?.fingerprint;
+    return known ? {} : { pinOnly: true };
   }
 
   /** What a host is called on screen. */

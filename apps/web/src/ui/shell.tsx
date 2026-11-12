@@ -171,7 +171,10 @@ function announce(s: Screen): string {
     case "accept": return m.browser_announce_accept_a11y();
     case "connecting": return m.browser_announce_connecting_to_a11y({ host: s.origin });
     case "pair": return s.error ?? m.browser_announce_pair_a11y();
-    case "waiting": return m.browser_announce_waiting_a11y({ name: s.name });
+    case "waiting": {
+      const waiting = m.browser_announce_waiting_a11y({ name: s.name });
+      return s.code ? `${waiting}. ${m.pair_device_code({ code: s.code })}` : waiting;
+    }
     case "profiles": return s.error ?? m.browser_announce_profiles_a11y({ host: s.host });
     case "seat": return s.detail ? `${s.title} ${s.detail}` : s.title;
     case "trust": return m.browser_announce_trust_a11y();

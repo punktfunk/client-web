@@ -95,11 +95,13 @@ type ScreenBody =
   /**
    * The PIN ceremony. `mode` is why we are here, and it changes the wording rather than the
    * screen: `first` is a browser that has never paired, `again` is a host that has forgotten
-   * this one — which is a different sentence and the same box.
+   * this one — which is a different sentence and the same box. `pinOnly`: a host added by its
+   * address, which is offered no request for access.
    */
-  | { kind: "pair"; origin: string; mode: "first" | "again"; error?: string; busy?: boolean }
-  /** A request for access, held by the host until someone approves `name` in its console. */
-  | { kind: "waiting"; origin: string; name: string }
+  | { kind: "pair"; origin: string; mode: "first" | "again"; error?: string; busy?: boolean; pinOnly?: boolean }
+  /** A request for access, held by the host until someone approves `name` in its console, which
+   *  shows `code` beside it. */
+  | { kind: "waiting"; origin: string; name: string; code?: string }
   /** Who plays on a box with profiles. `saved` is the pick this browser keeps, which leads;
    *  `gone` names one the box no longer lists. No cards: the box has none, or `error` says why. */
   | { kind: "profiles"; origin: string; host: string; cards: ProfileCard[]; saved?: string; gone?: string; error?: string }

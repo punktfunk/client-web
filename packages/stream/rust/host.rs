@@ -347,6 +347,9 @@ const PUSH_PADS: u32 = 14;
 const PUSH_NAVIGATE: u32 = 15;
 /// `{"fp_hex", "answer": ProfilesAnswer}` — what a host answered `FetchProfiles` with.
 const PUSH_PROFILES: u32 = 20;
+/// A JSON string: this device's code. Not Apple's: Apple has its identity at create, and the page
+/// has the device key only once a connect has loaded it.
+const PUSH_DEVICE_CODE: u32 = 21;
 
 #[derive(serde::Deserialize)]
 struct ProfilesPush {
@@ -406,6 +409,7 @@ pub unsafe extern "C" fn pf_console_push(kind: u32, ptr: *const u8, len: u32) {
             PUSH_PROFILES => {
                 json::<ProfilesPush>(text).map(|v| console.set_profiles(&v.fp_hex, v.answer))
             }
+            PUSH_DEVICE_CODE => json::<String>(text).map(|v| console.set_device_code(v)),
             _ => None,
         };
         if done.is_none() {

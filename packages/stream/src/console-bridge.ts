@@ -22,6 +22,8 @@ export const CONSOLE_PUSH = {
   NAVIGATE: 15,
   /** `{fp_hex, answer}`: `{Listed: rows}`, `"NoProfiles"` or `{Failed: why}`, for `FetchProfiles`. */
   PROFILES: 20,
+  /** A JSON string: this device's code, which the console shows while a request waits. */
+  DEVICE_CODE: 21,
 } as const;
 
 /** `pf_console_state` bits. */
