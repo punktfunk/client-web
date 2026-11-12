@@ -37,6 +37,7 @@ export {
   wakingLine,
 } from "./profiles.ts";
 export { type GameEnd, gameEndNotice, gameEndOf, gameGone } from "./game-end.ts";
+export { type DisplayTarget, type ScreenPick, type ScreenRow, screenNote, screenRows, type ScreenTargets } from "./screens.ts";
 export { captureLog, pageLog } from "./logs.ts";
 export {
   CONSOLE_PUSH,

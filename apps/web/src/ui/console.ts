@@ -20,6 +20,7 @@ import {
   type ConsoleGame,
   type ConsoleHostRow,
   type ConsoleReq,
+  type DisplayTarget,
   deviceName,
   type Engine,
   exitApp,
@@ -33,6 +34,7 @@ import {
   remoteKey,
   type ProfilePick,
   reqOf,
+  type ScreenTargets,
   tizen,
   tvBack,
 } from "@punktfunk/stream";
@@ -167,6 +169,9 @@ export class ConsoleUi implements Ui {
   /** The management API of the host whose shelf the console shows: its launch hold asks it what
    *  is running. */
   private hostApi: { origin: string; host: Host } | null = null;
+  /** That host's `GET /display/targets` answer, for its card's Screen section: a pick is
+   *  written through the same API, so no other card offers one. */
+  private screens: { origin: string; targets: ScreenTargets | null } | null = null;
   /** A wake the console asked for: it gates the console's navigation until it hears back. */
   private waking: { req: ConsoleReq; key: string; origin: string; name: string; then: boolean; since: number; timer: number } | null = null;
   private readonly live: HTMLElement;
@@ -715,7 +720,8 @@ export class ConsoleUi implements Ui {
     this.engine.console.push(kind, { req: this.libraryReq, [field]: value });
   }
 
-  /** The library for the host the engine is on: its titles, their covers, what is running. */
+  /** The library for the host the engine is on: its titles, their covers, what is running, and
+   *  its card's screens. */
   private library(s: Extract<Screen, { kind: "library" }>): void {
     // The console reaches a library only through a host it connected to, so it has a shelf.
     if (s.origin === null) return;
@@ -735,7 +741,10 @@ export class ConsoleUi implements Ui {
     if (this.shelf !== origin) {
       this.shelf = origin;
       const now = this.engine.current;
-      if (now.kind === "ready" && now.origin === origin) this.hostApi = { origin: origin, host: now.host };
+      if (now.kind === "ready" && now.origin === origin) {
+        this.hostApi = { origin: origin, host: now.host };
+        void this.readScreens();
+      }
       this.gamesSent = "";
       this.artSent.clear();
       // A pairing that just finished: the console's Pair screen waits for this.
@@ -806,7 +815,7 @@ export class ConsoleUi implements Ui {
     const known = new Map(this.engine.knownHosts().map((h) => [h.origin, h]));
     this.origins.clear();
     const rows = this.hosts.map((h) => {
-      const row = hostRow(h, known.get(h.origin)?.fingerprint ?? h.fingerprint);
+      const row = hostRow(h, known.get(h.origin)?.fingerprint ?? h.fingerprint, this.screensOf(h.origin));
       this.origins.set(row.key, h.origin);
       return row;
     });
@@ -817,7 +826,35 @@ export class ConsoleUi implements Ui {
    *  engine knows. */
   private row(origin: string): ConsoleHostRow {
     const card = this.hosts.find((h) => h.origin === origin) ?? ({ origin } as HostCard);
-    return hostRow(card, this.fingerprint(origin));
+    return hostRow(card, this.fingerprint(origin), this.screensOf(origin));
+  }
+
+  private screensOf(origin: string): ScreenTargets | null {
+    return this.screens?.origin === origin ? this.screens.targets : null;
+  }
+
+  /** Read the shelf host's screens, then hand the console its rows again. A host without the
+   *  route, or one that fails, shows no Screen section. */
+  private async readScreens(): Promise<void> {
+    const api = this.hostApi;
+    if (!api) return;
+    const targets = await api.host.screens().catch(() => null);
+    if (this.hostApi !== api) return;
+    this.screens = { origin: api.origin, targets };
+    this.pushHosts();
+  }
+
+  /** Write a Screen row's pick through the shelf host's API. A refusal is the console's notice;
+   *  the rows are read back either way. */
+  private async setScreen(origin: string, screen: DisplayTarget, topology: string): Promise<void> {
+    const api = this.hostApi;
+    if (!api || api.origin !== origin) return;
+    try {
+      await api.host.setScreen({ screen, ...(topology ? { topology } : {}) });
+    } catch (e) {
+      this.engine.console.push(CONSOLE_PUSH.NOTICE, e instanceof Error ? e.message : String(e));
+    }
+    await this.readScreens();
   }
 
   private fingerprint(origin: string): string | undefined {
@@ -990,6 +1027,9 @@ export class ConsoleUi implements Ui {
       }
       case "EndGame":
         if (origin) void this.endGame(origin, str("app_id"), str("title"));
+        return;
+      case "SetScreen":
+        if (origin && body["screen"]) void this.setScreen(origin, body["screen"] as DisplayTarget, str("topology"));
         return;
       default:
         // Presets, the speed test, pad tests, licences and host tools are the native clients';

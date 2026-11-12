@@ -62,6 +62,18 @@ export interface Words {
   browser_notice_no_hdr(): string;
   browser_codec_fallback(p: { from: string; to: string }): string;
   browser_codec_fallback_pinned(p: { from: string; to: string }): string;
+  screen_own(): string;
+  screen_in_use(p: { device: string }): string;
+  screen_off(): string;
+  screen_locked_hint(): string;
+  screen_host_decides(): string;
+  screen_show_monitor(): string;
+  screen_role_only(): string;
+  screen_role_main(): string;
+  screen_role_second(): string;
+  screen_role_only_hint(): string;
+  screen_role_main_hint(): string;
+  screen_role_second_hint(): string;
 }
 
 /** A message the host named by id (`apierr_<code>`, `seatline_…`, `launch_…`), filled from the

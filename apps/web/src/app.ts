@@ -37,6 +37,8 @@ import {
   type Reach,
   reach,
   reachTarget,
+  type ScreenPick,
+  type ScreenTargets,
   SEAT_POLL_MS,
   seatGate,
   serverFetch,
@@ -147,6 +149,9 @@ class App {
   /** Hosts a wake went to that have not answered yet. */
   private readonly waking = new Set<string>();
   private probing = false;
+  /** Each host's Screen section as last read, with the management API that writes its pick:
+   *  the device token comes from a connection, so only hosts reached this visit have one. */
+  private readonly screens = new Map<string, { host: Host; targets: ScreenTargets | null }>();
   /** A connect link the page opened with, until it is answered, and the title it asked for. */
   private link: { target: string | HostTarget; fp?: string; launch?: string } | null = null;
   private launchOnReady: string | null = null;
@@ -246,6 +251,7 @@ class App {
         hosts.rename(origin, label);
         this.render(engine.current);
       },
+      setScreen: (origin, pick) => void this.setScreen(origin, pick),
       openSettings: (on) => {
         this.settingsOpen = on;
         this.render(engine.current);
@@ -291,6 +297,8 @@ class App {
   private render(s: EngineState): void {
     const was = this.lastKind;
     this.lastKind = s.kind;
+    // A host card's screens, read once per connection. The console reads its own.
+    if (this.web && s.kind === "ready" && this.screens.get(s.origin)?.host !== s.host) void this.readScreens(s.origin, s.host);
     // The gate waits on its host's `ready`; anything else ends the wait, and a connect that
     // ended short of it drops the Switch profile it was for.
     if (this.gate && (s.kind !== "ready" || s.origin !== this.gate.origin)) this.gate = null;
@@ -541,7 +549,7 @@ class App {
   }
 
   /** Every host this page knows: the server's first, under the name it gives them; then the ones
-   *  typed here. Each with what a probe last said about it. */
+   *  typed here. Each with what a probe last said about it, and its screens once read. */
   private cards(): HostCard[] {
     const known = new Map(this.engine.knownHosts().map((h) => [h.origin, h]));
     const listed: HostCard[] = [
@@ -556,8 +564,32 @@ class App {
     ];
     return listed.map((h) => {
       const seen = this.reachCache.get(h.origin);
-      return seen ? { ...h, reach: seen.reach } : h;
+      const screens = this.screens.get(h.origin)?.targets;
+      return { ...h, ...(seen ? { reach: seen.reach } : {}), ...(screens ? { screens } : {}) };
     });
+  }
+
+  /** Read a host's Screen section through `host`, keeping the last answer meanwhile, and
+   *  redraw the list it shows on. A host without the route, or one that fails, shows none. */
+  private async readScreens(origin: string, host: Host): Promise<void> {
+    this.screens.set(origin, { host, targets: this.screens.get(origin)?.targets ?? null });
+    const targets = await host.screens().catch(() => null);
+    if (this.screens.get(origin)?.host !== host) return;
+    this.screens.set(origin, { host, targets });
+    this.redrawLists();
+  }
+
+  /** Write a Screen row's pick, say a refusal (`screen_choice_not_granted` among them), and
+   *  read the rows back either way. */
+  private async setScreen(origin: string, pick: ScreenPick): Promise<void> {
+    const host = this.screens.get(origin)?.host;
+    if (!host) return;
+    try {
+      await host.setScreen(pick);
+    } catch (e) {
+      this.ui.notify(sentence(e instanceof Error ? e.message : String(e)), "error");
+    }
+    await this.readScreens(origin, host);
   }
 
   /** The hosts with a pairing here: the shelves. */
@@ -755,6 +787,7 @@ class App {
   private forget(origin: string): void {
     const reconnect = this.screen.kind === "trust" && this.screen.origin === origin;
     this.reachCache.delete(origin);
+    this.screens.delete(origin);
     if (this.libraryFor === origin) this.clearLibrary();
     const pin = this.pin;
     this.engine.forget(origin);

@@ -6,16 +6,23 @@
 import { words } from "./words.ts";
 
 const GRANT_GAMEPAD = 1 << 0;
+/** Choose its screen. It applies at the next connect, so it changes nothing in a session. */
+const GRANT_DISPLAY = 0x100;
 /** Every grant this build knows. Bits a newer host adds are dropped before labelling. */
-const GRANT_ALL = 0x7f;
-/** "Full control" as stored before the power grant existed. */
-const GRANT_ALL_PRE_POWER = 0x3f;
+const GRANT_ALL = 0x1ff;
+/** "Full control" as stored before the power, manage-games and screen grants existed. */
+const GRANT_ALL_LEGACY = [0x3f, 0x7f, 0xff];
 
 type Preset = "full" | "controller" | "view" | "custom";
 
+/** The mask in this build's grants, a legacy Full read as Full: core's `effective_mask`. */
+function effective(grants: number): number {
+  return (GRANT_ALL_LEGACY.includes(grants) ? GRANT_ALL : grants) & GRANT_ALL;
+}
+
 /** The preset a grant mask reads as. */
 function presetOf(grants: number): Preset {
-  const mask = (grants === GRANT_ALL_PRE_POWER ? GRANT_ALL : grants) & GRANT_ALL;
+  const mask = effective(grants);
   if (mask === GRANT_ALL) return "full";
   if (mask === GRANT_GAMEPAD) return "controller";
   if (mask === 0) return "view";
@@ -56,9 +63,11 @@ export function chipText(grants: number, secsLeft: number | null): string | unde
   return `${level} · ${left ? words.grant_chip_ends({ time: left }) : words.grant_chip_ends_soon()}`;
 }
 
-/** What a mid-session change says: a new level by name, else the host's T−5 / T−1 warning. */
+/** What a mid-session change says: a new level by name, else the host's T−5 / T−1 warning. The
+ *  screen choice alone is no change: it applies at the next connect. */
 export function updateNotice(prevGrants: number, grants: number, secsLeft: number | null): string | undefined {
-  if (grants !== prevGrants) {
+  const session = (g: number) => effective(g) & ~GRANT_DISPLAY;
+  if (session(grants) !== session(prevGrants)) {
     switch (presetOf(grants)) {
       case "full":
         return words.grant_now_full();

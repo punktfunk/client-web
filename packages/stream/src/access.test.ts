@@ -8,19 +8,22 @@ import { useEnglish } from "./words.testing.ts";
 useEnglish();
 
 test("labels derive from the mask", () => {
-  assert.equal(presetLabel(0x7f), "Full control");
+  assert.equal(presetLabel(0x1ff), "Full control");
   assert.equal(presetLabel(0x3f), "Full control", "full as stored before the power grant");
-  assert.equal(presetLabel(0x7f | (1 << 20)), "Full control", "a newer host's extra bits");
+  assert.equal(presetLabel(0x7f), "Full control", "full as stored before the manage-games grant");
+  assert.equal(presetLabel(0xff), "Full control", "full as stored before the screen grant");
+  assert.equal(presetLabel(0x1ff | (1 << 20)), "Full control", "a newer host's extra bits");
   assert.equal(presetLabel(0x01), "Controller only");
   assert.equal(presetLabel(0), "View only");
   assert.equal(presetLabel(0x01 | 0x08), "Custom");
+  assert.equal(presetLabel(0x1ff & ~0x04), "Custom");
 });
 
 test("a full permanent session wears no chip", () => {
-  assert.equal(chipText(0x7f, null), undefined);
+  assert.equal(chipText(0x1ff, null), undefined);
   assert.equal(chipText(0x01, null), "Controller only");
-  assert.equal(chipText(0x7f, 2 * 3600 - 120), "Full control · ends in 1 h 58 m");
-  assert.equal(chipText(0x7f, 30), "Full control · ends in under 1 m");
+  assert.equal(chipText(0x1ff, 2 * 3600 - 120), "Full control · ends in 1 h 58 m");
+  assert.equal(chipText(0x1ff, 30), "Full control · ends in under 1 m");
 });
 
 test("remaining time is whole minutes", () => {
@@ -31,8 +34,13 @@ test("remaining time is whole minutes", () => {
 });
 
 test("a change names the new level, a warning the time left", () => {
-  assert.equal(updateNotice(0x7f, 0x01, null), "Access is now Controller only");
-  assert.equal(updateNotice(0x7f, 0x7f, 5 * 60), "Access ends in 5 m");
-  assert.equal(updateNotice(0x7f, 0x7f, 30), "Access ends in under a minute");
-  assert.equal(updateNotice(0x7f, 0x7f, null), undefined);
+  assert.equal(updateNotice(0x1ff, 0x01, null), "Access is now Controller only");
+  assert.equal(updateNotice(0x1ff, 0x1ff, 5 * 60), "Access ends in 5 m");
+  assert.equal(updateNotice(0x1ff, 0x1ff, 30), "Access ends in under a minute");
+  assert.equal(updateNotice(0x1ff, 0x1ff, null), undefined);
+});
+
+test("the screen choice alone raises no notice", () => {
+  assert.equal(updateNotice(0x1ff, 0x1ff & ~0x100, null), undefined);
+  assert.equal(updateNotice(0x01, 0x01 | 0x100, null), undefined);
 });

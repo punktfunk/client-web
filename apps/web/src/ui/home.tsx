@@ -2,16 +2,17 @@
 // punktfunk client; its library, its name and its link are in the card's menu. A new host is
 // added from a sheet, or from the page itself while there is none.
 
+import { type ScreenPick, type ScreenTargets, screenNote, screenRows } from "@punktfunk/stream";
 import { cn } from "@unom/ui/lib/utils";
 import { LibraryBig, Link2, Monitor, MoreHorizontal, Pencil, Play, Plus, Power, Trash2, UserRound } from "lucide-react";
 import { motion } from "motion/react";
-import { type JSX, useState } from "react";
+import { Fragment, type JSX, useState } from "react";
 import { GROUP, ROW_GAP, staggerProps } from "@/components/stagger";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
-import { Menu, MenuContent, MenuItem, MenuSeparator, MenuTrigger } from "@/components/ui/menu";
+import { Menu, MenuContent, MenuItem, MenuLabel, MenuRadioGroup, MenuRadioItem, MenuSeparator, MenuTrigger } from "@/components/ui/menu";
 import { m } from "../paraglide/messages.js";
 import { Body, PageHead } from "./frame.tsx";
 import { bare, ErrorLine, labelOf, status } from "./pieces.tsx";
@@ -177,7 +178,7 @@ function HostTile({ host, actions }: { host: HostCard; actions: Actions }): JSX.
             <MoreHorizontal className="size-4" />
           </Button>
         </MenuTrigger>
-        <MenuContent>
+        <MenuContent className="max-w-80">
           <MenuItem onSelect={() => actions.streamDesktop(host.origin)}>
             <Play />
             {m.browser_hostcard_stream_desktop()}
@@ -200,6 +201,7 @@ function HostTile({ host, actions }: { host: HostCard; actions: Actions }): JSX.
               {m.hostcard_wake()}
             </MenuItem>
           )}
+          {host.screens && <ScreenSection targets={host.screens} onPick={(pick) => actions.setScreen(host.origin, pick)} />}
           <MenuSeparator />
           <MenuItem onSelect={() => setEditing(true)}>
             <Pencil />
@@ -216,5 +218,44 @@ function HostTile({ host, actions }: { host: HostCard; actions: Actions }): JSX.
         </MenuContent>
       </Menu>
     </motion.li>
+  );
+}
+
+/**
+ * The card's Screen section, from the same rows every client draws: the roles with their hints,
+ * the monitors under their heading, one checked row, and why nothing can be picked when the host
+ * decides. Picking the checked row writes nothing.
+ */
+function ScreenSection({ targets, onPick }: { targets: ScreenTargets; onPick: (pick: ScreenPick) => void }): JSX.Element {
+  const rows = screenRows(targets);
+  const note = screenNote(targets);
+  return (
+    <>
+      <MenuSeparator />
+      <MenuLabel>{m.hostcard_section_screen()}</MenuLabel>
+      <MenuRadioGroup
+        value={rows.find((r) => r.checked)?.id ?? ""}
+        onValueChange={(id) => {
+          const pick = rows.find((r) => r.id === id)?.pick;
+          if (pick) onPick(pick);
+        }}
+      >
+        {rows.map((r) => (
+          <Fragment key={r.id}>
+            {r.header && <MenuLabel>{r.header}</MenuLabel>}
+            <MenuRadioItem value={r.id} disabled={!r.pickable} className="items-start">
+              <span className="min-w-0 flex-1">
+                <span className="flex items-baseline justify-between gap-3">
+                  {r.label}
+                  {r.detail && <span className="text-xs text-muted-foreground">{r.detail}</span>}
+                </span>
+                {(r.reason ?? r.hint) && <span className="block text-xs text-muted-foreground">{r.reason ?? r.hint}</span>}
+              </span>
+            </MenuRadioItem>
+          </Fragment>
+        ))}
+      </MenuRadioGroup>
+      {note && <p className="px-2.5 py-1.5 text-xs text-muted-foreground">{note}</p>}
+    </>
   );
 }

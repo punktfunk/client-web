@@ -24,6 +24,7 @@ import { SchemaError } from "effect/Schema";
 import { type GameEnd, gameEndOf } from "./game-end.ts";
 import { PAGE_LIMIT, walkPages } from "./pages.ts";
 import { renewPass, serverFetch, TooMany } from "./pass.ts";
+import type { ScreenPick, ScreenTargets } from "./screens.ts";
 import { hostWord, words } from "./words.ts";
 
 export { DeviceRefused };
@@ -52,7 +53,7 @@ export class Host {
     /** SHA-256 of the host's long-lived certificate — what pairing stored, and what every
      *  device signature is bound to. */
     hostFingerprint: string,
-    signer: Signer,
+    private readonly signer: Signer,
     /** How the host is reached when not by the page's own `fetch`: the plane's tunnel, for a
      *  packaged page. Every call goes through it, the device exchange included. */
     fetch?: Fetch,
@@ -159,7 +160,7 @@ export class Host {
    * generated decoder, written for `display.next`'s `200`, would report as a version mismatch.
    */
   async invoke(id: string): Promise<void> {
-    const res = await this.post(`/api/v1/actions/${encodeURIComponent(id)}`);
+    const res = await this.send("POST", `/api/v1/actions/${encodeURIComponent(id)}`);
     if (!res.ok) throw new Error(await refusal(res, "the host did not run that action"));
   }
 
@@ -170,7 +171,7 @@ export class Host {
   async endGame(appId: string): Promise<GameEnd> {
     try {
       const body = JSON.stringify({ app_id: appId, streaming: true });
-      return gameEndOf((await this.post("/api/v1/game/end", body, "application/json")).status);
+      return gameEndOf((await this.send("POST", "/api/v1/game/end", body, "application/json")).status);
     } catch (e) {
       return { kind: "failed", why: e instanceof Error ? e.message : String(e) };
     }
@@ -181,16 +182,37 @@ export class Host {
    * client does not carry the plain-text body this route takes, so this is by hand too.
    */
   async uploadLog(text: string): Promise<string> {
-    const res = await this.post("/api/v1/client-logs", text);
+    const res = await this.send("POST", "/api/v1/client-logs", text);
     if (!res.ok) throw new Error(await refusal(res, "the host did not take the log"));
     return ((await res.json()) as { id: string }).id;
   }
 
-  private async post(path: string, body?: string, type = "text/plain; charset=utf-8"): Promise<Response> {
+  /**
+   * The screens this device may stream and its pick (`GET /display/targets`), as the host sent
+   * them; `null` from a host without the route. By hand: the SDK this page pins predates it.
+   */
+  async screens(): Promise<ScreenTargets | null> {
+    const res = await this.send("GET", "/api/v1/display/targets");
+    if (res.status === 404) return null;
+    if (!res.ok) throw new Error(await refusal(res, words.error_mgmt_refused({ code: res.status })));
+    return (await res.json()) as ScreenTargets;
+  }
+
+  /** Write this device's pick on its own row (`PUT /display/clients/{fingerprint}`). A refusal
+   *  throws the host's sentence: `screen_choice_not_granted` without the screen grant. */
+  async setScreen(pick: ScreenPick): Promise<void> {
+    const der = Uint8Array.from(atob(await this.signer.spki()), (c) => c.charCodeAt(0));
+    const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", der));
+    const fp = Array.from(digest, (b) => b.toString(16).padStart(2, "0")).join("");
+    const res = await this.send("PUT", `/api/v1/display/clients/${fp}`, JSON.stringify(pick), "application/json");
+    if (!res.ok) throw new Error(await refusal(res, words.error_mgmt_refused({ code: res.status })));
+  }
+
+  private async send(method: string, path: string, body?: string, type = "text/plain; charset=utf-8"): Promise<Response> {
     // Unbound: `window.fetch` called as a method of anything but `window` throws "Illegal invocation".
     const fetch = this.conn.fetch;
     return fetch(`${this.origin}${path}`, {
-      method: "POST",
+      method,
       cache: "no-store",
       headers: {
         authorization: await this.conn.credential.header(),

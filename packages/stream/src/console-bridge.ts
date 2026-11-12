@@ -3,6 +3,7 @@
 // variant is its name as a string and a struct variant is `{ Name: { …fields } }`.
 
 import type { ProfilePick } from "./profiles.ts";
+import type { ScreenTargets } from "./screens.ts";
 
 /** `pf_console_push` kinds. The numbers are Apple's (`clients/apple/native/src/console.rs`). */
 export const CONSOLE_PUSH = {
@@ -60,6 +61,8 @@ export interface ConsoleHostRow {
   running?: string;
   /** The pick saved for this host; the console applies it only while `remember` is set. */
   profile?: ProfilePick | null;
+  /** `GET /display/targets` as the host sent it: the card's Screen section. `null` hides it. */
+  screens?: ScreenTargets | null;
 }
 
 /** A title as the console's shelf draws it (`pf_console_ui::LibraryGame`). */
