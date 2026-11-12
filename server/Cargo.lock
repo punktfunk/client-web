@@ -544,7 +544,7 @@ checksum = "da7c62ceae207dd37ea5b845da6a0696c799f85e97da1ab5b7910be3c1c80223"
 [[package]]
 name = "fec-rs"
 version = "0.1.0"
-source = "git+https://git.unom.io/unom/punktfunk?rev=6e6c07c81db8313ddd8fb75ed0bdbc55a50727e0#6e6c07c81db8313ddd8fb75ed0bdbc55a50727e0"
+source = "git+https://git.unom.io/unom/punktfunk?rev=28c3121022d22a4b1780e7ba00acc1a1ed9c03d4#28c3121022d22a4b1780e7ba00acc1a1ed9c03d4"
 
 [[package]]
 name = "find-msvc-tools"
@@ -1408,7 +1408,7 @@ dependencies = [
 [[package]]
 name = "punktfunk-core"
 version = "0.46.0"
-source = "git+https://git.unom.io/unom/punktfunk?rev=6e6c07c81db8313ddd8fb75ed0bdbc55a50727e0#6e6c07c81db8313ddd8fb75ed0bdbc55a50727e0"
+source = "git+https://git.unom.io/unom/punktfunk?rev=28c3121022d22a4b1780e7ba00acc1a1ed9c03d4#28c3121022d22a4b1780e7ba00acc1a1ed9c03d4"
 dependencies = [
  "aes-gcm",
  "chacha20poly1305",

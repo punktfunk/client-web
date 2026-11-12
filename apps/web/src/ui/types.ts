@@ -8,7 +8,7 @@
 // The split is what makes a second interface cheap rather than a fork: nothing about pairing,
 // trust or the session lives in a renderer.
 
-import type { AudioSnapshot, HudCorner, HudLine, KnownHost, LibraryEntry, Reach, Settings } from "@punktfunk/stream";
+import type { AudioSnapshot, HudCorner, HudLine, KnownHost, LibraryEntry, Reach, ScreenPick, ScreenTargets, Settings } from "@punktfunk/stream";
 
 /** Everything worth showing about a live session. */
 export interface SessionStats {
@@ -57,6 +57,8 @@ export interface HostCard extends KnownHost {
   wake?: string;
   /** A wake went out and the host has not answered yet. */
   waking?: boolean;
+  /** The host's screens for this device, read this visit: the card's Screen section. */
+  screens?: ScreenTargets;
 }
 
 /** One card on the profile picker: its picture, else initials on the profile's accent, and what
@@ -229,6 +231,8 @@ export interface Actions {
   wake(origin: string): Promise<boolean>;
   /** Name a host something this browser will remember. An empty label drops the name. */
   rename(origin: string, label: string): void;
+  /** Write a Screen row's pick on the host. A refusal is said; the card reads its rows again. */
+  setScreen(origin: string, pick: ScreenPick): void;
   /** Leave the stream for the page it started from. `quit` ends the title too; without it the
    *  game keeps running. */
   disconnect(quit?: boolean): void;

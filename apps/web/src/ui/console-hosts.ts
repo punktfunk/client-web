@@ -1,7 +1,7 @@
 // A known host as the console's Home draws it, and back: the row the page pushes, and the origin
 // a row's key or address names when the console raises a command for it.
 
-import type { ConsoleHostRow } from "@punktfunk/stream";
+import type { ConsoleHostRow, ScreenTargets } from "@punktfunk/stream";
 import type { HostCard } from "./types.ts";
 
 /** Where a row says its host is: its plane address, else its own hostname. A host the page's
@@ -11,8 +11,9 @@ export function hostAddr(h: HostCard): string {
   return h.plane ?? (url.pathname === "/" ? url.hostname : h.origin);
 }
 
-/** The console's row for `h`, pinned to `fp` when this browser paired with it. */
-export function hostRow(h: HostCard, fp: string | undefined): ConsoleHostRow {
+/** The console's row for `h`, pinned to `fp` when this browser paired with it, with the host's
+ *  `screens` answer as it sent it. */
+export function hostRow(h: HostCard, fp: string | undefined, screens: ScreenTargets | null = null): ConsoleHostRow {
   const addr = hostAddr(h);
   const mgmt = Number(new URL(h.origin).port) || 47990;
   return {
@@ -32,6 +33,7 @@ export function hostRow(h: HostCard, fp: string | undefined): ConsoleHostRow {
     pin: null,
     bound_preset: null,
     profile: h.profile ?? null,
+    screens,
   };
 }
 

@@ -84,7 +84,7 @@ export const noop: Actions = {
   forget() {}, wake: async () => false, disconnect() {},
   openTools() {}, hostAction() {}, endGame() {}, sendLog() {},
   followLink() {}, copyLink() {},
-  setAdding() {}, rename() {}, openSettings() {}, setSettings() {}, toggleCapture() {},
+  setAdding() {}, rename() {}, setScreen() {}, openSettings() {}, setSettings() {}, toggleCapture() {},
   showDiagnostics() {}, openMenu() {}, fullscreen() {}, cycleStats() {}, toggleMic() {},
   consoleMode() {}, pickProfile() {}, switchProfile() {},
 };

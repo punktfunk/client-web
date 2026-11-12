@@ -491,6 +491,8 @@ pub unsafe extern "C" fn pf_session_hello(
             // One canvas, one screen.
             screens: Vec::new(),
             view: None,
+            // No presets here, so no host screen to wish for: the device's pick decides.
+            screen_wish: None,
         });
         c.fps = fps;
         c.bitrate_kbps = bitrate_kbps;
