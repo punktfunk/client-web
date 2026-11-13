@@ -1,5 +1,6 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
-import { type JSX, useState } from "react";
+import { toast, Toaster } from "@unom/ui/toast";
+import { type JSX, useEffect, useState } from "react";
 import { fn } from "storybook/test";
 import { noop, SCREENS } from "./fixtures.ts";
 import { ShellFrame } from "./shell.tsx";
@@ -35,9 +36,41 @@ export const Waiting = of(SCREENS.waiting);
 export const Profiles = of(SCREENS["profiles"]);
 export const ProfilesGone = of(SCREENS["profiles-gone"]);
 export const SeatWait = of(SCREENS["seat"]);
+export const Unlock = of(SCREENS["unlock"]);
+export const UnlockRefused = of(SCREENS["unlock-refused"]);
+export const UnlockWait = of(SCREENS["unlock-wait"]);
+export const UnlockPassword = of(SCREENS["unlock-password"]);
+export const Opening = of(SCREENS["opening"]);
 export const Link = of(SCREENS.link);
 export const Trust = of(SCREENS["trust"]);
 export const Library = of(SCREENS["library"]);
+/** A profile's shelf. The hide button shows with the pointer on a tile or with focus, so the
+ *  story puts focus on the first one. */
+export const LibraryProfile: Story = {
+  args: { screen: SCREENS["library-profile"] },
+  play: async ({ canvasElement }) => {
+    canvasElement.querySelector<HTMLElement>("li > button[title]")?.focus();
+  },
+};
+export const LibraryHideDone: Story = {
+  args: { screen: SCREENS["library-profile"] },
+  render: ({ screen, actions }) => (
+    <Said screen={screen} actions={actions} say={() => toast("Hades is hidden for Kid", { duration: Infinity, action: { label: "Undo", onClick: () => {} } })} />
+  ),
+};
+export const LibraryHideRefused: Story = {
+  args: { screen: SCREENS["library-profile"] },
+  render: ({ screen, actions }) => (
+    <Said
+      screen={screen}
+      actions={actions}
+      say={() => toast.error("This device can't change this profile. Ask the host's owner to change it in the web console.", { duration: Infinity })}
+    />
+  ),
+};
+export const LibraryHidden = of(SCREENS["library-hidden"]);
+export const LibraryHiddenNone = of(SCREENS["library-hidden-none"]);
+export const LibraryHiddenFailed = of(SCREENS["library-hidden-failed"]);
 export const LibraryEmpty = of(SCREENS["library-empty"]);
 export const LibraryLoading = of(SCREENS["library-loading"]);
 export const LibraryOffline = of(SCREENS["library-offline"]);
@@ -54,6 +87,21 @@ export const Settings: Story = {
   args: { screen: SCREENS["settings"] },
   render: ({ actions }) => <LiveSettings actions={actions} />,
 };
+
+/** A screen with the line the page said about it: the shell's toaster, as the page mounts it. */
+function Said({ screen, actions, say }: { screen: Screen; actions: Actions; say: () => void }): JSX.Element {
+  // Once, on mount: the line is the story.
+  useEffect(() => {
+    say();
+    return () => void toast.dismiss();
+  }, []);
+  return (
+    <>
+      <ShellFrame screen={screen} actions={actions} />
+      <Toaster offset={{ right: "max(24px, env(safe-area-inset-right))" }} />
+    </>
+  );
+}
 
 function LiveSettings({ actions }: { actions: Actions }): JSX.Element {
   const [screen, setScreen] = useState(SCREENS["settings"]);

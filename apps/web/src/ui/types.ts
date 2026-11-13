@@ -8,7 +8,7 @@
 // The split is what makes a second interface cheap rather than a fork: nothing about pairing,
 // trust or the session lives in a renderer.
 
-import type { AudioSnapshot, HudCorner, HudLine, KnownHost, LibraryEntry, Reach, ScreenPick, ScreenTargets, Settings } from "@punktfunk/stream";
+import type { AudioSnapshot, HudCorner, HudLine, KnownHost, LibraryEntry, Reach, ScreenPick, ScreenTargets, Settings, UnlockForm } from "@punktfunk/stream";
 
 /** Everything worth showing about a live session. */
 export interface SessionStats {
@@ -91,9 +91,10 @@ type ScreenBody =
   | { kind: "home"; hosts: HostCard[]; adding: boolean; error?: string; busy?: boolean }
   /** `again`: this host was just sent here, so accepting its certificate did not help. */
   | { kind: "accept"; origin: string; url: string; again?: boolean }
-  /** One spinner screen for the three waits, told apart by `phase` so the wording can differ
-   *  without the renderer owning three near-identical screens. */
-  | { kind: "connecting"; origin: string; phase: "reaching" | "connecting" | "starting" }
+  /** One spinner screen for the waits, told apart by `phase` so the wording can differ without
+   *  the renderer owning near-identical screens. `opening`: the host took a profile's unlock
+   *  and starts its desktop, on the host called `host`. */
+  | { kind: "connecting"; origin: string; phase: "reaching" | "connecting" | "starting" | "opening"; host?: string }
   /**
    * The PIN ceremony. `mode` is why we are here, and it changes the wording rather than the
    * screen: `first` is a browser that has never paired, `again` is a host that has forgotten
@@ -109,6 +110,9 @@ type ScreenBody =
   | { kind: "profiles"; origin: string; host: string; cards: ProfileCard[]; saved?: string; gone?: string; error?: string }
   /** A profile's seat coming up; the stream dials once it is. */
   | { kind: "seat"; origin: string; title: string; detail?: string }
+  /** Profile `name` on `host` opens with its PIN or its account password (`form`), asked
+   *  before the dial. `error` is the host's sentence for one it refused. */
+  | { kind: "unlock"; origin: string; host: string; name: string; form: UnlockForm; error?: string }
   /**
    * The host answered, but it is not the host that was paired with. Its own screen, not an
    * error card: this is either a machine that was reinstalled or someone standing in the way of
@@ -141,6 +145,11 @@ type ScreenBody =
       notice?: string;
       error?: string;
       busy?: boolean;
+      /** The shelf is profile `name`'s and this device may hide titles for it: each offers it. */
+      hide?: { name: string };
+      /** What that profile hides, while its sheet is open. `entries` arrive once read; `failed`
+       *  when they could not be. */
+      hidden?: { name: string; entries?: LibraryEntry[]; failed?: boolean };
     }
   /** `menu`: the quick menu is open over the picture. `endGame`: the title this device launched
    *  that the stream plays, which End game ends. `notice`: what the host said when it refused.
@@ -212,6 +221,15 @@ export interface Actions {
   play(entry?: LibraryEntry, profile?: string): void;
   /** The picker's answer: play as profile `id`. */
   pickProfile(id: string): void;
+  /** The unlock prompt's answer: dial with `secret`, a PIN's digits or a password, and ask the
+   *  host to keep this device signed in when `stay`. */
+  unlock(secret: string, stay: boolean): void;
+  /** Hide (`hidden`) or show a title for the profile its shelf plays as, or for `as` when the
+   *  caller names it. The shelf follows a yes at once. Resolves to whether the host took it
+   *  and the line to say. */
+  setHidden(entry: LibraryEntry, hidden: boolean, as?: { id: string; name: string }): Promise<{ done: boolean; notice: string }>;
+  /** Open what the shelf's profile hides, read afresh, or close it. */
+  openHidden(on: boolean): void;
   /** Ask again who plays on a host: its card's Switch profile. */
   switchProfile(origin: string): void;
   forget(origin: string): void;
@@ -264,7 +282,8 @@ export interface Ui {
   mount(actions: Actions): void;
   render(screen: Screen): void;
   /** A line for a moment, about something that left no trace on any screen — a link put on the
-   *  clipboard. Not a `Screen`: nothing about where the client is has changed. */
-  notify(text: string, tone?: "error"): void;
+   *  clipboard. Not a `Screen`: nothing about where the client is has changed. `action` is one
+   *  button on it, such as Undo. */
+  notify(text: string, tone?: "error", action?: { label: string; run: () => void }): void;
   destroy(): void;
 }

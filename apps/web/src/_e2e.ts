@@ -119,7 +119,7 @@ try {
     const info = await l.host.info();
     log("ok   ready; host " + info.hostname);
     try {
-      const lib = await l.host.library();
+      const lib = (await l.host.library()).entries;
       log(`ok   library: ${lib.length} entries`);
       // Covers as the grid asks for them: an object URL, a CDN URL, nothing, or a throw.
       const tally = { shown: 0, none: 0, missing: 0, failed: 0 };

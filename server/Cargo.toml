@@ -41,7 +41,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 wtransport = { version = "0.7", default-features = false, features = ["aws-lc-rs"] }
 # The same PinVerify and address ranking the native clients use, and the route table, address
 # classes and plane attestation check the host itself reads. The same rev as packages/stream.
-punktfunk-core = { git = "https://git.unom.io/unom/punktfunk", rev = "28c3121022d22a4b1780e7ba00acc1a1ed9c03d4", default-features = false, features = ["tls"] }
+punktfunk-core = { git = "https://git.unom.io/unom/punktfunk", rev = "7ff5eeeedcd8c3fad7be45ab57ca7023dced9259", default-features = false, features = ["tls"] }
 
 [dev-dependencies]
 tower = { version = "0.5", features = ["util"] }

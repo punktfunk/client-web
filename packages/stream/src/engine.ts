@@ -45,10 +45,10 @@ export { type HostTarget, type KnownHost, type Plane, type Reach, hosts, originO
 const CRED = { EMPTY: 0, READY: 1, NEEDS_SIGNATURE: 2, PAIRING: 3, PAIRED: 4, FAILED: 5 } as const;
 const SESSION = { IDLE: 0, OFFERED: 1, LIVE: 2, FAILED: 3 } as const;
 /** The host's application close codes this engine reads (`punktfunk_core::reject`). */
-const CLOSE = { QUIT: 0x51, PAIR_DENIED: 0x64, ACCESS_EXPIRED: 0x69, HOST_POWER: 0x6b } as const;
-/** Where the stream plays was refused: an unknown profile, no seat, a seat taken or not up. The
- *  host decides these only after it admitted the device. */
-const PLACEMENT_REFUSED = new Set([0x6c, 0x6d, 0x6e, 0x6f]);
+const CLOSE = { QUIT: 0x51, PAIR_DENIED: 0x64, ACCESS_EXPIRED: 0x69, HOST_POWER: 0x6b, PROFILE_LOCKED: 0x74 } as const;
+/** Where the stream plays was refused: an unknown profile, no seat, a seat taken or not up, a
+ *  profile that wants its unlock. The host decides these only after it admitted the device. */
+const PLACEMENT_REFUSED = new Set<number>([0x6c, 0x6d, 0x6e, 0x6f, CLOSE.PROFILE_LOCKED]);
 /** A carrier that never opened: no host was heard at all. */
 const NEVER_OPENED = -2;
 /** WebTransport, or a WebSocket through the page server's bridge. */
@@ -149,8 +149,13 @@ export type EngineState =
   /** Authenticated. `host` reaches the management API; nothing is streaming yet. Emitted once
    *  per connection — the host's name and the library are read through `host`, not carried. */
   | { kind: "ready"; origin: string; host: Host }
-  /** `startStream` has been called and the host has not answered yet. */
-  | { kind: "starting"; origin: string }
+  /** `startStream` has been called and the host has not answered yet. `opening`: it took the
+   *  unlock this dial carried and holds the dial while the profile's desktop starts. */
+  | { kind: "starting"; origin: string; opening?: boolean }
+  /** The host wants the profile's unlock before it streams: a PIN or an account password.
+   *  `said` is its sentence for an unlock it refused; unset, it only asks. `startStream` with
+   *  an `unlock` dials again, and `leave` goes back to `ready`. */
+  | { kind: "profile-locked"; origin: string; host: Host; said?: string }
   | { kind: "streaming"; origin: string; stats: SessionStats }
   /** The host stopped accepting this browser's credential — it was unpaired there. */
   | { kind: "forgotten"; origin: string }
@@ -250,6 +255,9 @@ export interface EngineOptions {
   /** Pins the carrier, for a test harness: `wt` never falls back, `ws` dials the page server's
    *  bridge straight away. Unset, the engine picks, and a player never has to. */
   readonly carrier?: CarrierKind;
+  /** This consumer draws `profile-locked` as a prompt and dials again with what was typed.
+   *  Without it the host tells a locked profile's player to update instead. */
+  readonly promptsUnlock?: boolean;
 }
 
 export interface StreamOptions {
@@ -262,6 +270,9 @@ export interface StreamOptions {
   launch?: LibraryEntry;
   /** The id of the profile to play as; unset lets the host pick (`profiles.ts`). */
   profile?: string;
+  /** What opens that profile, as the prompt took it (`unlock.ts`): sent once, behind this
+   *  dial's `Hello`, and not kept. Unset sends what the console's own prompt typed, if any. */
+  unlock?: { secret: string; stay?: boolean };
 }
 
 export class Engine {
@@ -318,6 +329,8 @@ export class Engine {
   private streamed: StreamOptions | null = null;
   /** The stream is an SDR restart, which the next session says once. */
   private sdrNotice = false;
+  /** The dial under way carried an unlock, so a `Pending` is the profile's desktop starting. */
+  private unlocking = false;
   /** Codec bits this browser failed to decode since the player started the stream. The offer
    *  leaves them out, so two failing codecs can't alternate. */
   private refused = 0;
@@ -364,6 +377,7 @@ export class Engine {
       advancedStats: opts.advancedStats ?? TUNABLE_DEFAULTS.advancedStats,
     };
     this.feed = wasmFeed(mod);
+    if (opts.promptsUnlock) mod._pf_session_prompts?.(1);
     if (opts.uiCanvas) mod.__pfUiCanvas = opts.uiCanvas;
     mod.__pfOnDeviceReady = () => this.onDeviceReady();
     mod.__pfOnDeviceFailed = () => this.onDeviceFailed();
@@ -631,20 +645,40 @@ export class Engine {
   }
 
   /**
-   * Start streaming. Valid from `ready`. Dials the plane; `Hello` goes as its control stream opens.
+   * Start streaming. Valid from `ready`, and from `profile-locked` with the unlock it asks for.
+   * Dials the plane; `Hello` goes as its control stream opens.
    *
    * `launch` names a library title to open (its `id`); the host resolves it on the real-display
    * source and streams the desktop otherwise. Left unset, the desktop streams.
    */
   startStream(opts: StreamOptions): void {
-    if (!this.origin || this.state.kind !== "ready") return;
+    if (!this.origin || (this.state.kind !== "ready" && this.state.kind !== "profile-locked")) return;
+    // The unlock goes to wasm now and is not kept: a restart or a redirect dials without it.
+    const { unlock, ...stream } = opts;
+    this.unlocking = this.holdUnlock(unlock);
     this.refused = 0;
     this.fellBackFrom = 0;
     this.offer(false);
     this.set({ kind: "starting", origin: this.origin });
-    this.streamed = opts;
-    this.pendingStream = opts;
+    this.streamed = stream;
+    this.pendingStream = stream;
     this.dialBox();
+  }
+
+  /** Hand the next `Hello` its unlock: `given`, else what the console's prompt typed for this
+   *  launch. This page's copy in the wasm heap is wiped. True when one is held. */
+  private holdUnlock(given: StreamOptions["unlock"]): boolean {
+    if (!given) return this.mod._pf_console_unlock?.() === 1;
+    const bytes = new TextEncoder().encode(given.secret);
+    const p = this.mod._malloc(bytes.length);
+    try {
+      this.mod.HEAPU8.set(bytes, p);
+      return this.mod._pf_session_unlock?.(p, bytes.length, given.stay ? 1 : 0) === 1;
+    } finally {
+      this.mod.HEAPU8.fill(0, p, p + bytes.length);
+      bytes.fill(0);
+      this.mod._free(p);
+    }
   }
 
   /**
@@ -1149,6 +1183,8 @@ export class Engine {
     // pairing ceremony, before the host's own close lands — must not inherit its control stream.
     this.mod._pf_wt_close?.();
     clearTimeout(this.silence);
+    // Each dial has its own grace: the last one's clock would read this one as forgotten.
+    this.offeredSince = 0;
     const bridge = typeof this.target === "object" ? this.target?.bridge : undefined;
     const fallback = kind === "wt" && bridge && this.opts.carrier !== "wt" ? () => this.openCarrier("ws", port, hash) : null;
     this.fallback = fallback;
@@ -1287,10 +1323,17 @@ export class Engine {
       case "paired":
       case "pair-refused":
       case "forgotten":
+      case "profile-locked":
       case "error":
         return;
       default:
         break;
+    }
+    // The management API still answers, so the prompt's dial needs no new connect.
+    if (code === CLOSE.PROFILE_LOCKED && this.host) {
+      this.stopSession();
+      this.pendingStream = null;
+      return this.set({ kind: "profile-locked", origin, host: this.host, ...(said ? { said } : {}) });
     }
     if (code === CLOSE.PAIR_DENIED) {
       this.set({ kind: "forgotten", origin });
@@ -1371,6 +1414,14 @@ export class Engine {
         this.stopSession();
         this.mod._pf_wt_close?.();
         this.set({ kind: "pair-refused", origin, reason: words.reject_approval_timeout() });
+      }
+      return;
+    }
+    // `Pending`: the host admitted this device and holds the dial, so nothing was forgotten.
+    if (phase === SESSION.OFFERED && !this.pairing && (this.mod._pf_session_pending?.() ?? 0) > 0) {
+      this.offeredSince = 0;
+      if (this.unlocking && this.state.kind === "starting" && !this.state.opening) {
+        this.set({ kind: "starting", origin, opening: true });
       }
       return;
     }

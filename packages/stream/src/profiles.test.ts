@@ -69,6 +69,15 @@ test("the seat decides: dial, wake, wait or refuse", () => {
   }
 });
 
+test("a stopped seat that needs an unlock dials: the unlock starts it", () => {
+  for (const unlock of ["pin", "pin_key", "password", "key", "passkey"]) {
+    assert.deepEqual(seatGate(row("x", "X", { unlock, seat: { state: "stopped" } })), { kind: "dial" }, unlock);
+  }
+  assert.deepEqual(seatGate(row("x", "X", { unlock: "none", seat: { state: "stopped" } })), { kind: "wake" });
+  // Any other state decides as without a lock.
+  assert.deepEqual(seatGate(row("x", "X", { unlock: "pin", seat: { state: "starting" } })), { kind: "wait" });
+});
+
 test("a seat line the host names by id reads in the page's words, else as the host sent it", () => {
   const starting = (seat: object) => row("x", "X", { seat: { state: "starting", detail: "The host's English", ...seat } });
   const named = starting({ detail_id: "seatline_stage_host_try", detail_params: { attempt: "2", total: "3" } });

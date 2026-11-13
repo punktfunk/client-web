@@ -25,6 +25,10 @@ export interface Words {
   lib_end_game_unsupported(): string;
   lib_end_game_expired(): string;
   lib_end_game_failed(p: { title: string; why: string }): string;
+  lib_hidden_done(p: { title: string; name: string }): string;
+  lib_shown_done(p: { title: string; name: string }): string;
+  lib_hide_failed(p: { title: string; why: string }): string;
+  lib_show_failed(p: { title: string; why: string }): string;
   profile_wake_refused(): string;
   reject_seat_unavailable(): string;
   profile_in_use_by(p: { device: string }): string;

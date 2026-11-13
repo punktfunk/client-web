@@ -41,6 +41,9 @@ export interface PunktfunkModule {
   _pf_console_pointer(kind: number, x: number, y: number, dy: number): number;
   _pf_console_pad(buttons: number, lx: number, ly: number): void;
   _pf_console_phase(phase: number, ptr: number, len: number): void;
+  /** Move what the console's prompt typed for its last `Launch` into the session, for that
+   *  launch's `Hello`. `1` when it typed one. */
+  _pf_console_unlock?(): number;
   _pf_console_state(): number;
   /** What a cost sweep leaves out: bit 0 the blur behind chrome, bit 1 motion, bit 2 the idle
    *  frame cap. `0` restores. */
@@ -82,6 +85,13 @@ export interface PunktfunkModule {
     profilePtr: number,
     profileLen: number,
   ): number;
+  /** This page asks for a profile's PIN or password, so `Hello` offers the unlock. */
+  _pf_session_prompts?(on: number): void;
+  /** The secret the next `Hello` sends after itself: `len` bytes of UTF-8 at `ptr`, and whether
+   *  to stay signed in. `0` when the wire refuses it. */
+  _pf_session_unlock?(ptr: number, len: number, stay: number): number;
+  /** `Pending` frames since `Hello`: the host admitted this device and holds the dial. */
+  _pf_session_pending?(): number;
   /** Drain the ring and hand each finished access unit to the page. Returns how many. */
   _pf_session_pump(): number;
   /** `0` idle, `1` offered, `2` live, `3` failed. */

@@ -4,6 +4,7 @@
 // card's line — so a browser asks, wakes and waits exactly as the native clients do. The host
 // refuses a dial to a seat that isn't up, so the gate runs before the dial, not after.
 
+import { unlockNeed } from "./unlock.ts";
 import { hostWord, words } from "./words.ts";
 
 /** One row of `GET /api/v1/profiles/enumerate`, the fields this page reads. */
@@ -18,6 +19,10 @@ export interface ProfileRow {
   readonly legacy_seat?: boolean;
   /** Absent for a profile that plays on the box's own session. */
   readonly seat?: SeatRow | null;
+  /** What opens the profile from this device (`unlock.ts`). An old host sends none. */
+  readonly unlock?: unknown;
+  /** This device may hide titles for this profile now (`hide.ts`). An old host sends none. */
+  readonly person?: unknown;
 }
 
 export interface SeatRow {
@@ -109,13 +114,14 @@ export function pickerDecision(
   return { picker: true, ...(remembered ? { gone: remembered.display_name } : {}), remember: null };
 }
 
-/** §9.2: the gate for `p`'s seat, as the list shows it. */
+/** §9.2: the gate for `p`'s seat, as the list shows it. A stopped seat that needs an unlock
+ *  dials: the unlock starts it, and the host refuses a wake for it. */
 export function seatGate(p: ProfileRow): SeatGate {
   const seat = p.seat;
   if (!seat) return { kind: "dial" };
   switch (seat.state) {
     case "stopped":
-      return { kind: "wake" };
+      return unlockNeed(p.unlock) === "none" ? { kind: "wake" } : { kind: "dial" };
     case "starting": {
       const detail = seatDetail(seat);
       return { kind: "wait", ...(detail ? { detail } : {}) };
