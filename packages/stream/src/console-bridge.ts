@@ -25,6 +25,10 @@ export const CONSOLE_PUSH = {
   PROFILES: 20,
   /** A JSON string: this device's code, which the console shows while a request waits. */
   DEVICE_CODE: 21,
+  /** `{fp_hex, profile, app_id, hidden, done, notice}`: what a `SetHidden` came to. */
+  HIDE: 22,
+  /** `{fp_hex, profile, answer}`: `{Listed: games}` or `{Failed: why}`, for `FetchHidden`. */
+  HIDDEN: 23,
 } as const;
 
 /** `pf_console_state` bits. */

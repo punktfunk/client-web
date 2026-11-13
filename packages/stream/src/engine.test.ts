@@ -397,3 +397,97 @@ test("a paired host without a pass is renewed once before the dial", async (t: T
   assert.equal(renewals, 1);
   assert.equal(dialled.at(-1), "https://192.168.1.21:9778/pf2", "then the dial, with or without a pass");
 });
+
+const LOCKED = 0x74;
+
+test("an unlock goes to wasm with its dial, wiped from the page's heap and never kept", () => {
+  const { engine, mod, calls } = engineIn("ready");
+  const heap = new Uint8Array(64);
+  const sent: { bytes: number[]; stay: number }[] = [];
+  Object.assign(mod, {
+    HEAPU8: heap,
+    _malloc: () => 8,
+    _pf_session_unlock: (p: number, len: number, stay: number) => {
+      sent.push({ bytes: [...heap.subarray(p, p + len)], stay });
+      return 1;
+    },
+  });
+  engine.startStream({ width: 1280, height: 720, profile: "kid", unlock: { secret: "2468", stay: true } });
+  assert.deepEqual(sent, [{ bytes: [0x32, 0x34, 0x36, 0x38], stay: 1 }]);
+  assert.ok(heap.every((b) => b === 0), "this page's copy is wiped");
+  assert.equal(engine.current.kind, "starting");
+  // A restart or a redirect dials from these, so neither may hold the secret.
+  const kept = engine as unknown as { streamed: object; pendingStream: object };
+  assert.equal("unlock" in kept.streamed, false);
+  assert.equal("unlock" in kept.pendingStream, false);
+  assert.ok(!calls.includes("_pf_console_unlock"), "the console's prompt is not asked for one");
+});
+
+test("a dial without an unlock takes what the console's prompt typed", () => {
+  const { engine, calls } = engineIn("ready");
+  engine.startStream({ width: 1280, height: 720, profile: "kid" });
+  assert.ok(calls.includes("_pf_console_unlock"));
+  assert.ok(!calls.includes("_pf_session_unlock"));
+});
+
+test("a profile-locked close asks for the unlock, and the prompt's dial starts from it", () => {
+  const { engine, mod } = engineIn("ready");
+  const host = {};
+  Object.assign(engine, { host });
+  engine.startStream({ width: 1280, height: 720, profile: "kid" });
+  refuse(mod, LOCKED, "");
+  assert.deepEqual(engine.current, { kind: "profile-locked", origin: ORIGIN, host });
+  close(mod, LOCKED);
+  assert.equal(engine.current.kind, "profile-locked", "the transport's own close changes nothing");
+
+  const before = dialled.length;
+  engine.startStream({ width: 1280, height: 720, profile: "kid", unlock: { secret: "0000" } });
+  assert.equal(engine.current.kind, "starting");
+  assert.equal(dialled.length, before + 1, "dialled again, with no new connect");
+  // The host's own sentence for a wrong PIN, as it arrived.
+  refuse(mod, LOCKED, "That isn't this profile's PIN.");
+  assert.deepEqual(engine.current, { kind: "profile-locked", origin: ORIGIN, host, said: "That isn't this profile's PIN." });
+  engine.leave();
+  assert.deepEqual(engine.current, { kind: "ready", origin: ORIGIN, host });
+});
+
+test("a host that says Pending holds the dial: an unlock's is its desktop starting", () => {
+  const { engine, mod } = engineIn("ready");
+  Object.assign(engine, { host: {} });
+  let pending = 0;
+  Object.assign(mod, { _pf_session_phase: () => 1, _pf_session_pending: () => pending });
+  const tick = () => (engine as unknown as { updateSession(): void }).updateSession();
+  const longSilent = () => Object.assign(engine, { offeredSince: performance.now() - 10_000 });
+  engine.startStream({ width: 1280, height: 720, profile: "kid", unlock: { secret: "2468" } });
+  pending = 1;
+  longSilent();
+  tick();
+  assert.deepEqual(engine.current, { kind: "starting", origin: ORIGIN, opening: true });
+  // Without the host's word the same silence still reads as a pairing it forgot.
+  pending = 0;
+  longSilent();
+  tick();
+  assert.equal(engine.current.kind, "forgotten");
+});
+
+test("an approved request whose profile is locked ends paired, not refused", () => {
+  const { engine, mod } = engineIn("needs-pairing");
+  engine.requestAccess({ width: 1280, height: 720 });
+  refuse(mod, LOCKED, "");
+  assert.deepEqual(engine.current, { kind: "paired", origin: ORIGIN });
+});
+
+test("the prompt's dial has its own grace, however long the typing took", () => {
+  const { engine, mod } = engineIn("ready");
+  Object.assign(engine, { host: {} });
+  Object.assign(mod, { _pf_session_phase: () => 1, _pf_session_pending: () => 0 });
+  const tick = () => (engine as unknown as { updateSession(): void }).updateSession();
+  engine.startStream({ width: 1280, height: 720, profile: "kid", unlock: { secret: "1111" } });
+  tick();
+  refuse(mod, LOCKED, "That isn't this profile's PIN.");
+  // The refused dial's clock, ten seconds on: the player typed the PIN again.
+  Object.assign(engine, { offeredSince: performance.now() - 10_000 });
+  engine.startStream({ width: 1280, height: 720, profile: "kid", unlock: { secret: "2468" } });
+  tick();
+  assert.equal(engine.current.kind, "starting", "not a forgotten pairing");
+});

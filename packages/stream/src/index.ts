@@ -21,7 +21,9 @@ export { type Action, type Binding, chord, type Conflict, type Group, MODIFIERS,
 export { DEFAULTS, HUD_CORNERS, type HudCorner, settings, STATS_SCALES, type Settings, type StatsTier } from "./settings.ts";
 export { ASPECTS, aspectOf, customSize, nearest } from "./resolutions.ts";
 export type { AudioSnapshot, AudioState } from "./audio.ts";
-export { Host, type HostAction, type HostInfo, type HostStatus, type LibraryEntry, type ListedProfile, statusOf, VersionSkew } from "./host.ts";
+export { type Catalog, Host, type HostAction, type HostInfo, type HostStatus, type LibraryEntry, type ListedProfile, statusOf, VersionSkew } from "./host.ts";
+export { passwordProblem, pinDigits, type UnlockForm, unlockForm, type UnlockNeed, unlockNeed } from "./unlock.ts";
+export { hideNotice, hideOffer, type HideOutcome } from "./hide.ts";
 export {
   initials,
   pickerDecision,

@@ -27,7 +27,7 @@ import { Hud } from "./hud.tsx";
 import { Library } from "./library.tsx";
 import { SettingsDialog, SettingsPage } from "./settings.tsx";
 import { installRemote } from "./remote.ts";
-import { Accept, Connecting, ErrorCard, LinkSheet, Pair, Profiles, SeatWait, Trust, Waiting } from "./sheets.tsx";
+import { Accept, Connecting, ErrorCard, LinkSheet, Pair, Profiles, SeatWait, Trust, Unlock, Waiting } from "./sheets.tsx";
 import { type Actions, type Screen, tabOf, type Ui } from "./types.ts";
 
 export class WebShell implements Ui {
@@ -66,10 +66,11 @@ export class WebShell implements Ui {
     for (const fn of this.listeners) fn();
   }
 
-  /** The console's toaster: a line in the corner, gone by itself. */
-  notify(text: string, tone?: "error"): void {
-    if (tone === "error") toast.error(text);
-    else toast(text);
+  /** The console's toaster: a line in the corner, gone by itself, with `action` as its button. */
+  notify(text: string, tone?: "error", action?: { label: string; run: () => void }): void {
+    const more = action ? { action: { label: action.label, onClick: action.run } } : undefined;
+    if (tone === "error") toast.error(text, more);
+    else toast(text, more);
   }
 
   destroy(): void {
@@ -87,6 +88,7 @@ export const noop: Actions = {
   setAdding() {}, rename() {}, setScreen() {}, openSettings() {}, setSettings() {}, toggleCapture() {},
   showDiagnostics() {}, openMenu() {}, fullscreen() {}, cycleStats() {}, toggleMic() {},
   consoleMode() {}, pickProfile() {}, switchProfile() {},
+  unlock() {}, setHidden: async () => ({ done: false, notice: "" }), openHidden() {},
 };
 
 // --- the root ---------------------------------------------------------------------------
@@ -149,6 +151,7 @@ function Page({ screen, actions }: { screen: Screen; actions: Actions }): JSX.El
     case "waiting": return <Waiting screen={screen} actions={actions} />;
     case "profiles": return <Profiles screen={screen} actions={actions} />;
     case "seat": return <SeatWait screen={screen} actions={actions} />;
+    case "unlock": return <Unlock screen={screen} actions={actions} />;
     case "trust": return <Trust screen={screen} actions={actions} />;
     case "link": return <LinkSheet screen={screen} actions={actions} />;
     case "library": return <Library screen={screen} actions={actions} />;
@@ -177,6 +180,7 @@ function announce(s: Screen): string {
     }
     case "profiles": return s.error ?? m.browser_announce_profiles_a11y({ host: s.host });
     case "seat": return s.detail ? `${s.title} ${s.detail}` : s.title;
+    case "unlock": return s.error ?? m.unlock_title({ name: s.name });
     case "trust": return m.browser_announce_trust_a11y();
     case "link": return m.browser_announce_link_a11y({ name: s.name });
     case "library": return s.busy ? m.browser_announce_library_loading_a11y() : m.browser_announce_titles_a11y({ count: s.entries.length });

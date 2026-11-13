@@ -14,13 +14,14 @@
 use pf_client_core::console::{PointerButton, PointerInput, SessionPhase};
 use pf_client_core::menu_nav::{MenuNav, MenuSample};
 use pf_console_ui::bridge::{
-    CreateOptions, EntryJson, Event, GamesPush, Pads, PadsJson, PhasePush, PresetJson, Published,
+    phase_code, CreateOptions, EntryJson, Event, GamesPush, Pads, PadsJson, PhasePush, PresetJson,
+    Published, PHASE_PROFILE_LOCKED,
 };
 use pf_console_ui::os_theme::set_os_reduce_motion;
 use pf_console_ui::{
-    decode_poster_off_thread, set_style_override, BackdropStyle, Console, ConsoleHandles, HostRow,
-    InputSource, Key, PairStatus, Platform, SnapshotStore, Stale, Viewport, WakeStatus,
-    MIN_GPU_CACHE_BYTES,
+    decode_poster_off_thread, set_style_override, BackdropStyle, Console, ConsoleHandles,
+    HiddenAnswer, HideAnswer, HostRow, InputSource, Key, PairStatus, Platform, SnapshotStore,
+    Stale, Viewport, WakeStatus, MIN_GPU_CACHE_BYTES,
 };
 use skia_safe::gpu::{self, DirectContext, SurfaceOrigin};
 use skia_safe::{Color, ColorType, Surface};
@@ -261,7 +262,8 @@ pub extern "C" fn pf_console_pad(buttons: u32, lx: i32, ly: i32) {
 }
 
 /// Where the session the shell asked for stands: 0 connecting, 1 streaming, 2 failed, 3 ended
-/// (`message` empty = a clean end), 4 reconnecting.
+/// (`message` empty = a clean end), 4 reconnecting, 6 awaiting approval, 7 failed as
+/// `profile-locked` (`message` the host's sentence, empty when it said none).
 ///
 /// # Safety
 /// `ptr` points to `len` readable bytes of UTF-8 for the call, or is null.
@@ -269,13 +271,11 @@ pub extern "C" fn pf_console_pad(buttons: u32, lx: i32, ly: i32) {
 pub unsafe extern "C" fn pf_console_phase(phase: u32, ptr: *const u8, len: u32) {
     // SAFETY: the caller guarantees `len` readable bytes at `ptr` when it is not null.
     let msg = unsafe { utf8(ptr, len) }.unwrap_or("");
-    let phase = match phase {
-        0 => SessionPhase::Connecting,
-        1 => SessionPhase::Streaming,
-        2 => SessionPhase::Failed(msg),
-        3 => SessionPhase::Ended((!msg.is_empty()).then_some(msg)),
-        4 => SessionPhase::Reconnecting(msg),
-        _ => return,
+    let Ok(code) = u8::try_from(phase) else {
+        return;
+    };
+    let Some(phase) = phase_code(code, msg) else {
+        return;
     };
     with_app((), |app| {
         // A pad held across the stream's edges must not fire into the other side.
@@ -285,8 +285,25 @@ pub unsafe extern "C" fn pf_console_phase(phase: u32, ptr: *const u8, len: u32) 
         ) {
             app.nav.reset();
         }
+        if code == PHASE_PROFILE_LOCKED {
+            app.console.profile_locked();
+        }
         app.console.session_phase(phase);
     });
+}
+
+/// Move what the shell's prompt typed for the `Launch` it last raised into the session, for
+/// that launch's `Hello`. `1` when it typed one. The secret never crosses into the page.
+#[unsafe(no_mangle)]
+pub extern "C" fn pf_console_unlock() -> i32 {
+    let unlock = APP.with(|a| {
+        let app = a.borrow();
+        app.as_ref()
+            .and_then(|app| app.handles.console.take_unlock())
+    });
+    let held = unlock.is_some();
+    crate::session::hold_unlock(unlock);
+    i32::from(held)
 }
 
 /// What the shell shows, as bits: 1 it is off screen for a stream, 2 a launch hold keeps it over
@@ -351,10 +368,23 @@ const PUSH_PROFILES: u32 = 20;
 /// has the device key only once a connect has loaded it.
 const PUSH_DEVICE_CODE: u32 = 21;
 
+/// `HideAnswer` — what a `SetHidden` came to. Apple's number.
+const PUSH_HIDE: u32 = 22;
+/// `{"fp_hex", "profile", "answer": HiddenAnswer}` — what a profile hides, for `FetchHidden`.
+/// Not Apple's 21, which is the device code here.
+const PUSH_HIDDEN: u32 = 23;
+
 #[derive(serde::Deserialize)]
 struct ProfilesPush {
     fp_hex: String,
     answer: pf_console_ui::model::ProfilesAnswer,
+}
+
+#[derive(serde::Deserialize)]
+struct HiddenPush {
+    fp_hex: String,
+    profile: String,
+    answer: HiddenAnswer,
 }
 
 /// Hand the shell a model update. A bad kind or bad JSON is a logged no-op.
@@ -410,6 +440,9 @@ pub unsafe extern "C" fn pf_console_push(kind: u32, ptr: *const u8, len: u32) {
                 json::<ProfilesPush>(text).map(|v| console.set_profiles(&v.fp_hex, v.answer))
             }
             PUSH_DEVICE_CODE => json::<String>(text).map(|v| console.set_device_code(v)),
+            PUSH_HIDE => json::<HideAnswer>(text).map(|v| console.set_hide_answer(v)),
+            PUSH_HIDDEN => json::<HiddenPush>(text)
+                .map(|v| console.set_hidden_list(&v.fp_hex, &v.profile, v.answer)),
             _ => None,
         };
         if done.is_none() {

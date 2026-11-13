@@ -24,7 +24,9 @@ use punktfunk_core::packet::FLAG_PROBE;
 use punktfunk_core::quic::v2::features::FeatureSet;
 use punktfunk_core::quic::v2::field::split_frame;
 use punktfunk_core::quic::v2::hello::{ClientHello, Ready, ServerHello};
-use punktfunk_core::quic::v2::msg::{Redirect, V2Message};
+use punktfunk_core::quic::v2::msg::{
+    ProfileUnlock, Redirect, V2Message, Zeroizing, ENROLL_NONE, UNLOCK_PASSWORD,
+};
 use punktfunk_core::quic::v2::registry as reg;
 use punktfunk_core::quic::{
     AccessUpdate, AuthChallenge, BitrateChanged, CursorRenderMode, CursorShape, Hello,
@@ -127,6 +129,8 @@ struct Client {
     /// `0x100` set once one has arrived. Zero until the host forwards its cursor.
     cursor_serial: u32,
     cursor_flags: u32,
+    /// `Pending` frames since `Hello`: the host admitted this device and holds the dial.
+    pending: u32,
 }
 
 fn new_hud() -> hud::Stats {
@@ -168,6 +172,7 @@ impl Client {
             access_seq: 0,
             cursor_serial: 0,
             cursor_flags: 0,
+            pending: 0,
             asked: None,
         }
     }
@@ -210,6 +215,7 @@ pub fn is_live() -> bool {
 /// black picture until a reload. Idempotent.
 #[unsafe(no_mangle)]
 pub extern "C" fn pf_session_reset() {
+    hold_unlock(None);
     CLIENT.with(|c| {
         let mut c = c.borrow_mut();
         c.phase = Phase::Idle;
@@ -230,6 +236,7 @@ pub extern "C" fn pf_session_reset() {
         c.access_seq = 0;
         c.cursor_serial = 0;
         c.cursor_flags = 0;
+        c.pending = 0;
         c.hud = new_hud();
         c.receipts.clear();
         c.snap = None;
@@ -328,6 +335,51 @@ thread_local! {
     static HDR: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     /// The codec bit the person picked, or `0` for the host's own order.
     static PREFERRED: std::cell::Cell<u8> = const { std::cell::Cell::new(0) };
+    /// The page asks for a profile's PIN or password, so `Hello` offers the unlock.
+    static PROMPTS: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// What opens the profile the next `Hello` names. That `Hello` announces it, the answer to
+    /// the host's `AuthChallenge` sends it, and a reset wipes it.
+    static UNLOCK: RefCell<Option<ProfileUnlock>> = const { RefCell::new(None) };
+}
+
+/// The page prompts when the host closes with `profile-locked`. Without this the host tells
+/// a locked profile's player to update instead.
+#[unsafe(no_mangle)]
+pub extern "C" fn pf_session_prompts(on: i32) {
+    PROMPTS.with(|p| p.set(on != 0));
+}
+
+/// Hold `unlock` for the next `Hello`, wiping one still held.
+pub(crate) fn hold_unlock(unlock: Option<ProfileUnlock>) {
+    UNLOCK.with(|u| *u.borrow_mut() = unlock);
+}
+
+/// What the page's prompt holds, for the next `Hello`: a PIN's digits or an account password,
+/// as typed. `stay` asks the host to keep this device signed in. `0` when the wire refuses
+/// it, and then nothing is held. The copy made here wipes as it drops.
+///
+/// # Safety
+/// `ptr` is null or points to `len` readable bytes for the call.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pf_session_unlock(ptr: *const u8, len: u32, stay: i32) -> i32 {
+    let unlock = (!ptr.is_null()).then(|| {
+        // SAFETY: the caller guarantees `len` readable bytes at `ptr`.
+        let typed = unsafe { std::slice::from_raw_parts(ptr, len as usize) };
+        Zeroizing::new(typed.to_vec())
+    });
+    let unlock = unlock.and_then(|secret| {
+        ProfileUnlock::new(UNLOCK_PASSWORD, secret, stay != 0, ENROLL_NONE, Vec::new()).ok()
+    });
+    let held = unlock.is_some();
+    hold_unlock(unlock);
+    i32::from(held)
+}
+
+/// `Pending` frames the host sent since `Hello`. Non-zero: it admitted this device and holds
+/// the dial, for an approval or while a profile's desktop starts.
+#[unsafe(no_mangle)]
+pub extern "C" fn pf_session_pending() -> u32 {
+    CLIENT.with(|c| c.borrow().pending)
 }
 
 /// The codecs this browser decodes (`CODEC_*` bits), from the page's `isConfigSupported` probe
@@ -429,6 +481,16 @@ pub unsafe extern "C" fn pf_session_hello(
     let name = unsafe { utf8_arg(name, name_len) };
     // SAFETY: as above, `profile_len` bytes at `profile`.
     let profile = unsafe { utf8_arg(profile, profile_len) };
+    let unlock = UNLOCK.with(|u| u.borrow().is_some());
+    // `PROFILES`: this page follows a `Redirect` to the seat a door sends it to.
+    let mut features = FeatureSet::default().with(reg::FEATURE_PROFILES);
+    if unlock || PROMPTS.with(std::cell::Cell::get) {
+        features = features.with(reg::FEATURE_PROFILE_UNLOCK);
+    }
+    // Announced here, sent by `pf_cred_signed`.
+    if unlock {
+        features = features.with(reg::FEATURE_UNLOCK_FOLLOWS);
+    }
     CLIENT.with(|c| {
         let mut c = c.borrow_mut();
         let hello = Hello {
@@ -484,8 +546,7 @@ pub unsafe extern "C" fn pf_session_hello(
             slices: 0,
             resume: None,
             suites: Vec::new(),
-            // `PROFILES`: this page follows a `Redirect` to the seat a door sends it to.
-            features: FeatureSet::default().with(reg::FEATURE_PROFILES),
+            features,
             profile,
             access_only: false,
             // One canvas, one screen.
@@ -494,6 +555,7 @@ pub unsafe extern "C" fn pf_session_hello(
             // No presets here, so no host screen to wish for: the device's pick decides.
             screen_wish: None,
         });
+        c.pending = 0;
         c.fps = fps;
         c.bitrate_kbps = bitrate_kbps;
         c.phase = Phase::Offered;
@@ -514,8 +576,11 @@ unsafe fn utf8_arg(ptr: *const u8, len: u32) -> Option<String> {
     std::str::from_utf8(bytes).ok().map(str::to_string)
 }
 
-/// The page has signed the host's nonce. Send the credential; the host answers with
-/// `ServerHello`.
+/// The page has signed the host's nonce. Send the credential, and behind it the unlock the
+/// hello announced; the host answers with `ServerHello`.
+///
+/// The unlock goes here, not behind the hello: the host reads this response with a reader that
+/// drops any unlock in front of it, and opens a locked profile only for a device it knows.
 ///
 /// # Safety
 /// `sig` must point to 64 readable bytes: WebCrypto's raw `r || s` for P-256.
@@ -532,6 +597,10 @@ pub unsafe extern "C" fn pf_cred_signed(sig: *const u8, len: u32) -> i32 {
         return 0;
     };
     send_frame(&response);
+    // The frame wipes as it drops.
+    if let Some(unlock) = UNLOCK.with(|u| u.borrow_mut().take()) {
+        send_frame(&unlock.encode());
+    }
     1
 }
 
@@ -728,7 +797,9 @@ fn on_frame(c: &mut Client, ty: u64, body: &[u8]) {
                 unsafe { pf_launch_notice(said.as_ptr(), said.len() as u32) };
             }
         }
-        // `Pending` repeats while the host's console decides; the page shows its own wait.
+        // `Pending` repeats while the host decides or a profile's desktop starts; the page
+        // shows its own wait.
+        reg::MSG_PENDING => c.pending = c.pending.wrapping_add(1),
         _ => {}
     }
 }

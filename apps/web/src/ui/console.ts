@@ -159,6 +159,9 @@ export class ConsoleUi implements Ui {
   private pairReq: ConsoleReq = NO_REQ;
   private libraryReq: ConsoleReq = NO_REQ;
   private pendingPlay: { origin: string; id: string | null; title: string; profile: string } | null = null;
+  /** The rows of the hidden list the console last asked for: a title it shows again goes back
+   *  on the shelf whole. */
+  private hiddenRows = new Map<string, LibraryEntry>();
   /** A `FetchProfiles` for a host the engine is not on: it is reached quietly and answered once
    *  ready, without re-rooting the console on its shelf mid-ask. */
   private profilesAsk: { origin: string; fp: string; at: number } | null = null;
@@ -262,8 +265,8 @@ export class ConsoleUi implements Ui {
 
   /** The web shell's toaster shows over the canvas too; the console has no line of its own
    *  for something that is not a screen. */
-  notify(text: string, tone?: "error"): void {
-    this.fallback.notify(text, tone);
+  notify(text: string, tone?: "error", action?: { label: string; run: () => void }): void {
+    this.fallback.notify(text, tone, action);
   }
 
   mount(actions: Actions): void {
@@ -352,6 +355,10 @@ export class ConsoleUi implements Ui {
         tizen: tizen(),
         // Answers `FetchProfiles`, so a connect picks the profile and readies its seat first.
         profiles: true,
+        // A profile's PIN or password is typed on the console's own screen; the engine sends it.
+        prompts_unlock: true,
+        // Answers `SetHidden` and `FetchHidden`: Hide for me.
+        hides: true,
         settings: this.startSettings(),
         // The browser's own list, most preferred first: the console words itself in the first it ships.
         languages: [...navigator.languages],
@@ -648,7 +655,15 @@ export class ConsoleUi implements Ui {
         }
         return;
       case "connecting":
-        if (this.dialled) c.phase(0);
+        // `opening`: the host took the unlock and starts the profile's desktop.
+        if (this.dialled) c.phase(s.phase === "opening" ? 6 : 0);
+        return;
+      case "unlock":
+        // The host wants the profile's unlock: the console's prompt opens with its sentence.
+        // Once per refusal: a redraw of the same screen is not another one.
+        if (was?.kind === "unlock") return;
+        this.dialled = false;
+        c.phase(7, s.error ?? "");
         return;
       case "pair": {
         const pin = this.pendingPin;
@@ -924,7 +939,8 @@ export class ConsoleUi implements Ui {
     }
     const now = this.engine.current;
     const profile = l.profile ?? "";
-    if (now.kind === "ready" && now.origin === origin) {
+    // `profile-locked`: this launch is the prompt's, and dials from where the host left it.
+    if ((now.kind === "ready" || now.kind === "profile-locked") && now.origin === origin) {
       this.actions?.play(l.launch ? ({ id: l.launch, title: l.title } as LibraryEntry) : undefined, profile);
       return;
     }
@@ -942,9 +958,10 @@ export class ConsoleUi implements Ui {
         this.libraryReq = reqOf(body);
         const now = this.engine.current;
         if (now.kind === "ready" && now.origin === origin) {
-          // Already there: hand the shelf what the app has.
+          // Already there: hand the shelf what the app has, read again when the pick moved.
           this.gamesSent = "";
           this.artSent.clear();
+          this.actions?.browse(origin);
           if (this.screen?.kind === "library") this.library(this.screen);
           return;
         }
@@ -1028,6 +1045,22 @@ export class ConsoleUi implements Ui {
       case "EndGame":
         if (origin) void this.endGame(origin, str("app_id"), str("title"));
         return;
+      case "FetchHidden": {
+        const [fp, profile] = [str("fp_hex"), str("profile")];
+        const host = origin ? this.apiFor(origin) : undefined;
+        if (!origin || !host) return this.pushHidden(fp, profile, { Failed: m.browser_lib_not_connected_this_host() });
+        void this.answerHidden(origin, fp, profile, host);
+        return;
+      }
+      case "SetHidden": {
+        const [fp, profile, id] = [str("fp_hex"), str("profile"), str("app_id")];
+        const hidden = body["hidden"] === true;
+        const entry = this.hiddenRows.get(id) ?? ({ id, title: str("title") } as LibraryEntry);
+        void this.actions?.setHidden(entry, hidden, { id: profile, name: str("name") }).then(({ done, notice }) =>
+          this.engine.console.push(CONSOLE_PUSH.HIDE, { fp_hex: fp, profile, app_id: id, hidden, done, notice }),
+        );
+        return;
+      }
       case "SetScreen":
         if (origin && body["screen"]) void this.setScreen(origin, body["screen"] as DisplayTarget, str("topology"));
         return;
@@ -1071,6 +1104,40 @@ export class ConsoleUi implements Ui {
 
   private pushProfiles(fp: string, answer: unknown): void {
     this.engine.console.push(CONSOLE_PUSH.PROFILES, { fp_hex: fp, answer });
+  }
+
+  /** What `profile` hides, for the console's `FetchHidden`: its rows, then their covers. */
+  private async answerHidden(origin: string, fp: string, profile: string, host: Host): Promise<void> {
+    let rows: LibraryEntry[];
+    try {
+      rows = await host.hidden(profile);
+    } catch (e) {
+      return this.pushHidden(fp, profile, { Failed: e instanceof Error ? e.message : String(e) });
+    }
+    this.hiddenRows = new Map(rows.map((e) => [e.id, e]));
+    this.pushHidden(fp, profile, { Listed: rows.map((e) => game(e, undefined)) });
+    for (const e of rows) {
+      const art = e.art?.portrait ?? e.art?.header;
+      if (!art || this.artSent.has(e.id)) continue;
+      this.artSent.add(e.id);
+      this.toDecode.push(async () => {
+        try {
+          const url = await host.art(art);
+          if (!url) return;
+          const blob = await (await fetch(url)).blob();
+          if (url.startsWith("blob:")) URL.revokeObjectURL(url);
+          const bytes = (await coverBytes(blob)) ?? new Uint8Array(await blob.arrayBuffer());
+          if (this.shelf === origin) this.covers.push([origin, e.id, bytes]);
+        } catch {
+          this.artSent.delete(e.id);
+        }
+      });
+    }
+    this.decodeNext();
+  }
+
+  private pushHidden(fp: string, profile: string, answer: unknown): void {
+    this.engine.console.push(CONSOLE_PUSH.HIDDEN, { fp_hex: fp, profile, answer });
   }
 
   /** What the host runs, as the console's launch hold and Resume badge read it. Unanswered,

@@ -1,5 +1,6 @@
 // The pages that are a question rather than a list: one sheet each, centred in the frame.
 
+import { passwordProblem, pinDigits } from "@punktfunk/stream";
 import { type JSX, useState } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -15,6 +16,7 @@ export function Connecting({ screen, actions }: Props<"connecting">): JSX.Elemen
   const title =
     screen.phase === "reaching" ? m.browser_dial_reaching()
       : screen.phase === "starting" ? m.browser_dial_starting_stream()
+      : screen.phase === "opening" ? m.unlock_starting({ host: screen.host ?? bare(screen.origin) })
       : m.dial_connecting();
   return (
     <Sheet title={title}>
@@ -81,6 +83,72 @@ export function SeatWait({ screen, actions }: Props<"seat">): JSX.Element {
       <Spinner className="mx-auto my-8 block size-12" />
       <Row>
         <Button variant="secondary" autoFocus onClick={() => actions.back()}>{m.common_cancel()}</Button>
+      </Row>
+    </Sheet>
+  );
+}
+
+/** Why what the field holds can't be sent, in the prompt's words. */
+const UNLOCK_PROBLEMS = {
+  empty: () => m.unlock_error_empty(),
+  too_long: () => m.unlock_error_too_long(),
+  bad_char: () => m.unlock_error_bad_char(),
+};
+
+/**
+ * A profile's PIN or its account password, typed masked before the dial. The line under the
+ * field is the host's sentence for one it refused, or why this one can't be sent. Nothing typed
+ * outlives the sheet.
+ */
+export function Unlock({ screen, actions }: Props<"unlock">): JSX.Element {
+  const pin = screen.form === "pin";
+  const [typed, setTyped] = useState("");
+  const [stay, setStay] = useState(false);
+  const [problem, setProblem] = useState<string>();
+  const submit = () => {
+    let secret = typed;
+    if (pin) {
+      const digits = pinDigits(typed);
+      if ("error" in digits) return setProblem(digits.error === "empty" ? m.unlock_pin_error_empty() : m.unlock_pin_error_shape());
+      secret = digits.sent;
+    } else {
+      const why = passwordProblem(typed);
+      if (why) return setProblem(UNLOCK_PROBLEMS[why]());
+    }
+    setTyped("");
+    actions.unlock(secret, stay);
+  };
+  const error = problem ?? screen.error;
+  return (
+    <Sheet title={m.unlock_title({ name: screen.name })}>
+      <Sub>{pin ? m.unlock_pin_intro({ host: screen.host }) : m.unlock_intro({ host: screen.host })}</Sub>
+      <Input
+        autoFocus
+        type="password"
+        inputMode={pin ? "numeric" : undefined}
+        maxLength={pin ? 8 : undefined}
+        autoComplete="off"
+        placeholder={pin ? m.unlock_pin_placeholder() : m.unlock_password_placeholder()}
+        aria-label={pin ? m.unlock_pin() : m.unlock_password()}
+        aria-invalid={error ? true : undefined}
+        className={pin ? "h-auto! py-3 text-center text-2xl md:text-2xl" : undefined}
+        value={typed}
+        onChange={(e) => {
+          const v = e.currentTarget.value;
+          // A PIN is digits: a full-width one reads as its ASCII one, anything else is dropped.
+          setTyped(pin ? v.normalize("NFKC").replace(/\D/g, "").slice(0, 8) : v);
+          setProblem(undefined);
+        }}
+        onKeyDown={(e) => { if (e.nativeEvent.isComposing || e.keyCode === 229) return; if (e.key === "Enter") submit(); }}
+      />
+      <label className="mt-4 flex items-center gap-2.5 text-sm">
+        <input type="checkbox" className="size-4 accent-primary" checked={stay} onChange={(e) => setStay(e.currentTarget.checked)} />
+        {m.unlock_stay_signed_in()}
+      </label>
+      {error && <ErrorLine text={error} />}
+      <Row>
+        <Button variant="secondary" onClick={() => actions.back()}>{m.common_cancel()}</Button>
+        <Button onClick={submit}>{m.unlock_sign_in()}</Button>
       </Row>
     </Sheet>
   );

@@ -5,7 +5,7 @@
 
 import type { LibraryEntry } from "@punktfunk/stream";
 import { cn } from "@unom/ui/lib/utils";
-import { CircleX, Monitor, Play, Search, Server } from "lucide-react";
+import { CircleX, EyeOff, Monitor, Play, Search, Server } from "lucide-react";
 import { motion } from "motion/react";
 import { type JSX, type KeyboardEvent, useRef, useState } from "react";
 import { ROW, ROW_GAP, Stagger, staggerProps } from "@/components/stagger";
@@ -52,6 +52,7 @@ export function Library({ screen, actions }: { screen: LibraryScreen; actions: A
   return (
     <Body>
       {screen.tools && <HostSheet host={screen.host ?? ""} tools={screen.tools} actions={actions} />}
+      {screen.hidden && <HiddenSheet hidden={screen.hidden} actions={actions} />}
       <PageHead
         title={
           <span className="flex items-center gap-3">
@@ -68,6 +69,12 @@ export function Library({ screen, actions }: { screen: LibraryScreen; actions: A
           </Button>
         )}
         {screen.endable && screen.running && <EndGame onEnd={() => actions.endGame()} />}
+        {screen.hide && (
+          <Button size="sm" variant="ghost" onClick={() => actions.openHidden(true)}>
+            <EyeOff className="size-4" />
+            {m.lib_hidden_for({ name: screen.hide.name })}
+          </Button>
+        )}
         {!screen.offline && (
           <Button size="icon" variant="ghost" aria-label="Host actions" title="Host actions" onClick={() => actions.openTools(true)}>
             <Server className="size-4" />
@@ -191,7 +198,7 @@ function Grid({ entries, screen, actions }: { entries: LibraryEntry[]; screen: L
   const onKey = (e: KeyboardEvent<HTMLUListElement>) => {
     const el = grid.current;
     if (!el) return;
-    const tiles = [...el.querySelectorAll<HTMLButtonElement>("button")];
+    const tiles = [...el.querySelectorAll<HTMLButtonElement>("button[data-tile]")];
     const i = tiles.indexOf(document.activeElement as HTMLButtonElement);
     if (i < 0) return;
     const cols = Math.max(1, getComputedStyle(el).gridTemplateColumns.split(" ").length);
@@ -216,6 +223,8 @@ function Grid({ entries, screen, actions }: { entries: LibraryEntry[]; screen: L
           art={screen.art.get(entry.id)}
           running={screen.running === entry.title}
           onPlay={() => actions.play(entry)}
+          hide={screen.hide?.name}
+          onHide={() => actions.setHidden(entry, true)}
         />
       ))}
     </motion.ul>
@@ -223,13 +232,47 @@ function Grid({ entries, screen, actions }: { entries: LibraryEntry[]; screen: L
 }
 
 /** A poster: 2:3 art, the title under it. Until its cover arrives the title stands in the frame;
- *  the cover then fades in over it rather than popping. */
-function Tile({ entry, art, running, onPlay }: { entry: LibraryEntry; art: string | undefined; running: boolean; onPlay: () => void }): JSX.Element {
+ *  the cover then fades in over it rather than popping. `hide` names the profile the shelf plays
+ *  as when this device may hide titles for it: the tile then offers that, in its corner. */
+function Tile({
+  entry,
+  art,
+  running,
+  onPlay,
+  hide,
+  onHide,
+}: {
+  entry: LibraryEntry;
+  art: string | undefined;
+  running: boolean;
+  onPlay: () => void;
+  hide: string | undefined;
+  onHide: () => Promise<{ done: boolean }>;
+}): JSX.Element {
   const [loaded, setLoaded] = useState(false);
   return (
-    <motion.li variants={TILE} className="min-w-0">
+    <motion.li variants={TILE} className="group/tile relative min-w-0">
+      {hide && (
+        <Button
+          size="icon"
+          variant="secondary"
+          aria-label={`${m.lib_hide_for({ name: hide })}: ${entry.title}`}
+          title={m.lib_hide_for({ name: hide })}
+          // Shown with the pointer on the tile, with focus, and always where nothing hovers.
+          className="absolute top-2 left-2 z-1 size-8 opacity-0 shadow-sm transition-opacity group-hover/tile:opacity-100 focus-visible:opacity-100 [@media(hover:none)]:opacity-100"
+          onClick={(e) => {
+            // The tile leaves on a yes: its neighbour takes the focus, never the top.
+            const li = e.currentTarget.closest("li");
+            const next = (li?.nextElementSibling ?? li?.previousElementSibling)?.querySelector<HTMLElement>("button[data-tile]");
+            void onHide().then((r) => { if (r.done && li?.contains(document.activeElement)) next?.focus(); });
+          }}
+        >
+          <EyeOff className="size-4" />
+        </Button>
+      )}
       <button
         type="button"
+        data-tile
         aria-label={entry.title}
         onClick={onPlay}
         className="group flex w-full flex-col gap-2 rounded-[10px] text-left outline-none focus-visible:ring-2 focus-visible:ring-ring"
@@ -260,6 +303,50 @@ function Tile({ entry, art, running, onPlay }: { entry: LibraryEntry; art: strin
         </span>
       </button>
     </motion.li>
+  );
+}
+
+/** What the shelf's profile hides, read when opened: each title dimmed, with the way back. */
+function HiddenSheet({ hidden, actions }: { hidden: NonNullable<LibraryScreen["hidden"]>; actions: Actions }): JSX.Element {
+  const none = hidden.entries?.length === 0;
+  return (
+    <Dialog open onOpenChange={(open) => { if (!open) actions.openHidden(false); }}>
+      <DialogContent className="max-w-md" {...(none ? {} : { "aria-describedby": undefined })}>
+        <DialogHeader>
+          <DialogTitle>{m.lib_hidden_for({ name: hidden.name })}</DialogTitle>
+          {none && <DialogDescription>{m.lib_hidden_none({ name: hidden.name })}</DialogDescription>}
+        </DialogHeader>
+        {hidden.failed ? (
+          <div className="grid gap-3">
+            <ErrorLine text={m.lib_load_failed()} />
+            <Button variant="secondary" onClick={() => actions.openHidden(true)}>{m.common_retry()}</Button>
+          </div>
+        ) : !hidden.entries ? (
+          <Spinner className="mx-auto my-4 size-8" />
+        ) : (
+          <ul className="m-0 grid list-none gap-1 p-0">
+            {hidden.entries.map((entry) => (
+              <li key={entry.id} className="flex items-center justify-between gap-3 py-1">
+                <span className="min-w-0 truncate text-muted-foreground" title={entry.title}>{entry.title}</span>
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  aria-label={`${m.lib_show_for({ name: hidden.name })}: ${entry.title}`}
+                  onClick={(e) => {
+                    // The row leaves on a yes: the next one's button takes the focus.
+                    const li = e.currentTarget.closest("li");
+                    const next = (li?.nextElementSibling ?? li?.previousElementSibling)?.querySelector("button");
+                    void actions.setHidden(entry, false).then((r) => { if (r.done) next?.focus(); });
+                  }}
+                >
+                  {m.lib_show_for({ name: hidden.name })}
+                </Button>
+              </li>
+            ))}
+          </ul>
+        )}
+      </DialogContent>
+    </Dialog>
   );
 }
 

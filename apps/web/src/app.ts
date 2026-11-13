@@ -17,6 +17,8 @@ import {
   type EngineState,
   gameEndNotice,
   gameGone,
+  hideNotice,
+  hideOffer,
   type HostTarget,
   hosts,
   initials,
@@ -34,6 +36,7 @@ import {
   pickerDecision,
   pickOf,
   profileNote,
+  type ProfilePick,
   type Reach,
   reach,
   reachTarget,
@@ -46,6 +49,9 @@ import {
   settings,
   type Shortcuts,
   statusOf,
+  type UnlockForm,
+  unlockForm,
+  unlockNeed,
   VersionSkew,
   wakeFailed,
   wakingLine,
@@ -86,7 +92,7 @@ const STANDBY_GAP_MS = 5_000;
 /** The engine's states on the way to a host. Leaving the tab they sit under cancels them. */
 const FLOWS = new Set<EngineState["kind"]>([
   "bad-address", "reaching", "blocked", "unreachable", "untrusted", "connecting", "needs-pairing",
-  "awaiting-approval", "pairing", "paired", "pair-refused", "forgotten", "starting", "error",
+  "awaiting-approval", "pairing", "paired", "pair-refused", "forgotten", "starting", "profile-locked", "error",
 ]);
 
 type Ready = Extract<EngineState, { kind: "ready" }>;
@@ -115,6 +121,15 @@ class App {
    *  it answers at once with an empty list, which must not read as still loading. */
   private libraryAt = 0;
   private libraryError: string | undefined;
+  /** The profile id the titles were last asked as; unset is the box's. A pick that moved since
+   *  is read again. */
+  private libraryAsked: string | undefined;
+  /** The profile the shelf was read as, when this device may hide titles for it. */
+  private hideFor: { id: string; name: string } | null = null;
+  /** What that profile hides, while its sheet is open. Read on opening, never kept. */
+  private hidden: { name: string; entries?: LibraryEntry[]; failed?: boolean } | null = null;
+  /** Where each title hidden this visit sat on the shelf, so Undo puts it back there. */
+  private readonly hidAt = new Map<string, number>();
   private tools: HostTools | null = null;
   private running: string | undefined;
   /** The running title's library id, which is what `Resume` launches. */
@@ -216,6 +231,9 @@ class App {
       back: () => (this.gate ? this.cancelGate() : engine.disconnect()),
       play: (entry, profile) => this.play(entry, undefined, profile),
       pickProfile: (id) => this.pickProfile(id),
+      unlock: (secret, stay) => this.unlock(secret, stay),
+      setHidden: (entry, hidden, as) => this.setHidden(entry, hidden, as),
+      openHidden: (on) => void this.openHidden(on),
       switchProfile: (origin) => this.switchProfile(origin),
       forget: (origin) => this.forget(origin),
       followLink: (yes) => this.followLink(yes),
@@ -424,14 +442,26 @@ class App {
         // The console has no tabs: a host it reaches is a library it shows.
         if (this.web && this.tab === "hosts") return this.home();
         this.setShelf(s.origin);
-        if (this.libraryFor !== s.origin || (!this.libraryLoading && Date.now() - this.libraryAt > LIBRARY_TTL_MS)) {
+        const moved = this.libraryAsked !== this.pickFor(s.origin)?.id;
+        if (this.libraryFor !== s.origin || (!this.libraryLoading && (moved || Date.now() - this.libraryAt > LIBRARY_TTL_MS))) {
           void this.openLibrary(s);
         }
         this.watchRunning(s);
         return this.showLibrary();
       }
       case "starting":
+        if (s.opening) return this.show({ kind: "connecting", origin: s.origin, phase: "opening", host: this.nameOf(s.origin) });
         return this.show({ kind: "connecting", origin: s.origin, phase: "starting" });
+      case "profile-locked": {
+        const dial = this.lastPlay;
+        // The console prompts by itself: it hears the host's sentence as its session's end.
+        if (!this.web) {
+          return this.show({ kind: "unlock", origin: s.origin, host: this.nameOf(s.origin), name: "", form: "password", ...(s.said ? { error: s.said } : {}) });
+        }
+        // Not from inside this listener: the prompt puts the engine back on `ready`.
+        queueMicrotask(() => void this.reprompt(s.origin, s.host, dial, s.said));
+        return;
+      }
       case "streaming": {
         const live = pageShortcuts(this.prefs.shortcuts);
         const menuHint = this.menuOpen ? menuHintText(live) : undefined;
@@ -802,11 +832,21 @@ class App {
     if (this.libraryFor !== s.origin) this.clearLibrary();
     this.libraryFor = s.origin;
     this.libraryLoading = true;
+    const pick = this.pickFor(s.origin);
+    this.libraryAsked = pick?.id;
     this.redrawLibrary();
     try {
-      const entries = [...(await s.host.library())];
+      // The box's list says whether this device may hide titles for the pick. No pick, no ask.
+      const [catalog, listed] = await Promise.all([
+        s.host.library(pick?.id),
+        pick ? s.host.profiles().catch(() => null) : null,
+      ]);
       if (this.libraryFor !== s.origin) return;
-      this.entries = entries;
+      this.entries = [...catalog.entries];
+      const person = hideOffer(listed, catalog.as);
+      this.hideFor = person ? { id: person.id, name: person.display_name } : null;
+      if (!this.hideFor) this.hidden = null;
+      this.hidAt.clear();
       this.libraryError = undefined;
       this.libraryAt = Date.now();
     } catch (e) {
@@ -828,19 +868,91 @@ class App {
     }
     this.redrawLibrary();
     // Art after the grid, per entry: the grid should appear before its covers do.
-    for (const entry of this.entries) {
-      const art = entry.art.portrait ?? entry.art.header;
-      if (!art || this.art.has(entry.id)) continue;
-      void s.host
-        .art(art)
-        .then((url) => {
-          if (!url || this.libraryFor !== s.origin) return;
-          this.art.set(entry.id, url);
-          this.redrawLibrary();
-        })
-        // A cover that cannot load leaves its tile's placeholder.
-        .catch(() => {});
+    for (const entry of this.entries) this.readArt(s.host, s.origin, entry);
+  }
+
+  /** Read `entry`'s cover for the shelf of `origin`, unless it is there already. */
+  private readArt(host: Host, origin: string, entry: LibraryEntry): void {
+    const art = entry.art?.portrait ?? entry.art?.header;
+    if (!art || this.art.has(entry.id)) return;
+    void host
+      .art(art)
+      .then((url) => {
+        if (!url || this.libraryFor !== origin) return;
+        this.art.set(entry.id, url);
+        this.redrawLibrary();
+      })
+      // A cover that cannot load leaves its tile's placeholder.
+      .catch(() => {});
+  }
+
+  /** The pick the shelf of `origin` is read as: the one this browser keeps. The console applies
+   *  only a pick it was told to remember, as it does for a dial. */
+  private pickFor(origin: string): ProfilePick | undefined {
+    const pick = hosts.all()[origin]?.profile;
+    return pick && (this.web || pick.remember) ? pick : undefined;
+  }
+
+  // --- hide for me -------------------------------------------------------------------------
+  /** Hide (`hidden`) or show `entry` for the shelf's profile, or for `as`. The shelf follows a
+   *  yes at once, with no new fetch; a no changes nothing. The web shell says the line here. */
+  private async setHidden(entry: LibraryEntry, hidden: boolean, as = this.hideFor ?? undefined): Promise<{ done: boolean; notice: string }> {
+    const host = this.shelfHost();
+    const shelf = this.libraryFor;
+    const outcome = host && as
+      ? await host.setHidden(as.id, entry.id, hidden)
+      : ({ kind: "failed", why: m.browser_lib_not_connected_this_host() } as const);
+    const done = outcome.kind === "done";
+    const notice = hideNotice(outcome, hidden, entry.title, as?.name ?? "");
+    if (done && this.libraryFor === shelf) this.noteHidden(entry, hidden);
+    if (this.web) {
+      const undo = { label: m.common_undo(), run: () => void this.setHidden(entry, !hidden, as) };
+      this.ui.notify(notice, done ? undefined : "error", done ? undo : undefined);
     }
+    return { done, notice };
+  }
+
+  /** The shelf after `entry` left it (`hidden`) or came back. A title that comes back takes
+   *  the place this visit saw it leave, else the end until the shelf is read again. */
+  private noteHidden(entry: LibraryEntry, hidden: boolean): void {
+    const at = this.entries.findIndex((e) => e.id === entry.id);
+    const listed = this.hidden?.entries;
+    if (hidden) {
+      const [gone] = at >= 0 ? this.entries.splice(at, 1) : [];
+      if (gone) this.hidAt.set(entry.id, at);
+      if (listed && !listed.some((e) => e.id === entry.id)) listed.push(gone ?? entry);
+    } else {
+      // Only a whole row goes back on the shelf; the console names a title by its id alone.
+      if (at < 0 && entry.store !== undefined) {
+        this.entries.splice(Math.min(this.hidAt.get(entry.id) ?? this.entries.length, this.entries.length), 0, entry);
+        const host = this.shelfHost();
+        if (host && this.libraryFor) this.readArt(host, this.libraryFor, entry);
+      } else if (at < 0) {
+        this.libraryAt = 0;
+      }
+      this.hidAt.delete(entry.id);
+      if (listed) this.hidden = { ...this.hidden!, entries: listed.filter((e) => e.id !== entry.id) };
+    }
+    this.redrawLibrary();
+  }
+
+  /** Open what the shelf's profile hides, read now and never kept, or close it. */
+  private async openHidden(on: boolean): Promise<void> {
+    const who = this.hideFor;
+    const host = this.shelfHost();
+    if (!on || !who || !host) {
+      this.hidden = null;
+      return this.redrawLibrary();
+    }
+    const sheet = (this.hidden = { name: who.name });
+    this.redrawLibrary();
+    try {
+      const entries = await host.hidden(who.id);
+      if (this.hidden === sheet) this.hidden = { name: who.name, entries };
+    } catch {
+      if (this.hidden === sheet) this.hidden = { name: who.name, failed: true };
+    }
+    this.redrawLibrary();
   }
 
   /** What the host is running, polled while its library is connected: the event stream is not
@@ -900,6 +1012,8 @@ class App {
       ...(mine && connected && this.running && this.runningEndable ? { endable: true } : {}),
       ...(mine && this.endNotice ? { notice: this.endNotice } : {}),
       ...(mine && this.libraryError ? { error: m.browser_lib_load_failed_desktop({ why: sentence(this.libraryError) }) } : {}),
+      ...(mine && connected && this.hideFor ? { hide: { name: this.hideFor.name } } : {}),
+      ...(mine && connected && this.hidden ? { hidden: this.hidden } : {}),
     });
     void this.probe(shelves.map((h) => h.origin));
   }
@@ -1036,6 +1150,10 @@ class App {
     this.libraryLoading = false;
     this.libraryAt = 0;
     this.libraryError = undefined;
+    this.libraryAsked = undefined;
+    this.hideFor = null;
+    this.hidden = null;
+    this.hidAt.clear();
     this.running = undefined;
     this.runningId = undefined;
     this.runningEndable = false;
@@ -1106,7 +1224,8 @@ class App {
       this.engine.fullscreen(true);
     }
     const s = this.engine.current;
-    if (s.kind === "ready" && s.origin === origin) return this.start(entry, profile);
+    // `profile-locked`: the console's own prompt dials again from where the host left it.
+    if ((s.kind === "ready" || s.kind === "profile-locked") && s.origin === origin) return this.start(entry, profile);
     this.quiet = false;
     this.resumeOnReady = { ...(entry ? { entry } : {}), ...(profile !== undefined ? { profile } : {}) };
     void this.engine.connect(this.targetOf(origin));
@@ -1150,11 +1269,17 @@ class App {
     void this.askProfile(s.origin, s.host, entry ? { entry } : {});
   }
 
-  private dial(entry?: LibraryEntry, profile?: string): void {
+  /** `unlock` is what the prompt took, for this dial alone: `lastPlay` never holds it. */
+  private dial(entry?: LibraryEntry, profile?: string, unlock?: { secret: string; stay: boolean }): void {
     this.gate = null;
     this.endNotice = undefined;
     this.lastPlay = { ...(entry ? { entry } : {}), ...(profile ? { profile } : {}) };
-    this.engine.startStream({ ...this.streamOptions(), ...(entry ? { launch: entry } : {}), ...(profile ? { profile } : {}) });
+    this.engine.startStream({
+      ...this.streamOptions(),
+      ...(entry ? { launch: entry } : {}),
+      ...(profile ? { profile } : {}),
+      ...(unlock ? { unlock } : {}),
+    });
   }
 
   // --- the profile gate ----------------------------------------------------------------
@@ -1223,7 +1348,7 @@ class App {
   private async settleSeat(gate: Gate, id: string | undefined): Promise<void> {
     const row = id ? gate.rows.find((p) => p.id === id) : undefined;
     let next = row ? seatGate(row) : ({ kind: "dial" } as const);
-    if (!row || next.kind === "dial") return this.dial(gate.play?.entry, id);
+    if (!row || next.kind === "dial") return this.dialOrPrompt(gate, row, id);
     const name = row.display_name;
     if (next.kind === "wake") {
       this.gateShow(gate, { kind: "seat", origin: gate.origin, title: wakingLine(name) });
@@ -1256,8 +1381,61 @@ class App {
       const now = rows?.find((p) => p.id === row.id);
       // A profile the list dropped is the host's to refuse.
       next = now ? seatGate(now) : { kind: "dial" };
-      if (next.kind === "dial") return this.dial(gate.play?.entry, row.id);
+      if (next.kind === "dial") return this.dialOrPrompt(gate, now, row.id);
     }
+  }
+
+  // --- a profile's unlock --------------------------------------------------------------------
+  // This page holds no unlock key, so a profile that opens with a PIN or an account password
+  // is asked for it before its dial, and again when the host refuses what was typed
+  // (`unlock.ts`).
+
+  /** Dial as `row`, behind the prompt when it needs an unlock. A profile the list dropped
+   *  dials as it stands, and the host answers for it. */
+  private dialOrPrompt(gate: Gate, row: ListedProfile | undefined, id: string | undefined): void {
+    const form = row ? unlockForm(unlockNeed(row["unlock"])) : null;
+    if (!row || !form) return this.dial(gate.play?.entry, id);
+    gate.unlock = row.id;
+    this.gateShow(gate, { kind: "unlock", origin: gate.origin, host: this.nameOf(gate.origin), name: row.display_name, form });
+  }
+
+  /** The prompt's answer: the dial it stood in front of, with what was typed. */
+  private unlock(secret: string, stay: boolean): void {
+    const gate = this.gate;
+    if (gate?.unlock) this.dial(gate.play?.entry, gate.unlock, { secret, stay });
+  }
+
+  /**
+   * The host closed `dial` as `profile-locked`: the prompt, with its sentence when it refused
+   * what was typed. The form is the profile's fresh row's, the password when the list names
+   * none. A dial that named no profile has nothing to prompt for, and says so.
+   */
+  private async reprompt(origin: string, host: Host, dial: Play | null, said?: string): Promise<void> {
+    let rows: ReadonlyArray<ListedProfile> | null = null;
+    try {
+      rows = await host.profiles();
+    } catch {
+      // The prompt still opens, for the password.
+    }
+    const now = this.engine.current;
+    if (now.kind !== "profile-locked" || now.origin !== origin) return;
+    const id = dial?.profile;
+    const row = rows?.find((p) => p.id === id);
+    const gate: Gate = {
+      origin,
+      host,
+      play: dial?.entry ? { entry: dial.entry } : {},
+      rows: rows ?? [],
+      screen: { kind: "error", head: m.browser_gate_failed_title(), text: sentence(said ?? m.reject_profile_locked()) },
+    };
+    if (id) {
+      const form = (row ? unlockForm(unlockNeed(row["unlock"])) : null) ?? "password";
+      gate.unlock = id;
+      gate.screen = { kind: "unlock", origin, host: this.nameOf(origin), name: row?.display_name ?? id, form, ...(said ? { error: sentence(said) } : {}) };
+    }
+    this.gate = gate;
+    // `ready` again, with the gate's screen in front of it.
+    this.engine.leave();
   }
 
   private gateShow(gate: Gate, screen: Screen): void {
@@ -1315,6 +1493,8 @@ interface Gate {
   play: { entry?: LibraryEntry } | null;
   rows: ReadonlyArray<ListedProfile>;
   screen: Screen;
+  /** The profile the unlock prompt on `screen` opens. */
+  unlock?: string;
 }
 
 /** `p`, or a rejection once `ms` have passed. */
@@ -1446,6 +1626,8 @@ try {
   const engine = await Engine.create({
     videoCanvas,
     uiCanvas,
+    // Both interfaces draw the unlock prompt: the web shell's sheet, the console's own screen.
+    promptsUnlock: true,
     ...(__PF_TRANSPORT_HOST__ ? { transportHost: __PF_TRANSPORT_HOST__ } : {}),
   });
   const server = (await readConfig(serverFetch(), location.href)) ?? { listed: new Map(), viaServer: false };

@@ -54,6 +54,10 @@ const hosts: HostCard[] = [
 ];
 const shelves = hosts.filter((h) => h.fingerprint);
 const origin = "https://192.168.1.25:47990";
+/** Kid's shelf: the box's, less what Kid hides. */
+const kids = entries.filter((_, i) => ![1, 3, 9].includes(i));
+const kidsHidden = [entries[1]!, entries[3]!, entries[9]!];
+const kidsShelf = { kind: "library", origin, shelves, host: "living-room-pc", entries: kids, art, hide: { name: "Kid" } } as const;
 /** The statistics where a fresh browser puts them. */
 const overlay = { corner: "topTrailing", scale: 1 } as const;
 
@@ -82,6 +86,11 @@ export const SCREENS = {
   },
   "profiles-gone": { kind: "profiles", origin: "https://192.168.1.25:47990", host: "Living room", gone: "Old desk", cards: [{ id: "a1", name: "Mia", initials: "M", accent: "#e0457b" }] },
   "seat": { kind: "seat", origin: "https://192.168.1.25:47990", title: "Getting Kid's desk ready…", detail: "Signing in…" },
+  "unlock": { kind: "unlock", origin, host: "Living room", name: "Kid", form: "pin" },
+  "unlock-refused": { kind: "unlock", origin, host: "Living room", name: "Kid", form: "pin", error: "That isn't this profile's PIN." },
+  "unlock-wait": { kind: "unlock", origin, host: "Living room", name: "Kid", form: "pin", error: "Too many wrong PINs. Try again in 3 minutes." },
+  "unlock-password": { kind: "unlock", origin, host: "Living room", name: "Mia", form: "password" },
+  "opening": { kind: "connecting", origin, phase: "opening", host: "Living room" },
   "link": { kind: "link", name: "Desk", address: "192.168.1.21", launch: "steam:570" },
   "trust": {
     kind: "trust",
@@ -89,6 +98,10 @@ export const SCREENS = {
     reason: "this is not the host that was paired with",
   },
   "library": { kind: "library", origin, shelves, host: "living-room-pc", entries, art, running: "Hades", resume: entries[1]! },
+  "library-profile": kidsShelf,
+  "library-hidden": { ...kidsShelf, hidden: { name: "Kid", entries: kidsHidden } },
+  "library-hidden-none": { ...kidsShelf, hidden: { name: "Kid", entries: [] } },
+  "library-hidden-failed": { ...kidsShelf, hidden: { name: "Kid", failed: true } },
   "library-empty": { kind: "library", origin, shelves, host: "living-room-pc", entries: [], art: new Map() },
   "library-loading": { kind: "library", origin, shelves, host: "living-room-pc", entries: [], art: new Map(), busy: true },
   "library-offline": { kind: "library", origin, shelves, host: "living-room-pc", entries: [], art: new Map(), offline: true },

@@ -22,6 +22,7 @@ import {
 import { Effect } from "effect";
 import { SchemaError } from "effect/Schema";
 import { type GameEnd, gameEndOf } from "./game-end.ts";
+import { fetchHidden, type HideOutcome, hideOutcome, hideRequest } from "./hide.ts";
 import { PAGE_LIMIT, walkPages } from "./pages.ts";
 import { renewPass, serverFetch, TooMany } from "./pass.ts";
 import type { ScreenPick, ScreenTargets } from "./screens.ts";
@@ -33,6 +34,12 @@ export type HostInfo = api.HostInfo;
 export type HostStatus = api.RuntimeStatus;
 export type HostAction = api.ActionInfo;
 export type ListedProfile = api.ProfilePublic;
+
+/** A catalog, and the profile it was fetched as; unset is the box's. */
+export interface Catalog {
+  readonly entries: ReadonlyArray<LibraryEntry>;
+  readonly as?: string;
+}
 
 /** The host speaks a wire shape this page does not: one side is newer than the other. */
 export class VersionSkew extends Error {
@@ -85,18 +92,49 @@ export class Host {
   }
 
   /**
-   * The host's catalog, walked a page at a time. A host older than the paged route refuses
-   * it, so the whole list is asked for instead, and its failure is the one reported.
+   * The catalog as profile `as` plays it, else the box's, walked a page at a time. A host older
+   * than the paged route refuses it, so the whole list is asked for instead. A profile the host
+   * no longer holds (404 `profile_unknown`) is asked once more as the box, and that answer
+   * stands, as the box's.
    */
-  async library(): Promise<ReadonlyArray<LibraryEntry>> {
+  async library(as?: string): Promise<Catalog> {
+    const walk = async (profile: string | undefined): Promise<ReadonlyArray<LibraryEntry>> => {
+      const who = profile ? { as: profile } : {};
+      try {
+        return await walkPages((cursor) =>
+          this.run("library", (c) => c.getLibraryPage({ params: { limit: PAGE_LIMIT, ...(cursor ? { cursor } : {}), ...who } })),
+        );
+      } catch (e) {
+        if (profileGone(e) || ![401, 403, 404].includes(statusOf(e) ?? 0)) throw e;
+        return this.run("library", (c) => c.getLibrary(profile ? { params: who } : undefined));
+      }
+    };
+    if (!as) return { entries: await walk(undefined) };
     try {
-      return await walkPages((cursor) =>
-        this.run("library", (c) =>
-          c.getLibraryPage({ params: { limit: PAGE_LIMIT, ...(cursor ? { cursor } : {}) } }),
-        ),
-      );
-    } catch {
-      return this.run("library", (c) => c.getLibrary(undefined));
+      return { entries: await walk(as), as };
+    } catch (e) {
+      if (!profileGone(e)) throw e;
+      return { entries: await walk(undefined) };
+    }
+  }
+
+  /** What profile `as` hides, its person asking. Fetched when asked for, never kept. */
+  hidden(as: string): Promise<LibraryEntry[]> {
+    return fetchHidden<LibraryEntry>(as, async (path) => {
+      const res = await this.send("GET", path);
+      return { status: res.status, body: await res.text() };
+    });
+  }
+
+  /** Hide (`hidden`) or show title `id` for profile `as`. A call the host never answered is
+   *  `failed`, with why. */
+  async setHidden(as: string, id: string, hidden: boolean): Promise<HideOutcome> {
+    try {
+      const { path, body } = hideRequest(as, id, hidden);
+      const res = await this.send("PUT", path, body, "application/json");
+      return hideOutcome(res.status, await res.text());
+    } catch (e) {
+      return { kind: "failed", why: e instanceof Error ? e.message : String(e) };
     }
   }
 
@@ -238,6 +276,18 @@ export class Host {
 /** The HTTP status a call failed with, when the host answered at all. */
 export function statusOf(e: unknown): number | undefined {
   return (e as { response?: { status?: number } } | null)?.response?.status;
+}
+
+/** `e` is the host's 404 for a profile it no longer holds (`profile_unknown`). The generated
+ *  client keeps an unlisted status's body as its error's description. */
+function profileGone(e: unknown): boolean {
+  if (statusOf(e) !== 404) return false;
+  try {
+    const body = (e as { reason?: { description?: string } }).reason?.description ?? "";
+    return (JSON.parse(body) as { code?: unknown } | null)?.code === "profile_unknown";
+  } catch {
+    return false;
+  }
 }
 
 /** The host's sentence for a refusal, when its body carries one, else `fallback`: its message
