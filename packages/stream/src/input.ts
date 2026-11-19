@@ -127,6 +127,8 @@ export interface InputOptions {
   deadzone: number;
   /** Scroll against the wheel's own direction. */
   invertScroll?: boolean;
+  /** Under pointer lock, ask for the mouse's own counts in place of the OS pointer's travel. */
+  rawMouse?: boolean;
   /** The bindings the keyboard and each pad run on, read when the pipe is made. Pass only the
    *  actions `onShortcut` performs. */
   shortcuts?: Shortcuts;
@@ -213,13 +215,14 @@ export class InputPipe {
   }
 
   /**
-   * Lock the pointer to the canvas with the mouse's own counts, before the OS's acceleration:
-   * the host applies its pointer curve once, as for a local mouse. A browser that cannot drop
-   * the acceleration rejects with `NotSupportedError` and gets a plain lock. Any other refusal
-   * (no gesture, an exit too recent) is not an error worth propagating.
+   * Lock the pointer to the canvas. A plain lock reports the OS pointer's travel, its speed and
+   * acceleration included, in every browser. `rawMouse` asks for the mouse's own counts instead;
+   * a browser that has none rejects with `NotSupportedError` and gets the plain lock. Any other
+   * refusal (no gesture, an exit too recent) is not an error worth propagating.
    */
   private lock(): void {
     const plain = () => Promise.resolve(this.canvas.requestPointerLock()).catch(() => {});
+    if (!this.opts.rawMouse) return void plain();
     void Promise.resolve(this.canvas.requestPointerLock({ unadjustedMovement: true })).catch((e: unknown) =>
       (e as DOMException | undefined)?.name === "NotSupportedError" ? plain() : undefined,
     );
