@@ -188,6 +188,9 @@ export interface TunableOptions {
   hdr: boolean;
   /** Scroll the other way from what the wheel says. */
   invertScroll: boolean;
+  /** Lock the pointer with the mouse's own counts where the browser has them. Off, the lock
+   *  sends the OS pointer's travel. Read when the pointer is next locked. */
+  rawMouse: boolean;
   /** The `shortcuts` blob; empty is this client's defaults. A stream keeps the bindings it
    *  started with. */
   shortcuts: string;
@@ -215,6 +218,7 @@ const TUNABLE_DEFAULTS: TunableOptions = {
   codec: "auto",
   hdr: true,
   invertScroll: false,
+  rawMouse: false,
   shortcuts: "",
 };
 
@@ -837,7 +841,12 @@ export class Engine {
   configure(next: Partial<TunableOptions>): void {
     const was = this.tunable;
     this.tunable = { ...was, ...next };
-    this.input?.tune({ pointer: this.tunable.pointer, deadzone: this.tunable.deadzone, invertScroll: this.tunable.invertScroll });
+    this.input?.tune({
+      pointer: this.tunable.pointer,
+      deadzone: this.tunable.deadzone,
+      invertScroll: this.tunable.invertScroll,
+      rawMouse: this.tunable.rawMouse,
+    });
     // A tier picked in settings mid-stream replaces whatever the chord left.
     if (this.tunable.statsTier !== was.statsTier) this.tier = this.tunable.statsTier;
     this.hud = this.readHud();
@@ -1458,6 +1467,7 @@ export class Engine {
         pointer: this.tunable.pointer,
         deadzone: this.tunable.deadzone,
         invertScroll: this.tunable.invertScroll,
+        rawMouse: this.tunable.rawMouse,
         shortcuts: new Shortcuts(pageShortcuts(this.tunable.shortcuts).bindings.filter((b) => SHORTCUT_ACTIONS.includes(b.action))),
         onShortcut: (action, device) => this.shortcut(action, device),
       });
