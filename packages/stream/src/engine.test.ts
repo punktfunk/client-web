@@ -6,7 +6,7 @@
 
 import { test, type TestContext } from "node:test";
 import assert from "node:assert/strict";
-import { useEnglish } from "./words.testing.ts";
+import { english, useEnglish } from "./words.testing.ts";
 
 useEnglish();
 
@@ -106,6 +106,17 @@ test("a denied request says why, and does not read as a forgotten pairing", () =
   // "this host forgot you" — the wrong sentence for a request someone said no to.
   assert.ok(calls.includes("_pf_session_reset"));
   close(mod, DENIED);
+  assert.equal(engine.current.kind, "pair-refused", "the transport's own close changes nothing");
+});
+
+test("a PIN the host refuses by its code alone ends the pairing in that code's sentence", () => {
+  const { engine, mod } = engineIn("needs-pairing");
+  engine.pair("1234");
+  assert.equal(engine.current.kind, "pairing");
+  // No sentence comes with the code: the host leaves the wording to the client.
+  refuse(mod, 0x60, "");
+  assert.deepEqual(engine.current, { kind: "pair-refused", origin: ORIGIN, reason: english("reject_not_armed") });
+  close(mod, 0x60);
   assert.equal(engine.current.kind, "pair-refused", "the transport's own close changes nothing");
 });
 

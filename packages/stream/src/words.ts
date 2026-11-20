@@ -62,6 +62,13 @@ export interface Words {
   reject_host_power(): string;
   reject_access_expired(): string;
   reject_approval_timeout(): string;
+  reject_not_armed(): string;
+  reject_bound_other(): string;
+  reject_rate_limited(): string;
+  reject_identity_required(): string;
+  reject_denied(): string;
+  reject_superseded(): string;
+  reject_wire_version(): string;
   browser_overlay_carrier_ws(): string;
   browser_notice_no_hdr(): string;
   browser_codec_fallback(p: { from: string; to: string }): string;

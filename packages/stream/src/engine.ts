@@ -49,6 +49,18 @@ const CLOSE = { QUIT: 0x51, PAIR_DENIED: 0x64, ACCESS_EXPIRED: 0x69, HOST_POWER:
 /** Where the stream plays was refused: an unknown profile, no seat, a seat taken or not up, a
  *  profile that wants its unlock. The host decides these only after it admitted the device. */
 const PLACEMENT_REFUSED = new Set<number>([0x6c, 0x6d, 0x6e, 0x6f, CLOSE.PROFILE_LOCKED]);
+/** The pairing gate's refusals, by close code. The host sends the code alone and leaves the
+ *  sentence to the client. */
+const PAIR_REFUSED: Readonly<Record<number, () => string>> = {
+  0x60: () => words.reject_not_armed(),
+  0x61: () => words.reject_bound_other(),
+  0x62: () => words.reject_rate_limited(),
+  0x63: () => words.reject_identity_required(),
+  0x64: () => words.reject_denied(),
+  0x65: () => words.reject_approval_timeout(),
+  0x66: () => words.reject_superseded(),
+  0x67: () => words.reject_wire_version(),
+};
 /** A carrier that never opened: no host was heard at all. */
 const NEVER_OPENED = -2;
 /** WebTransport, or a WebSocket through the page server's bridge. */
@@ -1291,7 +1303,8 @@ export class Engine {
     if (!origin || this.state.kind === "idle") return;
     // The bridge failed here: the next dial tries WebTransport first again.
     if (code < 0 && this.carrierKind === "ws") carrierHint.delete(origin);
-    const said = reason.trim();
+    // The host's sentence, else the page's own for a pairing refusal it sent by code alone.
+    const said = reason.trim() || PAIR_REFUSED[code]?.() || "";
     if (code === NEVER_OPENED) {
       if (this.fallback) return this.fallback();
       this.stopSession();
@@ -1321,8 +1334,8 @@ export class Engine {
       case "ready":
         return;
       case "pairing":
-        // The ceremony's own verdict (`PairResult`) is authoritative; a close with a reason and
-        // no verdict is the host refusing before the ceremony began.
+        // The ceremony's own verdict (`PairResult`) is authoritative; a close with a sentence
+        // and no verdict is the host refusing before the ceremony began.
         if (!this.settled && said) {
           this.settled = true;
           this.pairing = false;
