@@ -1182,6 +1182,7 @@ class App {
       codec: this.prefs.codec,
       hdr: this.prefs.hdr,
       invertScroll: this.prefs.invertScroll,
+      rawMouse: this.prefs.rawMouse,
       shortcuts: this.prefs.shortcuts,
     };
     this.engine.configure(changed ? Object.fromEntries(Object.entries(all).filter(([k]) => k in changed)) : all);

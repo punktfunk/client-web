@@ -346,6 +346,10 @@ function SettingsTabs({ screen, actions }: { screen: SettingsScreen; actions: Ac
             onChange={(on) => set({ captureInput: on })}
           />
         </Group>
+        {advanced(
+          ["rawMouse"],
+          <Toggle label={m.player_raw_mouse()} hint={m.player_raw_mouse_hint()} on={v.rawMouse} onChange={(on) => set({ rawMouse: on })} />,
+        )}
         <ShortcutsSection blob={v.shortcuts} set={set} />
       </Panel>
 
