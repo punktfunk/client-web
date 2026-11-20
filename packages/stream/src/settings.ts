@@ -56,6 +56,8 @@ export interface Settings {
   hdr: boolean;
   /** Scroll the other way from what the wheel or trackpad says. */
   invertScroll: boolean;
+  /** Lock the pointer with the mouse's own counts, before this device's pointer speed. */
+  rawMouse: boolean;
   /** Go fullscreen when a stream starts from a click, and back when it ends. */
   fullscreen: boolean;
   /** Where the stats overlay sits. */
@@ -86,6 +88,7 @@ export const DEFAULTS: Settings = {
   codec: "auto",
   hdr: true,
   invertScroll: false,
+  rawMouse: false,
   fullscreen: true,
   hudPlacement: "topTrailing",
   statsScalePct: 100,
@@ -156,6 +159,7 @@ function sane(s: Settings): Settings {
     codec: CODECS.includes(s.codec) ? s.codec : DEFAULTS.codec,
     hdr: s.hdr !== false,
     invertScroll: s.invertScroll === true,
+    rawMouse: s.rawMouse === true,
     fullscreen: s.fullscreen !== false,
     hudPlacement: HUD_CORNERS.includes(s.hudPlacement) ? s.hudPlacement : DEFAULTS.hudPlacement,
     statsScalePct: (STATS_SCALES as readonly number[]).includes(s.statsScalePct) ? s.statsScalePct : DEFAULTS.statsScalePct,

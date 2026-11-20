@@ -42,3 +42,11 @@ test("the overlay's corner and size keep to the values every client stores", () 
   assert.equal(settings.get().exitHint, true);
   assert.equal(settings.get().showAdvanced, false);
 });
+
+test("raw mouse input is off until it is chosen", () => {
+  store.clear();
+  assert.equal(settings.get().rawMouse, false);
+  assert.equal(settings.set({ rawMouse: "yes" as never }).rawMouse, false, "anything but true reads as off");
+  assert.equal(settings.set({ rawMouse: true }).rawMouse, true);
+  assert.deepEqual(stored(), { rawMouse: true });
+});
