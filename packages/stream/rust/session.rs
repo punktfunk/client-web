@@ -526,7 +526,9 @@ pub unsafe extern "C" fn pf_session_hello(
             display_hdr: None,
             // The page wears the host's pointer as its own cursor, so the host leaves it out of
             // the picture until pointer lock hands drawing back (`pf_cursor_render`).
-            client_caps: punktfunk_core::quic::CLIENT_CAP_CURSOR,
+            // `AUDIO_RED`: `audio::on_datagram` rebuilds a lost frame from the copy in the next.
+            client_caps: punktfunk_core::quic::CLIENT_CAP_CURSOR
+                | punktfunk_core::quic::CLIENT_CAP_AUDIO_RED,
             max_shard_payload: punktfunk_core::config::max_shard_payload() as u16,
             audio_rate_hz: 0,
             audio_bits: 0,
