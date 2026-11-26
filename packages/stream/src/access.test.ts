@@ -22,20 +22,20 @@ test("labels derive from the mask", () => {
 test("a full permanent session wears no chip", () => {
   assert.equal(chipText(0x1ff, null), undefined);
   assert.equal(chipText(0x01, null), "Controller only");
-  assert.equal(chipText(0x1ff, 2 * 3600 - 120), "Full control · ends in 1 h 58 m");
-  assert.equal(chipText(0x1ff, 30), "Full control · ends in under 1 m");
+  assert.equal(chipText(0x1ff, 2 * 3600 - 120), "Full control · ends in 1 h 58 min");
+  assert.equal(chipText(0x1ff, 30), "Full control · ends in under 1 min");
 });
 
 test("remaining time is whole minutes", () => {
   assert.equal(formatRemaining(59), undefined, "a whole message says it, not a unit");
-  assert.equal(formatRemaining(5 * 60), "5 m");
+  assert.equal(formatRemaining(5 * 60), "5 min");
   assert.equal(formatRemaining(3600), "1 h");
-  assert.equal(formatRemaining(3600 + 120), "1 h 2 m");
+  assert.equal(formatRemaining(3600 + 120), "1 h 2 min");
 });
 
 test("a change names the new level, a warning the time left", () => {
   assert.equal(updateNotice(0x1ff, 0x01, null), "Access is now Controller only");
-  assert.equal(updateNotice(0x1ff, 0x1ff, 5 * 60), "Access ends in 5 m");
+  assert.equal(updateNotice(0x1ff, 0x1ff, 5 * 60), "Access ends in 5 min");
   assert.equal(updateNotice(0x1ff, 0x1ff, 30), "Access ends in under a minute");
   assert.equal(updateNotice(0x1ff, 0x1ff, null), undefined);
 });

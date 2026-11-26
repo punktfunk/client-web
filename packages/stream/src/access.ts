@@ -54,7 +54,7 @@ export function formatRemaining(secs: number): string | undefined {
   return minutes ? words.grant_remaining_hours_minutes({ hours, minutes }) : words.grant_remaining_hours({ hours });
 }
 
-/** The chip (`Controller only · ends in 1 h 58 m`); `undefined` for full, permanent access.
+/** The chip (`Controller only · ends in 1 h 58 min`); `undefined` for full, permanent access.
  *  `secsLeft` is `null` for permanent. */
 export function chipText(grants: number, secsLeft: number | null): string | undefined {
   const level = presetLabel(grants);

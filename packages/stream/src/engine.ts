@@ -103,7 +103,7 @@ export interface SessionStats {
   /** The host's sentence for a launch that did not give the player their game, for
    *  `LAUNCH_NOTICE_MS` after it arrives. */
   launchNotice?: string;
-  /** This device's access when it is limited or ends (`Controller only · ends in 12 m`). */
+  /** This device's access when it is limited or ends (`Controller only · ends in 12 min`). */
   access?: string;
   /** A change to that access, or the host's warning before it ends, while it shows. */
   accessNotice?: string;
